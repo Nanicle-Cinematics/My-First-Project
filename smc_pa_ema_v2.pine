@@ -1,0 +1,395 @@
+//@version=6
+indicator("SMC + PA + EMA Pro Scalper v2", shorttitle="SMC·PA·v2", overlay=true,
+          max_labels_count=500, max_lines_count=500, max_boxes_count=100)
+
+// ══════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════
+grp_ema    = "── EMA / Trend ──"
+grp_mom    = "── Momentum / Filters ──"
+grp_smc    = "── SMC ──"
+grp_risk   = "── Risk / SL-TP ──"
+grp_sess   = "── Session Filter ──"
+grp_vis    = "── Visuals ──"
+
+ema_fast   = input.int(8,   "EMA Fast",            minval=1, group=grp_ema)
+ema_mid    = input.int(21,  "EMA Mid",             minval=1, group=grp_ema)
+ema_slow   = input.int(50,  "EMA Slow",            minval=1, group=grp_ema)
+htf_tf     = input.timeframe("60", "HTF Trend TF",            group=grp_ema)
+htf_len    = input.int(200, "HTF EMA Length",      minval=10, group=grp_ema)
+
+rsi_len    = input.int(14,  "RSI Length",          minval=2,  group=grp_mom)
+rsi_buy_min  = input.int(45, "RSI Buy Min",        minval=1, maxval=99, group=grp_mom)
+rsi_buy_max  = input.int(70, "RSI Buy Max",        minval=1, maxval=99, group=grp_mom)
+rsi_sell_min = input.int(30, "RSI Sell Min",       minval=1, maxval=99, group=grp_mom)
+rsi_sell_max = input.int(55, "RSI Sell Max",       minval=1, maxval=99, group=grp_mom)
+adx_len    = input.int(14,  "ADX Length",          minval=2,  group=grp_mom)
+adx_min    = input.float(20, "ADX Minimum",        minval=0,  group=grp_mom)
+atr_min_mult = input.float(0.6, "ATR Min Mult (avg)", minval=0.1, step=0.1, group=grp_mom)
+atr_max_mult = input.float(2.5, "ATR Max Mult (avg)", minval=0.5, step=0.1, group=grp_mom)
+body_min_pct = input.float(0.55, "Min Body/Range", minval=0.1, maxval=1.0, step=0.05, group=grp_mom)
+cooldown_bars = input.int(8, "Signal Cooldown (bars)", minval=0, group=grp_mom)
+
+swing_len  = input.int(5,   "Swing Pivot Length",  minval=2, group=grp_smc)
+ob_lb      = input.int(10,  "Order Block Lookback", minval=3, group=grp_smc)
+
+sl_atr_mult = input.float(1.2, "SL × ATR", minval=0.1, step=0.1, group=grp_risk)
+tp_atr_mult = input.float(1.0, "TP × ATR", minval=0.1, step=0.1, group=grp_risk)
+show_sltp   = input.bool(true, "Show SL/TP on signal",          group=grp_risk)
+
+use_session = input.bool(true, "Use Session Filter",            group=grp_sess)
+session_str = input.session("0700-1600", "Trading Session (UTC)", group=grp_sess)
+
+show_ob    = input.bool(true, "Show Order Blocks",   group=grp_vis)
+show_bos   = input.bool(true, "Show BOS / CHoCH",    group=grp_vis)
+show_tl    = input.bool(true, "Show Trendlines",     group=grp_vis)
+show_dash  = input.bool(true, "Show Dashboard",      group=grp_vis)
+show_bg    = input.bool(true, "Trend Background",    group=grp_vis)
+show_emas  = input.bool(true, "Show EMAs",           group=grp_vis)
+
+bull_col   = input.color(color.new(#00c853, 0), "Bullish Color", group=grp_vis)
+bear_col   = input.color(color.new(#d50000, 0), "Bearish Color", group=grp_vis)
+ema_col_f  = input.color(color.new(#ffeb3b, 0), "EMA Fast Color", group=grp_vis)
+ema_col_m  = input.color(color.new(#ff9800, 0), "EMA Mid Color",  group=grp_vis)
+ema_col_s  = input.color(color.new(#03a9f4, 0), "EMA Slow Color", group=grp_vis)
+
+// ══════════════════════════════════════════════════════════════
+// CORE INDICATORS
+// ══════════════════════════════════════════════════════════════
+ema_f = ta.ema(close, ema_fast)
+ema_m = ta.ema(close, ema_mid)
+ema_s = ta.ema(close, ema_slow)
+atr   = ta.atr(14)
+atr_avg = ta.sma(atr, 50)
+rsi   = ta.rsi(close, rsi_len)
+[diPlus, diMinus, adx] = ta.dmi(adx_len, adx_len)
+
+htf_ema = request.security(syminfo.tickerid, htf_tf, ta.ema(close, htf_len), lookahead=barmerge.lookahead_off)
+
+plot(show_emas ? ema_f : na, "EMA Fast", ema_col_f, 1)
+plot(show_emas ? ema_m : na, "EMA Mid",  ema_col_m, 2)
+plot(show_emas ? ema_s : na, "EMA Slow", ema_col_s, 2)
+
+ema_stack_bull = ema_f > ema_m and ema_m > ema_s and close > ema_f
+ema_stack_bear = ema_f < ema_m and ema_m < ema_s and close < ema_f
+
+htf_bull = close > htf_ema
+htf_bear = close < htf_ema
+
+// ══════════════════════════════════════════════════════════════
+// SESSION & VOLATILITY GATES
+// ══════════════════════════════════════════════════════════════
+in_session = not use_session or not na(time(timeframe.period, session_str + ":1234567"))
+vol_ok     = atr >= atr_avg * atr_min_mult and atr <= atr_avg * atr_max_mult
+adx_ok     = adx >= adx_min
+
+// ══════════════════════════════════════════════════════════════
+// SWING HIGHS / LOWS
+// ══════════════════════════════════════════════════════════════
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low,   swing_len, swing_len)
+
+var float sh1 = na, var int sh1_bar = na
+var float sh2 = na, var int sh2_bar = na
+var float sl1 = na, var int sl1_bar = na
+var float sl2 = na, var int sl2_bar = na
+
+if not na(ph)
+    sh2 := sh1, sh2_bar := sh1_bar
+    sh1 := ph,  sh1_bar := bar_index - swing_len
+
+if not na(pl)
+    sl2 := sl1, sl2_bar := sl1_bar
+    sl1 := pl,  sl1_bar := bar_index - swing_len
+
+// ══════════════════════════════════════════════════════════════
+// BOS / CHoCH
+// ══════════════════════════════════════════════════════════════
+var bool in_uptrend = false
+var bool in_downtrend = false
+var string ms_label = "Neutral"
+
+bull_bos   = not na(sh1) and close > sh1 and close[1] <= sh1
+bear_bos   = not na(sl1) and close < sl1 and close[1] >= sl1
+choch_bull = bull_bos and in_downtrend
+choch_bear = bear_bos and in_uptrend
+
+if bull_bos
+    ms_label := choch_bull ? "CHoCH Bull" : "BOS Bull"
+    in_uptrend := true, in_downtrend := false
+
+if bear_bos
+    ms_label := choch_bear ? "CHoCH Bear" : "BOS Bear"
+    in_downtrend := true, in_uptrend := false
+
+if show_bos and bull_bos
+    label.new(bar_index, low - atr * 1.5, choch_bull ? "CHoCH ▲" : "BOS ▲",
+              style=label.style_label_up,
+              color=choch_bull ? color.new(#e040fb, 0) : bull_col,
+              textcolor=color.white, size=size.small)
+
+if show_bos and bear_bos
+    label.new(bar_index, high + atr * 1.5, choch_bear ? "CHoCH ▼" : "BOS ▼",
+              style=label.style_label_down,
+              color=choch_bear ? color.new(#e040fb, 0) : bear_col,
+              textcolor=color.white, size=size.small)
+
+// ══════════════════════════════════════════════════════════════
+// ORDER BLOCKS
+// ══════════════════════════════════════════════════════════════
+var float bull_ob_hi = na, var float bull_ob_lo = na, var int bull_ob_l = na
+var float bear_ob_hi = na, var float bear_ob_lo = na, var int bear_ob_l = na
+
+if bull_bos
+    for i = 1 to ob_lb
+        if close[i] < open[i]
+            bull_ob_hi := high[i]
+            bull_ob_lo := low[i]
+            bull_ob_l  := bar_index - i
+            break
+
+if bear_bos
+    for i = 1 to ob_lb
+        if close[i] > open[i]
+            bear_ob_hi := high[i]
+            bear_ob_lo := low[i]
+            bear_ob_l  := bar_index - i
+            break
+
+var box bull_ob_box = na, var box bear_ob_box = na
+
+if show_ob and bull_bos and not na(bull_ob_l)
+    if not na(bull_ob_box)
+        box.delete(bull_ob_box)
+    bull_ob_box := box.new(bull_ob_l, bull_ob_hi, bar_index + 30, bull_ob_lo,
+                           border_color=color.new(bull_col, 20),
+                           bgcolor=color.new(bull_col, 78), border_width=1)
+
+if show_ob and bear_bos and not na(bear_ob_l)
+    if not na(bear_ob_box)
+        box.delete(bear_ob_box)
+    bear_ob_box := box.new(bear_ob_l, bear_ob_hi, bar_index + 30, bear_ob_lo,
+                           border_color=color.new(bear_col, 20),
+                           bgcolor=color.new(bear_col, 78), border_width=1)
+
+if show_ob and not na(bull_ob_box)
+    box.set_right(bull_ob_box, bar_index + 30)
+if show_ob and not na(bear_ob_box)
+    box.set_right(bear_ob_box, bar_index + 30)
+
+in_bull_ob = not na(bull_ob_hi) and low <= bull_ob_hi and high >= bull_ob_lo
+in_bear_ob = not na(bear_ob_hi) and low <= bear_ob_hi and high >= bear_ob_lo
+
+// ══════════════════════════════════════════════════════════════
+// PRICE ACTION (with quality filter)
+// ══════════════════════════════════════════════════════════════
+body       = math.abs(close - open)
+upper_wick = high - math.max(close, open)
+lower_wick = math.min(close, open) - low
+rng        = high - low
+body_pct   = rng > 0 ? body / rng : 0
+close_top  = rng > 0 ? (close - low) / rng >= 0.66 : false
+close_bot  = rng > 0 ? (high - close) / rng >= 0.66 : false
+
+bull_engulf = close > open and close[1] < open[1] and open < close[1] and close > open[1] and body > body[1] * 0.9 and body_pct >= body_min_pct
+bear_engulf = close < open and close[1] > open[1] and open > close[1] and close < open[1] and body > body[1] * 0.9 and body_pct >= body_min_pct
+hammer      = lower_wick >= body * 2.0 and upper_wick <= body * 0.5 and rng > 0 and close >= open and close_top
+shoot_star  = upper_wick >= body * 2.0 and lower_wick <= body * 0.5 and rng > 0 and close <= open and close_bot
+strong_bull = close > open and body_pct >= body_min_pct and close_top
+strong_bear = close < open and body_pct >= body_min_pct and close_bot
+
+bull_pa = bull_engulf or hammer or strong_bull
+bear_pa = bear_engulf or shoot_star or strong_bear
+
+pa_name = bull_engulf ? "Bull Engulf" : hammer ? "Hammer" : strong_bull ? "Strong Bull" : bear_engulf ? "Bear Engulf" : shoot_star ? "Shoot Star" : strong_bear ? "Strong Bear" : "None"
+
+// ══════════════════════════════════════════════════════════════
+// TRENDLINES
+// ══════════════════════════════════════════════════════════════
+var line tl_res = na, var line tl_sup = na
+
+if show_tl and not na(sh1) and not na(sh2)
+    if not na(tl_res)
+        line.delete(tl_res)
+    tl_res := line.new(sh2_bar, sh2, sh1_bar, sh1,
+                       color=color.new(bear_col, 20), width=2,
+                       extend=extend.right, style=line.style_dashed)
+
+if show_tl and not na(sl1) and not na(sl2)
+    if not na(tl_sup)
+        line.delete(tl_sup)
+    tl_sup := line.new(sl2_bar, sl2, sl1_bar, sl1,
+                       color=color.new(bull_col, 20), width=2,
+                       extend=extend.right, style=line.style_dashed)
+
+near_sup = not na(tl_sup) and math.abs(close - line.get_price(tl_sup, bar_index)) < atr * 0.5
+near_res = not na(tl_res) and math.abs(close - line.get_price(tl_res, bar_index)) < atr * 0.5
+
+// ══════════════════════════════════════════════════════════════
+// MOMENTUM CONDITIONS
+// ══════════════════════════════════════════════════════════════
+rsi_buy_ok  = rsi >= rsi_buy_min  and rsi <= rsi_buy_max  and rsi > rsi[1]
+rsi_sell_ok = rsi >= rsi_sell_min and rsi <= rsi_sell_max and rsi < rsi[1]
+
+// ══════════════════════════════════════════════════════════════
+// CONFLUENCE SCORING & SIGNALS
+// ══════════════════════════════════════════════════════════════
+// Long score (max 7)
+long_score = 0
+long_score += ema_stack_bull   ? 1 : 0
+long_score += htf_bull         ? 1 : 0
+long_score += in_uptrend       ? 1 : 0
+long_score += bull_pa          ? 1 : 0
+long_score += rsi_buy_ok       ? 1 : 0
+long_score += (in_bull_ob or near_sup) ? 1 : 0
+long_score += (bull_bos or choch_bull) ? 1 : 0
+
+short_score = 0
+short_score += ema_stack_bear  ? 1 : 0
+short_score += htf_bear        ? 1 : 0
+short_score += in_downtrend    ? 1 : 0
+short_score += bear_pa         ? 1 : 0
+short_score += rsi_sell_ok     ? 1 : 0
+short_score += (in_bear_ob or near_res) ? 1 : 0
+short_score += (bear_bos or choch_bear) ? 1 : 0
+
+gates_ok = in_session and vol_ok and adx_ok
+
+// Cooldown tracker
+var int last_sig_bar = na
+can_fire = na(last_sig_bar) or (bar_index - last_sig_bar) >= cooldown_bars
+
+buy_strong  = gates_ok and can_fire and long_score  >= 5 and ema_stack_bull and htf_bull and bull_pa
+sell_strong = gates_ok and can_fire and short_score >= 5 and ema_stack_bear and htf_bear and bear_pa
+buy_med     = gates_ok and can_fire and long_score  == 4 and ema_stack_bull and bull_pa and not buy_strong
+sell_med    = gates_ok and can_fire and short_score == 4 and ema_stack_bear and bear_pa and not sell_strong
+
+if buy_strong or sell_strong or buy_med or sell_med
+    last_sig_bar := bar_index
+
+// ══════════════════════════════════════════════════════════════
+// SL / TP LINES
+// ══════════════════════════════════════════════════════════════
+plot_sl = (buy_strong or buy_med) ? close - atr * sl_atr_mult : (sell_strong or sell_med) ? close + atr * sl_atr_mult : na
+plot_tp = (buy_strong or buy_med) ? close + atr * tp_atr_mult : (sell_strong or sell_med) ? close - atr * tp_atr_mult : na
+
+plot(show_sltp ? plot_sl : na, "SL", color.new(color.red, 0),   2, plot.style_cross)
+plot(show_sltp ? plot_tp : na, "TP", color.new(color.green, 0), 2, plot.style_cross)
+
+// ══════════════════════════════════════════════════════════════
+// SIGNAL LABELS
+// ══════════════════════════════════════════════════════════════
+if buy_strong
+    label.new(bar_index, low - atr * 2.3,
+              "★ BUY ▲\nSL " + str.tostring(close - atr * sl_atr_mult, format.mintick) +
+              "\nTP " + str.tostring(close + atr * tp_atr_mult, format.mintick),
+              style=label.style_label_up, color=bull_col,
+              textcolor=color.white, size=size.normal)
+
+if sell_strong
+    label.new(bar_index, high + atr * 2.3,
+              "★ SELL ▼\nSL " + str.tostring(close + atr * sl_atr_mult, format.mintick) +
+              "\nTP " + str.tostring(close - atr * tp_atr_mult, format.mintick),
+              style=label.style_label_down, color=bear_col,
+              textcolor=color.white, size=size.normal)
+
+if buy_med
+    label.new(bar_index, low - atr * 1.2, "▲",
+              style=label.style_label_up, color=color.new(bull_col, 40),
+              textcolor=color.white, size=size.small)
+
+if sell_med
+    label.new(bar_index, high + atr * 1.2, "▼",
+              style=label.style_label_down, color=color.new(bear_col, 40),
+              textcolor=color.white, size=size.small)
+
+// ══════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════
+alertcondition(buy_strong,  "★ Strong BUY",  "Pro Scalper: Strong BUY — full confluence")
+alertcondition(sell_strong, "★ Strong SELL", "Pro Scalper: Strong SELL — full confluence")
+alertcondition(buy_med,     "BUY signal",    "Pro Scalper: BUY — partial confluence")
+alertcondition(sell_med,    "SELL signal",   "Pro Scalper: SELL — partial confluence")
+
+// ══════════════════════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════════════════════
+var table dash = table.new(position.top_right, 2, 14,
+                            bgcolor      = color.new(color.black, 15),
+                            border_color = color.new(color.gray, 40),
+                            border_width = 1,
+                            frame_color  = color.new(color.gray, 20),
+                            frame_width  = 2)
+
+f_row(col, row, lbl, val, val_col, val_bg) =>
+    table.cell(dash, col,     row, lbl, text_color=color.new(color.gray, 0),
+               bgcolor=color.new(color.black, 40), text_size=size.small,
+               text_halign=text.align_left)
+    table.cell(dash, col + 1, row, val, text_color=val_col, bgcolor=val_bg,
+               text_size=size.small, text_halign=text.align_center)
+
+if show_dash and barstate.islast
+    table.cell(dash, 0, 0, "Pro Scalper · v2",
+               text_color=color.white, bgcolor=color.new(#1a237e, 10),
+               text_size=size.small, text_halign=text.align_center)
+    table.cell(dash, 1, 0, syminfo.ticker + " · " + timeframe.period,
+               text_color=color.yellow, bgcolor=color.new(#1a237e, 10),
+               text_size=size.small, text_halign=text.align_center)
+
+    ema_txt = ema_stack_bull ? "▲ BULL STACK" : ema_stack_bear ? "▼ BEAR STACK" : "— MIXED"
+    ema_bg  = ema_stack_bull ? color.new(bull_col, 50) : ema_stack_bear ? color.new(bear_col, 50) : color.new(color.gray, 60)
+    f_row(0, 1, " EMA Stack", ema_txt, color.white, ema_bg)
+
+    htf_txt = htf_bull ? "▲ HTF Bull" : "▼ HTF Bear"
+    htf_bg  = htf_bull ? color.new(bull_col, 50) : color.new(bear_col, 50)
+    f_row(0, 2, " HTF Trend", htf_txt, color.white, htf_bg)
+
+    ms_bg = str.contains(ms_label, "Bull") ? color.new(bull_col, 50) : str.contains(ms_label, "Bear") ? color.new(bear_col, 50) : color.new(color.gray, 60)
+    f_row(0, 3, " Structure", ms_label, color.white, ms_bg)
+
+    ob_txt = in_bull_ob ? "▲ Bull OB" : in_bear_ob ? "▼ Bear OB" : "—"
+    ob_bg  = in_bull_ob ? color.new(bull_col, 50) : in_bear_ob ? color.new(bear_col, 50) : color.new(color.gray, 65)
+    f_row(0, 4, " Order Block", ob_txt, color.white, ob_bg)
+
+    tl_txt = near_sup ? "▲ Near Sup" : near_res ? "▼ Near Res" : "—"
+    tl_bg  = near_sup ? color.new(bull_col, 50) : near_res ? color.new(bear_col, 50) : color.new(color.gray, 65)
+    f_row(0, 5, " Trendline", tl_txt, color.white, tl_bg)
+
+    pa_bg = bull_pa ? color.new(bull_col, 50) : bear_pa ? color.new(bear_col, 50) : color.new(color.gray, 65)
+    f_row(0, 6, " Price Action", pa_name, color.white, pa_bg)
+
+    rsi_bg = rsi_buy_ok ? color.new(bull_col, 50) : rsi_sell_ok ? color.new(bear_col, 50) : color.new(color.gray, 65)
+    f_row(0, 7, " RSI(" + str.tostring(rsi_len) + ")", str.tostring(math.round(rsi, 1)), color.white, rsi_bg)
+
+    adx_bg = adx_ok ? color.new(#00bcd4, 40) : color.new(color.gray, 65)
+    f_row(0, 8, " ADX", str.tostring(math.round(adx, 1)) + (adx_ok ? " ✓" : " ✗"), color.white, adx_bg)
+
+    vol_bg = vol_ok ? color.new(#00bcd4, 40) : color.new(color.gray, 65)
+    f_row(0, 9, " Volatility", vol_ok ? "OK ✓" : "Out ✗", color.white, vol_bg)
+
+    sess_bg = in_session ? color.new(#00bcd4, 40) : color.new(color.gray, 65)
+    f_row(0, 10, " Session", in_session ? "ACTIVE ✓" : "CLOSED ✗", color.white, sess_bg)
+
+    score_txt = "L:" + str.tostring(long_score) + "/7  S:" + str.tostring(short_score) + "/7"
+    f_row(0, 11, " Score", score_txt, color.white, color.new(color.gray, 60))
+
+    table.cell(dash, 0, 12, "─────── SIGNAL ───────",
+               text_color=color.new(color.gray, 30),
+               bgcolor=color.new(color.black, 30),
+               text_size=size.small, text_halign=text.align_center)
+    table.cell(dash, 1, 12, "", bgcolor=color.new(color.black, 30))
+
+    sig_txt = buy_strong ? "★ STRONG BUY ★" : sell_strong ? "★ STRONG SELL ★" : buy_med ? "  BUY  " : sell_med ? "  SELL  " : "  WAIT  "
+    sig_bg  = buy_strong ? color.new(bull_col, 5) : sell_strong ? color.new(bear_col, 5) : buy_med ? color.new(bull_col, 40) : sell_med ? color.new(bear_col, 40) : color.new(color.gray, 55)
+    sig_sz  = (buy_strong or sell_strong) ? size.normal : size.small
+
+    table.cell(dash, 0, 13, sig_txt, text_color=color.white, bgcolor=sig_bg,
+               text_size=sig_sz, text_halign=text.align_center)
+    table.cell(dash, 1, 13, sig_txt, text_color=color.white, bgcolor=sig_bg,
+               text_size=sig_sz, text_halign=text.align_center)
+
+// ══════════════════════════════════════════════════════════════
+// BACKGROUND
+// ══════════════════════════════════════════════════════════════
+bg_col = ema_stack_bull and htf_bull ? color.new(bull_col, 93) : ema_stack_bear and htf_bear ? color.new(bear_col, 93) : na
+bgcolor(show_bg ? bg_col : na, title="Trend Background")
