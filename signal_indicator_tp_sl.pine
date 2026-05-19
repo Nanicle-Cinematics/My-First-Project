@@ -251,19 +251,15 @@ if show_labels
 // ══════════════════════════════════════════════════════════════
 var table status = table.new(position.top_right, 1, 1, border_width=1)
 
+state_txt = dir == 1 ? "LONG ACTIVE" : dir == -1 ? "SHORT ACTIVE" : "SCANNING FOR ENTRY"
+state_col = dir == 1 ? color.new(color.green, 20) : dir == -1 ? color.new(color.red, 20) : color.new(color.blue, 20)
+
 if barstate.islast
-    state_txt = dir == 1  ? "LONG ACTIVE"  :
-                dir == -1 ? "SHORT ACTIVE" :
-                            "SCANNING FOR ENTRY"
-    state_col = dir == 1  ? color.new(color.green, 20) :
-                dir == -1 ? color.new(color.red,   20) :
-                            color.new(color.blue,  20)
     table.cell(status, 0, 0, state_txt, text_color=color.white, bgcolor=state_col, text_size=size.small)
 
 // ══════════════════════════════════════════════════════════════
 // ALERTS
 // ══════════════════════════════════════════════════════════════
-alertcondition(long_sig,  "Long Signal",  "LONG {{ticker}} @ {{close}}")
+alertcondition(long_sig, "Long Signal", "LONG {{ticker}} @ {{close}}")
 alertcondition(short_sig, "Short Signal", "SHORT {{ticker}} @ {{close}}")
-alertcondition(sl_hit,    "Stop Loss Hit — scanning for re-entry",
-               "SL HIT {{ticker}} @ {{close}} — looking for next entry")
+alertcondition(sl_hit, "Stop Loss Hit - scanning for re-entry", "SL HIT {{ticker}} @ {{close}} - looking for next entry")
