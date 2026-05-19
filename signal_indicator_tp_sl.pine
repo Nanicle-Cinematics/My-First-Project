@@ -176,37 +176,47 @@ if sl_hit
     lb_t3    := na
     dir      := 0
 
-t1_hit = dir != 0 and (dir == 1 ? hit_long(t1) : hit_short(t1))
-t2_hit = dir != 0 and (dir == 1 ? hit_long(t2) : hit_short(t2))
-t3_hit = dir != 0 and (dir == 1 ? hit_long(t3) : hit_short(t3))
+t1_hit_now = dir != 0 and (dir == 1 ? hit_long(t1) : hit_short(t1))
+t2_hit_now = dir != 0 and (dir == 1 ? hit_long(t2) : hit_short(t2))
+t3_hit_now = dir != 0 and (dir == 1 ? hit_long(t3) : hit_short(t3))
 
-if t1_hit
+// Track which TPs have already been reached. Lines stay visible
+// until ALL three have been hit, then they're cleared together.
+var bool t1_done = false
+var bool t2_done = false
+var bool t3_done = false
+
+if new_signal
+    t1_done := false
+    t2_done := false
+    t3_done := false
+
+if t1_hit_now
+    t1_done := true
+if t2_hit_now
+    t2_done := true
+if t3_hit_now
+    t3_done := true
+
+if dir != 0 and t1_done and t2_done and t3_done
     line.delete(ln_t1)
-    label.delete(lb_t1)
-    ln_t1 := na
-    lb_t1 := na
-    t1    := na
-
-if t2_hit
     line.delete(ln_t2)
-    label.delete(lb_t2)
-    ln_t2 := na
-    lb_t2 := na
-    t2    := na
-
-if t3_hit
     line.delete(ln_t3)
-    label.delete(lb_t3)
-    ln_t3 := na
-    lb_t3 := na
-    t3    := na
-    // All targets hit — also clear entry/stop, trade is complete
     line.delete(ln_entry)
     line.delete(ln_stop)
+    label.delete(lb_t1)
+    label.delete(lb_t2)
+    label.delete(lb_t3)
     label.delete(lb_entry)
     label.delete(lb_stop)
+    ln_t1    := na
+    ln_t2    := na
+    ln_t3    := na
     ln_entry := na
     ln_stop  := na
+    lb_t1    := na
+    lb_t2    := na
+    lb_t3    := na
     lb_entry := na
     lb_stop  := na
     dir      := 0
