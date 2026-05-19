@@ -15,10 +15,10 @@ st_atr_len = input.int(10,  "SuperTrend ATR Length", minval=1, group=grp_trend)
 st_mult    = input.float(3.0, "SuperTrend Multiplier", step=0.1, group=grp_trend)
 
 // UT Bot style signal (the ▲▼ arrows)
-key_value  = input.float(1.0, "Signal Sensitivity (key)", step=0.1, group=grp_sig,
-                         tooltip="Lower = more signals, higher = stricter")
+key_value  = input.float(1.0, "Signal Sensitivity (key)", step=0.1, group=grp_sig, tooltip="Lower = more signals, higher = stricter")
 atr_period = input.int(10, "Signal ATR Period", minval=1, group=grp_sig)
 use_heikin = input.bool(false, "Use Heikin Ashi for signals", group=grp_sig)
+use_trend_filter = input.bool(false, "Require SuperTrend agreement", group=grp_sig, tooltip="If ON, longs only fire when trend is up and shorts only when trend is down. If OFF (default), every UT Bot crossover fires a signal.")
 
 // ATR-based targets and stop
 atr_tp_len = input.int(14, "TP/SL ATR Length", minval=1, group=grp_risk)
@@ -60,8 +60,8 @@ ema1    = ta.ema(src, 1)
 above   = ta.crossover(ema1, trail)
 below   = ta.crossunder(ema1, trail)
 
-long_sig  = src > trail and above and trend_up
-short_sig = src < trail and below and trend_down
+long_sig  = above and (not use_trend_filter or trend_up)
+short_sig = below and (not use_trend_filter or trend_down)
 
 plotshape(long_sig,  "Long",  shape.triangleup,   location.belowbar, color.green, size=size.small)
 plotshape(short_sig, "Short", shape.triangledown, location.abovebar, color.red,   size=size.small)
