@@ -1,0 +1,119 @@
+//@version=6
+indicator("Signal Indicator with T1/T2/T3 + Stop", shorttitle="SIG·TP·SL", overlay=true,
+          max_labels_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════
+grp_trend = "── Trend (SuperTrend) ──"
+grp_sig   = "── Signal (UT Bot style) ──"
+grp_risk  = "── Targets / Stop (ATR) ──"
+grp_vis   = "── Visuals ──"
+
+// SuperTrend trend filter (the red/green cloud)
+st_atr_len = input.int(10,  "SuperTrend ATR Length", minval=1, group=grp_trend)
+st_mult    = input.float(3.0, "SuperTrend Multiplier", step=0.1, group=grp_trend)
+
+// UT Bot style signal (the ▲▼ arrows)
+key_value  = input.float(1.0, "Signal Sensitivity (key)", step=0.1, group=grp_sig,
+                         tooltip="Lower = more signals, higher = stricter")
+atr_period = input.int(10, "Signal ATR Period", minval=1, group=grp_sig)
+use_heikin = input.bool(false, "Use Heikin Ashi for signals", group=grp_sig)
+
+// ATR-based targets and stop
+atr_tp_len = input.int(14, "TP/SL ATR Length", minval=1, group=grp_risk)
+sl_mult    = input.float(1.5, "Stop = ATR ×", step=0.1, group=grp_risk)
+t1_mult    = input.float(1.0, "T1 = ATR ×",   step=0.1, group=grp_risk)
+t2_mult    = input.float(2.0, "T2 = ATR ×",   step=0.1, group=grp_risk)
+t3_mult    = input.float(3.0, "T3 = ATR ×",   step=0.1, group=grp_risk)
+
+show_cloud   = input.bool(true, "Show trend cloud",   group=grp_vis)
+show_levels  = input.bool(true, "Show TP/SL lines",   group=grp_vis)
+show_labels  = input.bool(true, "Show price labels",  group=grp_vis)
+
+// ══════════════════════════════════════════════════════════════
+// TREND CLOUD (SuperTrend)
+// ══════════════════════════════════════════════════════════════
+[st_line, st_dir] = ta.supertrend(st_mult, st_atr_len)
+trend_up   = st_dir < 0
+trend_down = st_dir > 0
+
+up_plot   = plot(show_cloud and trend_up   ? st_line : na, "ST Up",   color.new(color.green, 0), style=plot.style_linebr)
+down_plot = plot(show_cloud and trend_down ? st_line : na, "ST Down", color.new(color.red,   0), style=plot.style_linebr)
+price_plot = plot(show_cloud ? close : na, "Price", display=display.none)
+fill(price_plot, up_plot,   color = show_cloud and trend_up   ? color.new(color.green, 85) : na)
+fill(price_plot, down_plot, color = show_cloud and trend_down ? color.new(color.red,   85) : na)
+
+// ══════════════════════════════════════════════════════════════
+// SIGNAL ENGINE (UT Bot)
+// ══════════════════════════════════════════════════════════════
+src      = use_heikin ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close) : close
+xATR     = ta.atr(atr_period)
+nLoss    = key_value * xATR
+
+var float trail = 0.0
+trail := src > nz(trail[1]) and src[1] > nz(trail[1]) ? math.max(nz(trail[1]), src - nLoss) :
+         src < nz(trail[1]) and src[1] < nz(trail[1]) ? math.min(nz(trail[1]), src + nLoss) :
+         src > nz(trail[1])                            ? src - nLoss : src + nLoss
+
+ema1    = ta.ema(src, 1)
+above   = ta.crossover(ema1, trail)
+below   = ta.crossunder(ema1, trail)
+
+long_sig  = src > trail and above and trend_up
+short_sig = src < trail and below and trend_down
+
+plotshape(long_sig,  "Long",  shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(short_sig, "Short", shape.triangledown, location.abovebar, color.red,   size=size.small)
+
+// ══════════════════════════════════════════════════════════════
+// TP / SL LEVELS (only on fresh signal, persist until next)
+// ══════════════════════════════════════════════════════════════
+atr_risk = ta.atr(atr_tp_len)
+
+var float entry = na
+var float stop  = na
+var float t1    = na
+var float t2    = na
+var float t3    = na
+var int   dir   = 0   // 1 = long, -1 = short
+
+if long_sig
+    entry := close
+    stop  := close - sl_mult * atr_risk
+    t1    := close + t1_mult * atr_risk
+    t2    := close + t2_mult * atr_risk
+    t3    := close + t3_mult * atr_risk
+    dir   := 1
+
+if short_sig
+    entry := close
+    stop  := close + sl_mult * atr_risk
+    t1    := close - t1_mult * atr_risk
+    t2    := close - t2_mult * atr_risk
+    t3    := close - t3_mult * atr_risk
+    dir   := -1
+
+plot(show_levels ? entry : na, "Entry", color.new(color.blue,   0),  style=plot.style_linebr, linewidth=2)
+plot(show_levels ? stop  : na, "Stop",  color.new(color.red,    0),  style=plot.style_linebr, linewidth=2)
+plot(show_levels ? t1    : na, "T1",    color.new(color.green, 30),  style=plot.style_linebr)
+plot(show_levels ? t2    : na, "T2",    color.new(color.green, 15),  style=plot.style_linebr)
+plot(show_levels ? t3    : na, "T3",    color.new(color.green,  0),  style=plot.style_linebr)
+
+if show_labels and (long_sig or short_sig)
+    label.new(bar_index, entry, "Entry " + str.tostring(entry, format.mintick),
+              style=label.style_label_left, color=color.new(color.blue, 20), textcolor=color.white)
+    label.new(bar_index, stop,  "Stop "  + str.tostring(stop,  format.mintick),
+              style=label.style_label_left, color=color.new(color.red,  20), textcolor=color.white)
+    label.new(bar_index, t1,    "T1 "    + str.tostring(t1,    format.mintick),
+              style=label.style_label_left, color=color.new(color.green, 40), textcolor=color.white)
+    label.new(bar_index, t2,    "T2 "    + str.tostring(t2,    format.mintick),
+              style=label.style_label_left, color=color.new(color.green, 25), textcolor=color.white)
+    label.new(bar_index, t3,    "T3 "    + str.tostring(t3,    format.mintick),
+              style=label.style_label_left, color=color.new(color.green, 10), textcolor=color.white)
+
+// ══════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════
+alertcondition(long_sig,  "Long Signal",  "LONG {{ticker}} @ {{close}}")
+alertcondition(short_sig, "Short Signal", "SHORT {{ticker}} @ {{close}}")
