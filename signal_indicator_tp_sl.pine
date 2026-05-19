@@ -94,23 +94,65 @@ if short_sig
     t3    := close - t3_mult * atr_risk
     dir   := -1
 
-plot(show_levels ? entry : na, "Entry", color.new(color.blue,   0),  style=plot.style_linebr, linewidth=2)
-plot(show_levels ? stop  : na, "Stop",  color.new(color.red,    0),  style=plot.style_linebr, linewidth=2)
-plot(show_levels ? t1    : na, "T1",    color.new(color.green, 30),  style=plot.style_linebr)
-plot(show_levels ? t2    : na, "T2",    color.new(color.green, 15),  style=plot.style_linebr)
-plot(show_levels ? t3    : na, "T3",    color.new(color.green,  0),  style=plot.style_linebr)
+// Only the most recent signal's levels are shown. On each new signal,
+// previous lines/labels are deleted and fresh ones drawn at the signal bar.
+// They then extend with each new bar so they trail the current price.
+var line  ln_entry = na
+var line  ln_stop  = na
+var line  ln_t1    = na
+var line  ln_t2    = na
+var line  ln_t3    = na
+var label lb_entry = na
+var label lb_stop  = na
+var label lb_t1    = na
+var label lb_t2    = na
+var label lb_t3    = na
 
-if show_labels and (long_sig or short_sig)
-    label.new(bar_index, entry, "Entry " + str.tostring(entry, format.mintick),
-              style=label.style_label_left, color=color.new(color.blue, 20), textcolor=color.white)
-    label.new(bar_index, stop,  "Stop "  + str.tostring(stop,  format.mintick),
-              style=label.style_label_left, color=color.new(color.red,  20), textcolor=color.white)
-    label.new(bar_index, t1,    "T1 "    + str.tostring(t1,    format.mintick),
-              style=label.style_label_left, color=color.new(color.green, 40), textcolor=color.white)
-    label.new(bar_index, t2,    "T2 "    + str.tostring(t2,    format.mintick),
-              style=label.style_label_left, color=color.new(color.green, 25), textcolor=color.white)
-    label.new(bar_index, t3,    "T3 "    + str.tostring(t3,    format.mintick),
-              style=label.style_label_left, color=color.new(color.green, 10), textcolor=color.white)
+new_signal = long_sig or short_sig
+
+if new_signal and show_levels
+    line.delete(ln_entry)
+    line.delete(ln_stop)
+    line.delete(ln_t1)
+    line.delete(ln_t2)
+    line.delete(ln_t3)
+    ln_entry := line.new(bar_index, entry, bar_index + 1, entry, color=color.new(color.blue,  0), width=2)
+    ln_stop  := line.new(bar_index, stop,  bar_index + 1, stop,  color=color.new(color.red,   0), width=2)
+    ln_t1    := line.new(bar_index, t1,    bar_index + 1, t1,    color=color.new(color.green, 30))
+    ln_t2    := line.new(bar_index, t2,    bar_index + 1, t2,    color=color.new(color.green, 15))
+    ln_t3    := line.new(bar_index, t3,    bar_index + 1, t3,    color=color.new(color.green,  0))
+
+if new_signal and show_labels
+    label.delete(lb_entry)
+    label.delete(lb_stop)
+    label.delete(lb_t1)
+    label.delete(lb_t2)
+    label.delete(lb_t3)
+    lb_entry := label.new(bar_index, entry, "Entry " + str.tostring(entry, format.mintick),
+                          style=label.style_label_left, color=color.new(color.blue, 20), textcolor=color.white)
+    lb_stop  := label.new(bar_index, stop,  "Stop "  + str.tostring(stop,  format.mintick),
+                          style=label.style_label_left, color=color.new(color.red,  20), textcolor=color.white)
+    lb_t1    := label.new(bar_index, t1,    "T1 "    + str.tostring(t1,    format.mintick),
+                          style=label.style_label_left, color=color.new(color.green, 40), textcolor=color.white)
+    lb_t2    := label.new(bar_index, t2,    "T2 "    + str.tostring(t2,    format.mintick),
+                          style=label.style_label_left, color=color.new(color.green, 25), textcolor=color.white)
+    lb_t3    := label.new(bar_index, t3,    "T3 "    + str.tostring(t3,    format.mintick),
+                          style=label.style_label_left, color=color.new(color.green, 10), textcolor=color.white)
+
+// Extend the most recent lines and slide labels rightward on every bar
+if show_levels and not na(ln_entry)
+    line.set_x2(ln_entry, bar_index + 1)
+    line.set_x2(ln_stop,  bar_index + 1)
+    line.set_x2(ln_t1,    bar_index + 1)
+    line.set_x2(ln_t2,    bar_index + 1)
+    line.set_x2(ln_t3,    bar_index + 1)
+
+if show_labels and not na(lb_entry)
+    label.set_x(lb_entry, bar_index + 1)
+    label.set_x(lb_stop,  bar_index + 1)
+    label.set_x(lb_t1,    bar_index + 1)
+    label.set_x(lb_t2,    bar_index + 1)
+    label.set_x(lb_t3,    bar_index + 1)
 
 // ══════════════════════════════════════════════════════════════
 // ALERTS
