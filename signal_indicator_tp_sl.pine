@@ -110,17 +110,21 @@ var label lb_t3    = na
 
 new_signal = long_sig or short_sig
 
+// Direction-coded colors: longs = green TPs / red SL, shorts = red TPs / green SL
+tp_color = dir == 1 ? color.green : color.red
+sl_color = dir == 1 ? color.red   : color.green
+
 if new_signal and show_levels
     line.delete(ln_entry)
     line.delete(ln_stop)
     line.delete(ln_t1)
     line.delete(ln_t2)
     line.delete(ln_t3)
-    ln_entry := line.new(bar_index, entry, bar_index + 1, entry, color=color.new(color.blue,  0), width=2)
-    ln_stop  := line.new(bar_index, stop,  bar_index + 1, stop,  color=color.new(color.red,   0), width=2)
-    ln_t1    := line.new(bar_index, t1,    bar_index + 1, t1,    color=color.new(color.green, 30))
-    ln_t2    := line.new(bar_index, t2,    bar_index + 1, t2,    color=color.new(color.green, 15))
-    ln_t3    := line.new(bar_index, t3,    bar_index + 1, t3,    color=color.new(color.green,  0))
+    ln_entry := line.new(bar_index, entry, bar_index + 1, entry, color=color.new(color.blue, 0),  width=2)
+    ln_stop  := line.new(bar_index, stop,  bar_index + 1, stop,  color=color.new(sl_color,    0), width=2)
+    ln_t1    := line.new(bar_index, t1,    bar_index + 1, t1,    color=color.new(tp_color,   30))
+    ln_t2    := line.new(bar_index, t2,    bar_index + 1, t2,    color=color.new(tp_color,   15))
+    ln_t3    := line.new(bar_index, t3,    bar_index + 1, t3,    color=color.new(tp_color,    0))
 
 if new_signal and show_labels
     label.delete(lb_entry)
@@ -131,28 +135,106 @@ if new_signal and show_labels
     lb_entry := label.new(bar_index, entry, "Entry " + str.tostring(entry, format.mintick),
                           style=label.style_label_left, color=color.new(color.blue, 20), textcolor=color.white)
     lb_stop  := label.new(bar_index, stop,  "Stop "  + str.tostring(stop,  format.mintick),
-                          style=label.style_label_left, color=color.new(color.red,  20), textcolor=color.white)
+                          style=label.style_label_left, color=color.new(sl_color,  20), textcolor=color.white)
     lb_t1    := label.new(bar_index, t1,    "T1 "    + str.tostring(t1,    format.mintick),
-                          style=label.style_label_left, color=color.new(color.green, 40), textcolor=color.white)
+                          style=label.style_label_left, color=color.new(tp_color, 40), textcolor=color.white)
     lb_t2    := label.new(bar_index, t2,    "T2 "    + str.tostring(t2,    format.mintick),
-                          style=label.style_label_left, color=color.new(color.green, 25), textcolor=color.white)
+                          style=label.style_label_left, color=color.new(tp_color, 25), textcolor=color.white)
     lb_t3    := label.new(bar_index, t3,    "T3 "    + str.tostring(t3,    format.mintick),
-                          style=label.style_label_left, color=color.new(color.green, 10), textcolor=color.white)
+                          style=label.style_label_left, color=color.new(tp_color, 10), textcolor=color.white)
 
-// Extend the most recent lines and slide labels rightward on every bar
-if show_levels and not na(ln_entry)
-    line.set_x2(ln_entry, bar_index + 1)
-    line.set_x2(ln_stop,  bar_index + 1)
-    line.set_x2(ln_t1,    bar_index + 1)
-    line.set_x2(ln_t2,    bar_index + 1)
-    line.set_x2(ln_t3,    bar_index + 1)
+// ── Hit detection: remove a level once price reaches it ──
+// Long: TP hit when high >= level, SL hit when low <= stop
+// Short: TP hit when low <= level, SL hit when high >= stop
+// SL hit removes the whole trade (it's over).
+hit_long(level)  => not na(level) and high >= level
+hit_short(level) => not na(level) and low  <= level
+sl_long_hit  = dir ==  1 and not na(stop) and low  <= stop
+sl_short_hit = dir == -1 and not na(stop) and high >= stop
+sl_hit       = sl_long_hit or sl_short_hit
 
-if show_labels and not na(lb_entry)
-    label.set_x(lb_entry, bar_index + 1)
-    label.set_x(lb_stop,  bar_index + 1)
-    label.set_x(lb_t1,    bar_index + 1)
-    label.set_x(lb_t2,    bar_index + 1)
-    label.set_x(lb_t3,    bar_index + 1)
+if sl_hit
+    line.delete(ln_entry)
+    line.delete(ln_stop)
+    line.delete(ln_t1)
+    line.delete(ln_t2)
+    line.delete(ln_t3)
+    label.delete(lb_entry)
+    label.delete(lb_stop)
+    label.delete(lb_t1)
+    label.delete(lb_t2)
+    label.delete(lb_t3)
+    ln_entry := na
+    ln_stop  := na
+    ln_t1    := na
+    ln_t2    := na
+    ln_t3    := na
+    lb_entry := na
+    lb_stop  := na
+    lb_t1    := na
+    lb_t2    := na
+    lb_t3    := na
+    dir      := 0
+
+t1_hit = dir != 0 and (dir == 1 ? hit_long(t1) : hit_short(t1))
+t2_hit = dir != 0 and (dir == 1 ? hit_long(t2) : hit_short(t2))
+t3_hit = dir != 0 and (dir == 1 ? hit_long(t3) : hit_short(t3))
+
+if t1_hit
+    line.delete(ln_t1)
+    label.delete(lb_t1)
+    ln_t1 := na
+    lb_t1 := na
+    t1    := na
+
+if t2_hit
+    line.delete(ln_t2)
+    label.delete(lb_t2)
+    ln_t2 := na
+    lb_t2 := na
+    t2    := na
+
+if t3_hit
+    line.delete(ln_t3)
+    label.delete(lb_t3)
+    ln_t3 := na
+    lb_t3 := na
+    t3    := na
+    // All targets hit — also clear entry/stop, trade is complete
+    line.delete(ln_entry)
+    line.delete(ln_stop)
+    label.delete(lb_entry)
+    label.delete(lb_stop)
+    ln_entry := na
+    ln_stop  := na
+    lb_entry := na
+    lb_stop  := na
+    dir      := 0
+
+// Extend any remaining lines and slide labels rightward on every bar
+if show_levels
+    if not na(ln_entry)
+        line.set_x2(ln_entry, bar_index + 1)
+    if not na(ln_stop)
+        line.set_x2(ln_stop,  bar_index + 1)
+    if not na(ln_t1)
+        line.set_x2(ln_t1,    bar_index + 1)
+    if not na(ln_t2)
+        line.set_x2(ln_t2,    bar_index + 1)
+    if not na(ln_t3)
+        line.set_x2(ln_t3,    bar_index + 1)
+
+if show_labels
+    if not na(lb_entry)
+        label.set_x(lb_entry, bar_index + 1)
+    if not na(lb_stop)
+        label.set_x(lb_stop,  bar_index + 1)
+    if not na(lb_t1)
+        label.set_x(lb_t1,    bar_index + 1)
+    if not na(lb_t2)
+        label.set_x(lb_t2,    bar_index + 1)
+    if not na(lb_t3)
+        label.set_x(lb_t3,    bar_index + 1)
 
 // ══════════════════════════════════════════════════════════════
 // ALERTS
