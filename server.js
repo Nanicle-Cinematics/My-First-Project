@@ -10,24 +10,40 @@ const SqliteStore = require('better-sqlite3-session-store')(session);
 const DB_PATH = process.env.CHURCH_DB || path.join(__dirname, 'church.db');
 const PORT = process.env.PORT || 3000;
 
+// Auto-create the DB from schema.sql on first boot (so deployments work without shell access).
 if (!fs.existsSync(DB_PATH)) {
-  console.error(`Database not found at ${DB_PATH}. Run ./build.sh first.`);
-  process.exit(1);
+  const schemaPath = path.join(__dirname, 'schema.sql');
+  if (!fs.existsSync(schemaPath)) {
+    console.error(`Database not found at ${DB_PATH} and schema.sql is missing.`);
+    process.exit(1);
+  }
+  console.log(`No database at ${DB_PATH}; creating from schema.sql...`);
+  const fresh = new Database(DB_PATH);
+  fresh.exec(fs.readFileSync(schemaPath, 'utf8'));
+  fresh.close();
 }
 
 const db = new Database(DB_PATH);
 db.pragma('foreign_keys = ON');
 
-// Make sure the users table exists for older databases built before auth landed.
+// Migrations for older databases.
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     user_id       INTEGER PRIMARY KEY,
     username      TEXT    NOT NULL UNIQUE,
     password_hash TEXT    NOT NULL,
     display_name  TEXT,
+    role          TEXT    NOT NULL DEFAULT 'admin'
+                  CHECK (role IN ('admin','viewer')),
     created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 `);
+const hasRole = db.prepare(
+  `SELECT 1 FROM pragma_table_info('users') WHERE name='role'`
+).get();
+if (!hasRole) {
+  db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'`);
+}
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -66,11 +82,21 @@ app.use((req, res, next) => {
   if (req.path === '/login' || req.path === '/logout') return next();
   if (!req.session.userId) return res.redirect('/login');
   res.locals.user = db.prepare(
-    'SELECT user_id, username, display_name FROM users WHERE user_id=?'
+    'SELECT user_id, username, display_name, role FROM users WHERE user_id=?'
   ).get(req.session.userId);
   if (!res.locals.user) { req.session.destroy(() => {}); return res.redirect('/login'); }
+  res.locals.isAdmin = res.locals.user.role === 'admin';
   next();
 });
+
+function requireAdmin(req, res, next) {
+  if (res.locals.isAdmin) return next();
+  res.status(403).send(layout({
+    title: 'Read-only access', user: res.locals.user, active: null,
+    body: '<p>Your account has read-only access. Ask an admin to make this change.</p>'
+         + '<p><a href="/">Back to dashboard</a></p>',
+  }));
+}
 
 // ---------- helpers ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -96,7 +122,8 @@ function layout({ title, body, active, flash, user, bare }) {
   }).join('');
   const userBar = user
     ? `<div class="userbar">
-         <span>${esc(user.display_name || user.username)}</span>
+         <a href="/profile">${esc(user.display_name || user.username)}</a>
+         ${user.role === 'admin' ? `<a href="/users">Users</a>` : `<span class="role-badge">viewer</span>`}
          <form method="post" action="/logout"><button class="link-light" type="submit">Sign out</button></form>
        </div>`
     : '';
@@ -202,7 +229,7 @@ app.get('/members', (req, res) => {
       <input type="search" name="q" placeholder="Search name or email" value="${esc(q)}">
       <select name="status">${opts}</select>
       <button type="submit">Filter</button>
-      <a class="btn" href="/members/new">+ New member</a>
+      ${res.locals.isAdmin ? '<a class="btn" href="/members/new">+ New member</a>' : ''}
     </form>
     ${table(['Name', 'Family', 'Status', 'Email', 'Phone'],
       rows.map((r) => [
@@ -244,7 +271,7 @@ function memberForm(member = {}, households = [], action, csrfFlash) {
     </form>`;
 }
 
-app.get('/members/new', (req, res) => {
+app.get('/members/new', requireAdmin, (req, res) => {
   const households = db.prepare(`SELECT household_id, family_name FROM households ORDER BY family_name`).all();
   res.page({
     title: 'New member', active: '/members',
@@ -252,7 +279,7 @@ app.get('/members/new', (req, res) => {
   });
 });
 
-app.post('/members', (req, res) => {
+app.post('/members', requireAdmin, (req, res) => {
   const b = req.body;
   const info = db.prepare(`
     INSERT INTO members (household_id, first_name, last_name, email, mobile_phone,
@@ -298,14 +325,26 @@ app.get('/members/:id', (req, res) => {
     JOIN events e USING(event_id) WHERE a.member_id = ?
     ORDER BY e.starts_at DESC LIMIT 10`).all(id);
 
+  const editPanel = res.locals.isAdmin
+    ? `<h2>Edit</h2>
+       ${memberForm(m, households, `/members/${id}`)}
+       <form method="post" action="/members/${id}/delete" onsubmit="return confirm('Delete this member?')">
+         <button class="danger" type="submit">Delete member</button>
+       </form>`
+    : `<h2>Profile</h2>
+       <dl class="stats">
+         <dt>Name</dt><dd>${esc(m.first_name)} ${esc(m.last_name)}</dd>
+         <dt>Email</dt><dd>${esc(m.email) || '—'}</dd>
+         <dt>Mobile</dt><dd>${esc(m.mobile_phone) || '—'}</dd>
+         <dt>Status</dt><dd>${esc(m.membership_status)}</dd>
+         <dt>Joined</dt><dd>${esc(m.join_date) || '—'}</dd>
+         <dt>Baptized</dt><dd>${esc(m.baptism_date) || '—'}</dd>
+         <dt>Notes</dt><dd>${esc(m.notes) || '—'}</dd>
+       </dl>`;
   const body = `
     <div class="two-col">
       <section>
-        <h2>Edit</h2>
-        ${memberForm(m, households, `/members/${id}`)}
-        <form method="post" action="/members/${id}/delete" onsubmit="return confirm('Delete this member?')">
-          <button class="danger" type="submit">Delete member</button>
-        </form>
+        ${editPanel}
       </section>
       <section>
         <h2>At a glance</h2>
@@ -340,7 +379,7 @@ app.get('/members/:id', (req, res) => {
   });
 });
 
-app.post('/members/:id', (req, res) => {
+app.post('/members/:id', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const b = req.body;
   db.prepare(`
@@ -362,7 +401,7 @@ app.post('/members/:id', (req, res) => {
   res.redirect(`/members/${id}`);
 });
 
-app.post('/members/:id/delete', (req, res) => {
+app.post('/members/:id/delete', requireAdmin, (req, res) => {
   db.prepare(`DELETE FROM members WHERE member_id=?`).run(Number(req.params.id));
   res.redirect('/members');
 });
@@ -422,7 +461,7 @@ app.get('/events', (req, res) => {
     FROM events e LEFT JOIN attendance a USING(event_id)
     GROUP BY e.event_id ORDER BY e.starts_at DESC`).all();
   const body = `
-    <p><a class="btn" href="/events/new">+ New event</a></p>
+    ${res.locals.isAdmin ? '<p><a class="btn" href="/events/new">+ New event</a></p>' : ''}
     ${table(['When', 'Title', 'Type', 'Location', 'Attendees'],
       rows.map((r) => [
         esc(r.starts_at),
@@ -432,7 +471,7 @@ app.get('/events', (req, res) => {
   res.page({ title: 'Events', active: '/events', body });
 });
 
-app.get('/events/new', (req, res) => {
+app.get('/events/new', requireAdmin, (req, res) => {
   const body = `
     <form class="form" method="post" action="/events">
       <label>Title<input name="title" required></label>
@@ -449,7 +488,7 @@ app.get('/events/new', (req, res) => {
   res.page({ title: 'New event', active: '/events', body });
 });
 
-app.post('/events', (req, res) => {
+app.post('/events', requireAdmin, (req, res) => {
   const b = req.body;
   const info = db.prepare(`
     INSERT INTO events (title, event_type, starts_at, ends_at, location, notes)
@@ -477,17 +516,27 @@ app.get('/events/:id', (req, res) => {
       AND membership_status IN ('member','regular','visitor')
     ORDER BY last_name`).all(id);
 
+  const removeForm = (mid) => res.locals.isAdmin
+    ? `<form method="post" action="/events/${id}/uncheck">
+         <input type="hidden" name="member_id" value="${mid}">
+         <button class="link" type="submit">remove</button>
+       </form>`
+    : '';
   const attendList = attendees.length
     ? `<ul class="check-list">${attendees.map((a) =>
-        `<li><a href="/members/${a.member_id}">${esc(a.name)}</a>
-          <form method="post" action="/events/${id}/uncheck">
-            <input type="hidden" name="member_id" value="${a.member_id}">
-            <button class="link" type="submit">remove</button>
-          </form></li>`).join('')}</ul>`
+        `<li><a href="/members/${a.member_id}">${esc(a.name)}</a>${removeForm(a.member_id)}</li>`).join('')}</ul>`
     : '<p>No one checked in yet.</p>';
 
   const otherOpts = others.map((o) =>
     `<option value="${o.member_id}">${esc(o.name)}</option>`).join('');
+
+  const checkInPanel = res.locals.isAdmin
+    ? `<h2>Check in</h2>
+       <form method="post" action="/events/${id}/check">
+         <select name="member_id" required><option value="">— pick a member —</option>${otherOpts}</select>
+         <button type="submit">Check in</button>
+       </form>`
+    : '';
 
   const body = `
     <p><strong>${esc(ev.event_type)}</strong> · ${esc(ev.starts_at)} · ${esc(ev.location) || ''}</p>
@@ -497,18 +546,14 @@ app.get('/events/:id', (req, res) => {
         ${attendList}
       </section>
       <section>
-        <h2>Check in</h2>
-        <form method="post" action="/events/${id}/check">
-          <select name="member_id" required><option value="">— pick a member —</option>${otherOpts}</select>
-          <button type="submit">Check in</button>
-        </form>
+        ${checkInPanel}
         ${ev.notes ? `<h3>Notes</h3><p>${esc(ev.notes)}</p>` : ''}
       </section>
     </div>`;
   res.page({ title: ev.title, active: '/events', body });
 });
 
-app.post('/events/:id/check', (req, res) => {
+app.post('/events/:id/check', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const member_id = Number(req.body.member_id);
   if (member_id) {
@@ -516,7 +561,7 @@ app.post('/events/:id/check', (req, res) => {
   }
   res.redirect(`/events/${id}`);
 });
-app.post('/events/:id/uncheck', (req, res) => {
+app.post('/events/:id/uncheck', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   db.prepare(`DELETE FROM attendance WHERE event_id=? AND member_id=?`).run(id, Number(req.body.member_id));
   res.redirect(`/events/${id}`);
@@ -545,21 +590,24 @@ app.get('/contributions', (req, res) => {
   const memOpts = '<option value="">(anonymous)</option>' +
     members.map((m) => `<option value="${m.member_id}">${esc(m.name)}</option>`).join('');
 
+  const recordPanel = res.locals.isAdmin
+    ? `<h2>Record contribution</h2>
+       <form class="form" method="post" action="/contributions">
+         <label>Date<input type="date" name="contributed_on" required value="${new Date().toISOString().slice(0,10)}"></label>
+         <label>Member<select name="member_id">${memOpts}</select></label>
+         <label>Fund<select name="fund_id" required>${fundOpts}</select></label>
+         <label>Amount<input type="number" step="0.01" min="0.01" name="amount" required></label>
+         <label>Method<select name="method">
+           ${['cash','check','card','online','transfer','other'].map((m) => `<option>${m}</option>`).join('')}
+         </select></label>
+         <label>Reference<input name="reference"></label>
+         <div class="actions"><button type="submit">Save</button></div>
+       </form>`
+    : '';
   const body = `
     <div class="two-col">
       <section>
-        <h2>Record contribution</h2>
-        <form class="form" method="post" action="/contributions">
-          <label>Date<input type="date" name="contributed_on" required value="${new Date().toISOString().slice(0,10)}"></label>
-          <label>Member<select name="member_id">${memOpts}</select></label>
-          <label>Fund<select name="fund_id" required>${fundOpts}</select></label>
-          <label>Amount<input type="number" step="0.01" min="0.01" name="amount" required></label>
-          <label>Method<select name="method">
-            ${['cash','check','card','online','transfer','other'].map((m) => `<option>${m}</option>`).join('')}
-          </select></label>
-          <label>Reference<input name="reference"></label>
-          <div class="actions"><button type="submit">Save</button></div>
-        </form>
+        ${recordPanel}
       </section>
       <section>
         <h2>YTD by fund</h2>
@@ -574,7 +622,7 @@ app.get('/contributions', (req, res) => {
   res.page({ title: 'Contributions', active: '/contributions', body });
 });
 
-app.post('/contributions', (req, res) => {
+app.post('/contributions', requireAdmin, (req, res) => {
   const b = req.body;
   db.prepare(`
     INSERT INTO contributions (member_id, fund_id, amount, contributed_on, method, reference)
@@ -638,6 +686,142 @@ app.get('/reports', (req, res) => {
         : '<p>Everyone has been attending. 🎉</p>'}
     </section>`;
   res.page({ title: 'Reports', active: '/reports', body });
+});
+
+// ---------- profile (any signed-in user) ----------
+app.get('/profile', (req, res) => {
+  const u = res.locals.user;
+  const flash = req.query.ok === '1' ? 'Password updated.' : null;
+  const error = req.query.e ? {
+    short: 'New password must be at least 8 characters.',
+    mismatch: 'New passwords do not match.',
+    bad: 'Current password is incorrect.',
+  }[req.query.e] : null;
+  const body = `
+    <p>Signed in as <strong>${esc(u.username)}</strong> (${esc(u.role)}).</p>
+    <h2>Change password</h2>
+    ${error ? `<p class="error">${esc(error)}</p>` : ''}
+    <form class="form" method="post" action="/profile/password">
+      <label class="wide">Current password<input type="password" name="current" required></label>
+      <label class="wide">New password<input type="password" name="next" required minlength="8"></label>
+      <label class="wide">Confirm new password<input type="password" name="next2" required></label>
+      <div class="actions"><button type="submit">Update password</button></div>
+    </form>`;
+  res.page({ title: 'Profile', body, flash });
+});
+
+app.post('/profile/password', (req, res) => {
+  const { current, next: np, next2 } = req.body;
+  const u = db.prepare('SELECT password_hash FROM users WHERE user_id=?').get(res.locals.user.user_id);
+  if (!bcrypt.compareSync(current || '', u.password_hash)) return res.redirect('/profile?e=bad');
+  if (!np || np.length < 8) return res.redirect('/profile?e=short');
+  if (np !== next2) return res.redirect('/profile?e=mismatch');
+  db.prepare('UPDATE users SET password_hash=? WHERE user_id=?')
+    .run(bcrypt.hashSync(np, 12), res.locals.user.user_id);
+  res.redirect('/profile?ok=1');
+});
+
+// ---------- users management (admin only) ----------
+app.get('/users', requireAdmin, (req, res) => {
+  const users = db.prepare(
+    `SELECT user_id, username, display_name, role, created_at FROM users ORDER BY username`
+  ).all();
+  const rows = users.map((u) => [
+    esc(u.username),
+    esc(u.display_name) || '—',
+    `<span class="role-badge role-${esc(u.role)}">${esc(u.role)}</span>`,
+    esc(u.created_at).slice(0, 10),
+    `<form method="post" action="/users/${u.user_id}/role" class="inline">
+       <select name="role">
+         <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
+         <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer</option>
+       </select>
+       <button type="submit">Save</button>
+     </form>
+     <form method="post" action="/users/${u.user_id}/reset" class="inline">
+       <input type="password" name="password" placeholder="new password" minlength="8" required>
+       <button type="submit">Reset</button>
+     </form>
+     ${u.user_id === res.locals.user.user_id
+       ? ''
+       : `<form method="post" action="/users/${u.user_id}/delete" class="inline"
+            onsubmit="return confirm('Delete ${esc(u.username)}?')">
+            <button class="danger" type="submit">Delete</button>
+          </form>`}`,
+  ]);
+  const body = `
+    <p><a class="btn" href="/users/new">+ New user</a></p>
+    ${table(['Username', 'Display name', 'Role', 'Created', 'Actions'], rows)}`;
+  res.page({ title: 'Users', body });
+});
+
+app.get('/users/new', requireAdmin, (req, res) => {
+  const body = `
+    <form class="form" method="post" action="/users">
+      <label>Username<input name="username" required></label>
+      <label>Display name<input name="display_name"></label>
+      <label>Password<input type="password" name="password" required minlength="8"></label>
+      <label>Role<select name="role">
+        <option value="admin">admin</option>
+        <option value="viewer" selected>viewer</option>
+      </select></label>
+      <div class="actions"><button type="submit">Create user</button></div>
+    </form>`;
+  res.page({ title: 'New user', body });
+});
+
+app.post('/users', requireAdmin, (req, res) => {
+  const { username, display_name, password, role } = req.body;
+  if (!username || !password || password.length < 8) return res.redirect('/users/new');
+  const r = role === 'viewer' ? 'viewer' : 'admin';
+  try {
+    db.prepare(
+      `INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)`
+    ).run(username.trim(), bcrypt.hashSync(password, 12), (display_name || '').trim() || null, r);
+  } catch (e) {
+    return res.status(400).send(layout({
+      title: 'Could not create user', user: res.locals.user, active: null,
+      body: `<p class="error">${esc(e.message)}</p><p><a href="/users/new">Try again</a></p>`,
+    }));
+  }
+  res.redirect('/users');
+});
+
+app.post('/users/:id/role', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const r = req.body.role === 'viewer' ? 'viewer' : 'admin';
+  // Don't allow removing the last admin.
+  if (r !== 'admin') {
+    const admins = db.prepare(`SELECT COUNT(*) c FROM users WHERE role='admin'`).get().c;
+    const target = db.prepare(`SELECT role FROM users WHERE user_id=?`).get(id);
+    if (target && target.role === 'admin' && admins <= 1) {
+      return res.status(400).send(layout({
+        title: 'Cannot demote the last admin', user: res.locals.user, active: null,
+        body: '<p>Promote another user to admin first.</p><p><a href="/users">Back</a></p>',
+      }));
+    }
+  }
+  db.prepare(`UPDATE users SET role=? WHERE user_id=?`).run(r, id);
+  res.redirect('/users');
+});
+
+app.post('/users/:id/reset', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const { password } = req.body;
+  if (!password || password.length < 8) return res.redirect('/users');
+  db.prepare(`UPDATE users SET password_hash=? WHERE user_id=?`)
+    .run(bcrypt.hashSync(password, 12), id);
+  res.redirect('/users');
+});
+
+app.post('/users/:id/delete', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (id === res.locals.user.user_id) return res.redirect('/users');
+  const admins = db.prepare(`SELECT COUNT(*) c FROM users WHERE role='admin'`).get().c;
+  const target = db.prepare(`SELECT role FROM users WHERE user_id=?`).get(id);
+  if (target && target.role === 'admin' && admins <= 1) return res.redirect('/users');
+  db.prepare(`DELETE FROM users WHERE user_id=?`).run(id);
+  res.redirect('/users');
 });
 
 // ---------- auth pages ----------

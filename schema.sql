@@ -136,12 +136,14 @@ CREATE TABLE pastoral_notes (
     confidential INTEGER NOT NULL DEFAULT 0
 );
 
--- Login accounts (admins of the church manager).
+-- Login accounts. role is 'admin' (full access) or 'viewer' (read-only).
 CREATE TABLE IF NOT EXISTS users (
     user_id       INTEGER PRIMARY KEY,
     username      TEXT    NOT NULL UNIQUE,
     password_hash TEXT    NOT NULL,
     display_name  TEXT,
+    role          TEXT    NOT NULL DEFAULT 'admin'
+                  CHECK (role IN ('admin','viewer')),
     created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

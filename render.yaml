@@ -1,0 +1,27 @@
+# Render Blueprint for the Church Manager.
+# 1. Push this repo to GitHub.
+# 2. In Render, click "New" -> "Blueprint" and point it at this repo.
+# 3. Render reads this file, creates the web service + a 1 GB persistent
+#    disk for SQLite at /var/data, and sets a random SESSION_SECRET.
+# Note: persistent disks require a paid plan ($7/mo for the smallest disk).
+
+services:
+  - type: web
+    name: church-manager
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /login
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CHURCH_DB
+        value: /var/data/church.db
+      - key: SESSION_SECRET
+        generateValue: true
+    disk:
+      name: church-data
+      mountPath: /var/data
+      sizeGB: 1

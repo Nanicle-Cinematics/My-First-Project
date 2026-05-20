@@ -51,6 +51,19 @@ main.bare { max-width: 420px; }
 .muted { color: var(--muted); margin-top: 0; }
 .error { color: var(--danger); margin: 0; }
 
+.userbar a { color: rgba(255,255,255,0.9); text-decoration: none; font-size: 0.9rem; }
+.userbar a:hover { color: #fff; text-decoration: underline; }
+.role-badge {
+  background: rgba(255,255,255,0.18); color: #fff; padding: 0.1rem 0.5rem;
+  border-radius: 999px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.role-admin { background: #d6ead7; color: #14542b; }
+.role-viewer { background: #d6e4f5; color: #0e3a6b; }
+
+form.inline { display: inline-flex; gap: 0.3rem; margin: 0 0.4rem 0.3rem 0; align-items: center; }
+form.inline input, form.inline select { padding: 0.25rem 0.4rem; font-size: 0.85rem; }
+form.inline button { padding: 0.25rem 0.5rem; font-size: 0.85rem; }
+
 main { max-width: 1100px; margin: 1.5rem auto; padding: 0 1.5rem; }
 h1 { margin-top: 0; }
 h2 { margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; }

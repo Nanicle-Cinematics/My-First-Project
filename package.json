@@ -4,6 +4,9 @@
   "private": true,
   "description": "Church management web UI backed by SQLite.",
   "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "build-db": "bash build.sh"

@@ -25,6 +25,36 @@ survive restarts:
 SESSION_SECRET="$(openssl rand -hex 32)" npm start
 ```
 
+## Accounts & roles
+
+- The first visitor sees **/setup** and creates the initial admin.
+- Admins can manage data (members, events, contributions) and other
+  users via **/users**.
+- Viewers can sign in and browse all pages but cannot edit anything.
+- Anyone can change their own password at **/profile**.
+
+## Deployment
+
+The app boots from `schema.sql` automatically when the configured DB
+file doesn't exist, so deployments don't need a shell step. Use the
+included configs:
+
+- **Render** — `render.yaml` defines a web service + 1 GB persistent
+  disk. New Blueprint → point at this repo → deploy. (Render's
+  persistent disks require a paid plan.)
+- **Fly.io** — `fly.toml` + `Dockerfile`. See the comments at the top
+  of `fly.toml` for the four-command setup. Free tier works.
+- **Any host with a Procfile** — `web: node server.js`.
+
+Required env vars in production:
+
+| Var               | Why                                            |
+|-------------------|------------------------------------------------|
+| `SESSION_SECRET`  | Long random string so logins persist           |
+| `CHURCH_DB`       | Path on a persistent disk (e.g. `/data/church.db`) |
+| `NODE_ENV`        | Set to `production` for secure cookies         |
+| `PORT`            | Usually set by the host                        |
+
 ## What's in the UI
 
 - **Dashboard** — active-member count, household count, YTD giving,
