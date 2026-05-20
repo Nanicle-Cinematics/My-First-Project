@@ -1,28 +1,31 @@
 :root {
-  --sidebar-bg: #2b1d5e;
-  --sidebar-bg-2: #221547;
+  --sidebar-bg: #1d4e89;        /* Trypan Blue */
+  --sidebar-bg-2: #103060;      /* Deeper blue for gradient */
   --sidebar-ink: #ffffff;
-  --sidebar-muted: rgba(255, 255, 255, 0.65);
-  --sidebar-active: rgba(255, 255, 255, 0.12);
-  --bg: #f7f6fa;
+  --sidebar-muted: rgba(255, 255, 255, 0.7);
+  --sidebar-active: rgba(212, 160, 23, 0.18);  /* gold tint on selected */
+  --bg: #f8f6ee;                /* warm off-white */
   --panel: #ffffff;
-  --ink: #1f2030;
-  --muted: #6b6f80;
-  --soft: #f1eef9;
-  --border: #ebe9f1;
-  --accent: #5b3fc8;
-  --accent-soft: #ede8ff;
-  --accent-dark: #3f2a99;
+  --ink: #15233a;
+  --muted: #6b7080;
+  --soft: #e9eef7;              /* very light trypan tint */
+  --border: #e3e6ec;
+  --accent: #1d4e89;            /* Trypan Blue */
+  --accent-soft: #d6e2f2;
+  --accent-dark: #102a55;
+  --gold: #d4a017;              /* Harvest Gold */
+  --gold-soft: #fbedc4;
+  --gold-dark: #a37c00;
   --green: #1f9d55;
   --green-soft: #d6f0de;
-  --blue: #2b6cb0;
-  --blue-soft: #d6e6f5;
+  --blue: #1d4e89;
+  --blue-soft: #d6e2f2;
   --orange: #d97706;
   --orange-soft: #fdebd0;
-  --danger: #c0392b;
-  --danger-soft: #fbe2de;
+  --danger: #b3261e;
+  --danger-soft: #f9dcd9;
   --pos: #14854b;
-  --shadow: 0 1px 3px rgba(20, 14, 60, 0.06), 0 1px 2px rgba(20, 14, 60, 0.04);
+  --shadow: 0 1px 3px rgba(15, 35, 70, 0.08), 0 1px 2px rgba(15, 35, 70, 0.05);
 }
 
 * { box-sizing: border-box; }
@@ -56,7 +59,8 @@ a:hover { text-decoration: underline; }
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 .sidebar .brand .logo {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--gold);
+  color: var(--accent-dark);
   border-radius: 10px;
   width: 44px; height: 44px;
   display: flex; align-items: center; justify-content: center;
@@ -80,6 +84,8 @@ a:hover { text-decoration: underline; }
 .sidebar nav a.active {
   background: var(--sidebar-active);
   color: #fff; font-weight: 600;
+  border-left: 3px solid var(--gold);
+  padding-left: calc(0.75rem - 3px);
 }
 .sidebar nav a .ico {
   width: 18px; display: inline-flex; justify-content: center;
@@ -186,7 +192,7 @@ a:hover { text-decoration: underline; }
 }
 .stat .ico.purple { background: var(--accent-soft); color: var(--accent); }
 .stat .ico.green  { background: var(--green-soft);  color: var(--green); }
-.stat .ico.blue   { background: var(--blue-soft);   color: var(--blue); }
+.stat .ico.blue   { background: var(--gold-soft);   color: var(--gold-dark); }
 .stat .ico.orange { background: var(--orange-soft); color: var(--orange); }
 .stat .label { font-size: 0.8rem; color: var(--muted); }
 .stat .value { font-size: 1.4rem; font-weight: 700; line-height: 1.1; margin: 0.15rem 0; }
@@ -262,8 +268,9 @@ a:hover { text-decoration: underline; }
 .fin-row:last-child { border-bottom: none; }
 .fin-row.total {
   margin-top: 0.5rem; padding: 0.75rem 0.9rem;
-  background: var(--accent-soft); border-radius: 8px;
+  background: var(--gold-soft); border-radius: 8px;
   border-bottom: none; font-weight: 600;
+  color: var(--accent-dark);
 }
 .fin-row .lbl { display: flex; align-items: center; gap: 0.5rem; color: var(--ink); }
 .fin-row .lbl .dot {
@@ -483,7 +490,8 @@ form.inline button { padding: 0.3rem 0.6rem; font-size: 0.85rem; }
 }
 .footer .status { display: inline-flex; align-items: center; gap: 0.5rem; }
 .footer .status .dot {
-  width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+  width: 8px; height: 8px; border-radius: 50%; background: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-soft);
 }
 
 /* ---------- Auth pages (login/setup) ---------- */
