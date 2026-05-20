@@ -9,7 +9,7 @@ const SqliteStore = require('better-sqlite3-session-store')(session);
 
 const DB_PATH = process.env.CHURCH_DB || path.join(__dirname, 'church.db');
 const PORT = process.env.PORT || 3000;
-const CHURCH_NAME = process.env.CHURCH_NAME || 'Church Manager';
+const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
 
 // Auto-create the DB from schema.sql on first boot (so deployments work without shell access).
 if (!fs.existsSync(DB_PATH)) {
@@ -210,7 +210,6 @@ const NAV = [
   ['/organizations',   'Organizations',  '♫'],
   ['/events',          'Events',         '📅'],
   ['/communications',  'Communications', '✉'],
-  ['/sacraments',      'Sacraments',     '⛪'],
   ['/reports',         'Reports',        '📊'],
   ['/users',           'Users & Roles',  '🔑', 'admin'],
   ['/settings',        'Settings',       '⚙'],
