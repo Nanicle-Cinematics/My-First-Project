@@ -9,6 +9,7 @@ const SqliteStore = require('better-sqlite3-session-store')(session);
 
 const DB_PATH = process.env.CHURCH_DB || path.join(__dirname, 'church.db');
 const PORT = process.env.PORT || 3000;
+const CHURCH_NAME = process.env.CHURCH_NAME || 'Church Manager';
 
 // Auto-create the DB from schema.sql on first boot (so deployments work without shell access).
 if (!fs.existsSync(DB_PATH)) {
@@ -46,6 +47,8 @@ if (!hasRole) {
 }
 
 const app = express();
+// Trust the reverse proxy in production so secure cookies work behind Fly/Render/etc.
+app.set('trust proxy', 1);
 app.use(express.urlencoded({ extended: false }));
 app.use('/static', express.static(path.join(__dirname, 'public')));
 
@@ -128,8 +131,8 @@ function layout({ title, body, active, flash, user, bare }) {
        </div>`
     : '';
   const header = bare
-    ? `<header class="bare"><div class="brand">⛪ Church Manager</div></header>`
-    : `<header><div class="brand">⛪ Church Manager</div><nav>${nav}</nav>${userBar}</header>`;
+    ? `<header class="bare"><div class="brand">⛪ ${esc(CHURCH_NAME)}</div></header>`
+    : `<header><div class="brand">⛪ ${esc(CHURCH_NAME)}</div><nav>${nav}</nav>${userBar}</header>`;
   return `<!doctype html>
 <html lang="en">
 <head>
