@@ -46,6 +46,46 @@ if (!hasRole) {
   db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'`);
 }
 
+// Migrations for the redesigned dashboard.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS expenses (
+    expense_id  INTEGER PRIMARY KEY,
+    category    TEXT NOT NULL,
+    amount      REAL NOT NULL CHECK (amount > 0),
+    spent_on    TEXT NOT NULL,
+    description TEXT,
+    fund_id     INTEGER REFERENCES funds(fund_id),
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS welfare_cases (
+    case_id          INTEGER PRIMARY KEY,
+    member_id        INTEGER NOT NULL REFERENCES members(member_id) ON DELETE CASCADE,
+    category         TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'open',
+    amount_disbursed REAL NOT NULL DEFAULT 0,
+    opened_on        TEXT NOT NULL DEFAULT CURRENT_DATE,
+    closed_on        TEXT,
+    summary          TEXT NOT NULL,
+    notes            TEXT
+  );
+  CREATE TABLE IF NOT EXISTS announcements (
+    announcement_id INTEGER PRIMARY KEY,
+    title           TEXT NOT NULL,
+    body            TEXT NOT NULL,
+    audience        TEXT NOT NULL DEFAULT 'all',
+    posted_by       INTEGER REFERENCES users(user_id),
+    posted_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS activity_log (
+    activity_id INTEGER PRIMARY KEY,
+    occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    user_id     INTEGER REFERENCES users(user_id),
+    kind        TEXT NOT NULL,
+    description TEXT NOT NULL,
+    link        TEXT
+  );
+`);
+
 const app = express();
 // Trust the reverse proxy in production so secure cookies work behind Fly/Render/etc.
 app.set('trust proxy', 1);
@@ -105,49 +145,161 @@ function requireAdmin(req, res, next) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
 ));
-const fmtMoney = (n) => (n == null ? '' : '$' + Number(n).toFixed(2));
+const fmtMoney = (n) => {
+  if (n == null) return '';
+  const v = Number(n);
+  return 'GH₵ ' + v.toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
 const fmtDate = (s) => (s ? String(s).slice(0, 10) : '');
+const initials = (name) => {
+  if (!name) return '?';
+  return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
+};
 
 const NAV = [
-  ['/', 'Dashboard'],
-  ['/members', 'Members'],
-  ['/households', 'Households'],
-  ['/ministries', 'Ministries'],
-  ['/events', 'Events'],
-  ['/contributions', 'Contributions'],
-  ['/reports', 'Reports'],
+  ['/',                'Dashboard',      '▥'],
+  ['/members',         'Members',        '👥'],
+  ['/attendance',      'Attendance',     '✓'],
+  ['/finance',         'Finance',        '₵'],
+  ['/bible-classes',   'Bible Classes',  '📖'],
+  ['/welfare',         'Welfare',        '♥'],
+  ['/events',          'Events',         '📅'],
+  ['/communications',  'Communications', '✉'],
+  ['/sacraments',      'Sacraments',     '⛪'],
+  ['/reports',         'Reports',        '📊'],
+  ['/users',           'Users & Roles',  '🔑', 'admin'],
+  ['/settings',        'Settings',       '⚙'],
 ];
 
-function layout({ title, body, active, flash, user, bare }) {
-  const nav = NAV.map(([href, label]) => {
-    const cls = href === active ? 'active' : '';
-    return `<a class="${cls}" href="${href}">${esc(label)}</a>`;
-  }).join('');
-  const userBar = user
-    ? `<div class="userbar">
-         <a href="/profile">${esc(user.display_name || user.username)}</a>
-         ${user.role === 'admin' ? `<a href="/users">Users</a>` : `<span class="role-badge">viewer</span>`}
-         <form method="post" action="/logout"><button class="link-light" type="submit">Sign out</button></form>
-       </div>`
-    : '';
-  const header = bare
-    ? `<header class="bare"><div class="brand">⛪ ${esc(CHURCH_NAME)}</div></header>`
-    : `<header><div class="brand">⛪ ${esc(CHURCH_NAME)}</div><nav>${nav}</nav>${userBar}</header>`;
+// Scripture of the Day — picks a verse from this list based on day-of-year so it changes daily.
+const VERSES = [
+  ['I was glad when they said to me, "Let us go to the house of the Lord."', 'Psalm 122:1'],
+  ['The Lord is my shepherd; I shall not want.', 'Psalm 23:1'],
+  ['Trust in the Lord with all your heart, and lean not on your own understanding.', 'Proverbs 3:5'],
+  ['For I know the plans I have for you, declares the Lord.', 'Jeremiah 29:11'],
+  ['Be still, and know that I am God.', 'Psalm 46:10'],
+  ['Cast all your anxiety on him because he cares for you.', '1 Peter 5:7'],
+  ['The joy of the Lord is your strength.', 'Nehemiah 8:10'],
+  ['Love the Lord your God with all your heart.', 'Matthew 22:37'],
+  ['I can do all things through Christ who strengthens me.', 'Philippians 4:13'],
+  ['Therefore go and make disciples of all nations.', 'Matthew 28:19'],
+  ['Let us not grow weary in doing good.', 'Galatians 6:9'],
+  ['The Lord bless you and keep you.', 'Numbers 6:24'],
+  ['Come to me, all who labor and are heavy laden, and I will give you rest.', 'Matthew 11:28'],
+  ['Rejoice in the Lord always; again I will say, rejoice.', 'Philippians 4:4'],
+];
+function scriptureOfDay() {
+  const d = new Date();
+  const start = new Date(d.getFullYear(), 0, 0);
+  const dayOfYear = Math.floor((d - start) / 86400000);
+  return VERSES[dayOfYear % VERSES.length];
+}
+
+// Lightweight activity log — keeps the dashboard's "Recent Activities" panel fresh.
+function logActivity(kind, description, link, userId) {
+  try {
+    db.prepare(
+      `INSERT INTO activity_log (kind, description, link, user_id) VALUES (?, ?, ?, ?)`
+    ).run(kind, description, link || null, userId || null);
+  } catch (_) { /* table may not exist on very old DBs */ }
+}
+
+function layout({ title, subtitle, body, active, flash, user, bare }) {
+  if (bare) {
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · ${esc(CHURCH_NAME)}</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="auth-shell">
+  <div class="auth-card">
+    <div class="brand-mini">⛪ ${esc(CHURCH_NAME)}</div>
+    <h1>${esc(title)}</h1>
+    ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
+    ${body}
+  </div>
+</div>
+</body></html>`;
+  }
+  const isAdmin = user && user.role === 'admin';
+  const navHtml = NAV
+    .filter((item) => !item[3] || (item[3] === 'admin' && isAdmin))
+    .map(([href, label, icon]) => {
+      const cls = href === active ? 'active' : '';
+      return `<a class="${cls}" href="${href}"><span class="ico">${icon}</span><span>${esc(label)}</span></a>`;
+    }).join('');
+  const verse = scriptureOfDay();
+  const userName = user ? (user.display_name || user.username) : '';
+  const userInitials = initials(userName);
+  const roleLabel = user ? (user.role === 'admin' ? 'Administrator' : 'Viewer') : '';
+  const backup = (() => {
+    try {
+      const last = fs.statSync(DB_PATH).mtime;
+      return last.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch (_) { return '—'; }
+  })();
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} · Church Manager</title>
+<title>${esc(title)} · ${esc(CHURCH_NAME)}</title>
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-${header}
-<main${bare ? ' class="bare"' : ''}>
-  ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
-  <h1>${esc(title)}</h1>
-  ${body}
-</main>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">⛪</div>
+      <div>
+        <div class="name">${esc(CHURCH_NAME)}</div>
+        <div class="tag">Management System</div>
+      </div>
+    </div>
+    <nav>${navHtml}</nav>
+    <div class="scripture">
+      <div class="title">📖 Scripture of the Day</div>
+      <blockquote>“${esc(verse[0])}”</blockquote>
+      <cite>– ${esc(verse[1])}</cite>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <form class="search" action="/members" method="get">
+        <span>🔍</span>
+        <input type="search" name="q" placeholder="Search members, phone, email…">
+      </form>
+      <div class="right">
+        <a class="bell" href="/communications" title="Notifications">🔔</a>
+        <a class="who" href="/profile">
+          <div class="avatar">${esc(userInitials)}</div>
+          <div>
+            <div class="name">${esc(userName)}</div>
+            <div class="role">${esc(roleLabel)}</div>
+          </div>
+        </a>
+        <form method="post" action="/logout"><button class="sign-out" type="submit">Sign out</button></form>
+      </div>
+    </div>
+    <main class="page">
+      ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
+      <h1>${esc(title)}</h1>
+      ${subtitle ? `<p class="subtitle">${esc(subtitle)}</p>` : ''}
+      ${body}
+    </main>
+    <footer class="footer">
+      <div>© ${new Date().getFullYear()} ${esc(CHURCH_NAME)}. All rights reserved.</div>
+      <div class="status">
+        <span>Last backup: ${esc(backup)}</span>
+        <span class="status"><span class="dot"></span> System Online</span>
+      </div>
+    </footer>
+  </div>
+</div>
 </body></html>`;
 }
 
@@ -160,49 +312,284 @@ function table(headers, rows) {
 }
 
 // ---------- routes: dashboard ----------
+function sparkline(points) {
+  if (!points.length) return '<p class="muted-text">No data yet.</p>';
+  const W = 560, H = 200, P = 28;
+  const xs = points.map((_, i) => P + (i * (W - P * 2)) / Math.max(1, points.length - 1));
+  const max = Math.max(...points.map((p) => p.value), 1);
+  const min = Math.min(...points.map((p) => p.value), 0);
+  const yScale = (v) => H - P - ((v - min) / Math.max(1, max - min)) * (H - P * 2);
+  const ys = points.map((p) => yScale(p.value));
+  const line = xs.map((x, i) => `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' ');
+  const area = `M ${xs[0]} ${H - P} L ${xs.map((x, i) => `${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' L ')} L ${xs[xs.length - 1]} ${H - P} Z`;
+  const dots = xs.map((x, i) =>
+    `<circle class="dot" cx="${x.toFixed(1)}" cy="${ys[i].toFixed(1)}" r="3.5"></circle>`).join('');
+  const xLabels = points.map((p, i) =>
+    `<text x="${xs[i].toFixed(1)}" y="${H - 8}" text-anchor="middle">${esc(p.label)}</text>`).join('');
+  const yMax = `<text x="6" y="${(P + 4).toFixed(1)}">${max}</text>`;
+  const yMin = `<text x="6" y="${(H - P + 4).toFixed(1)}">${min}</text>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <path class="area" d="${area}"></path>
+    <path class="line" d="${line}"></path>
+    ${dots}${xLabels}${yMax}${yMin}
+  </svg>`;
+}
+
 app.get('/', (req, res) => {
-  const stats = {
-    members: db.prepare(`SELECT COUNT(*) c FROM members WHERE membership_status IN ('member','regular')`).get().c,
-    households: db.prepare(`SELECT COUNT(*) c FROM households`).get().c,
-    ministries: db.prepare(`SELECT COUNT(*) c FROM ministries WHERE active=1`).get().c,
-    ytdGiving: db.prepare(`
-      SELECT COALESCE(SUM(amount),0) total FROM contributions
-      WHERE substr(contributed_on,1,4) = strftime('%Y','now')`).get().total,
-  };
+  const totalMembers = db.prepare(
+    `SELECT COUNT(*) c FROM members WHERE membership_status IN ('member','regular','visitor')`
+  ).get().c;
+  const newMembersThisMonth = db.prepare(
+    `SELECT COUNT(*) c FROM members WHERE substr(join_date,1,7) = strftime('%Y-%m','now')`
+  ).get().c;
+
+  const sundayAttendance = db.prepare(`
+    SELECT COUNT(*) c FROM attendance a JOIN events e USING(event_id)
+    WHERE e.event_type='service' AND substr(e.starts_at,1,10) >= date('now','-7 days')
+  `).get().c;
+  const prevSundayAttendance = db.prepare(`
+    SELECT COUNT(*) c FROM attendance a JOIN events e USING(event_id)
+    WHERE e.event_type='service'
+      AND substr(e.starts_at,1,10) BETWEEN date('now','-14 days') AND date('now','-8 days')
+  `).get().c;
+  const attendanceDelta = prevSundayAttendance > 0
+    ? Math.round(((sundayAttendance - prevSundayAttendance) / prevSundayAttendance) * 100)
+    : null;
+
+  const offeringsThisMonth = db.prepare(`
+    SELECT COALESCE(SUM(amount),0) t FROM contributions
+    WHERE substr(contributed_on,1,7) = strftime('%Y-%m','now')
+  `).get().t;
+  const offeringsLastMonth = db.prepare(`
+    SELECT COALESCE(SUM(amount),0) t FROM contributions
+    WHERE substr(contributed_on,1,7) = strftime('%Y-%m', date('now','start of month','-1 day'))
+  `).get().t;
+  const offeringsDelta = offeringsLastMonth > 0
+    ? Math.round(((offeringsThisMonth - offeringsLastMonth) / offeringsLastMonth) * 100)
+    : null;
+
+  const visitorsThisMonth = db.prepare(
+    `SELECT COUNT(*) c FROM members WHERE membership_status='visitor'
+       AND substr(join_date,1,7) = strftime('%Y-%m','now')`
+  ).get().c;
+  const visitorsThisWeek = db.prepare(
+    `SELECT COUNT(*) c FROM members WHERE membership_status='visitor'
+       AND join_date >= date('now','-7 days')`
+  ).get().c;
+
+  // Attendance trend across the last 8 Sunday services.
+  const trend = db.prepare(`
+    SELECT substr(e.starts_at,1,10) AS dt, COUNT(a.member_id) AS cnt
+    FROM   events e LEFT JOIN attendance a USING(event_id)
+    WHERE  e.event_type='service'
+    GROUP BY e.event_id
+    ORDER BY e.starts_at DESC LIMIT 8
+  `).all().reverse();
+  const trendPts = trend.map((r, i) => ({ label: `Wk ${i + 1}`, value: r.cnt }));
+
+  const recentActivity = db.prepare(`
+    SELECT kind, description, link, occurred_at FROM activity_log
+    ORDER BY occurred_at DESC LIMIT 6
+  `).all();
+
   const upcoming = db.prepare(`
     SELECT event_id, title, event_type, starts_at, location
     FROM events WHERE starts_at >= datetime('now','-1 day')
-    ORDER BY starts_at LIMIT 5`).all();
-  const recentContribs = db.prepare(`
-    SELECT c.contributed_on, COALESCE(m.first_name||' '||m.last_name,'(anonymous)') donor,
-           f.name fund, c.amount, c.method
-    FROM contributions c LEFT JOIN members m USING(member_id)
-    JOIN funds f USING(fund_id)
-    ORDER BY c.contributed_on DESC, c.contribution_id DESC LIMIT 8`).all();
+    ORDER BY starts_at LIMIT 4
+  `).all();
+
+  const monthExpenses = db.prepare(`
+    SELECT COALESCE(SUM(amount),0) t FROM expenses
+    WHERE substr(spent_on,1,7) = strftime('%Y-%m','now')
+  `).get().t;
+  const byFundMonth = db.prepare(`
+    SELECT f.name, COALESCE(SUM(c.amount),0) t
+    FROM funds f LEFT JOIN contributions c
+      ON c.fund_id=f.fund_id AND substr(c.contributed_on,1,7)=strftime('%Y-%m','now')
+    GROUP BY f.fund_id ORDER BY t DESC
+  `).all();
+
+  const birthdays = db.prepare(`
+    SELECT member_id, first_name || ' ' || last_name AS name, date_of_birth
+    FROM members WHERE date_of_birth IS NOT NULL
+      AND strftime('%j', date_of_birth) BETWEEN
+          strftime('%j','now') AND strftime('%j', date('now','+7 days'))
+    ORDER BY strftime('%m-%d', date_of_birth) LIMIT 5
+  `).all();
+
+  const followups = {
+    visitors: db.prepare(
+      `SELECT COUNT(*) c FROM members WHERE membership_status='visitor' AND join_date >= date('now','-60 days')`
+    ).get().c,
+    absentees: (() => {
+      const ids = db.prepare(`SELECT event_id FROM events WHERE event_type='service'
+                              ORDER BY starts_at DESC LIMIT 3`).all().map((r) => r.event_id);
+      if (!ids.length) return 0;
+      const placeholders = ids.map(() => '?').join(',');
+      return db.prepare(
+        `SELECT COUNT(*) c FROM members m WHERE m.membership_status IN ('member','regular')
+           AND NOT EXISTS (SELECT 1 FROM attendance a
+             WHERE a.member_id=m.member_id AND a.event_id IN (${placeholders}))`
+      ).get(...ids).c;
+    })(),
+    welfare: db.prepare(`SELECT COUNT(*) c FROM welfare_cases WHERE status<>'closed'`).get().c,
+    pending: db.prepare(`SELECT COUNT(*) c FROM members WHERE membership_status='regular'
+                          AND join_date <= date('now','-90 days')`).get().c,
+  };
+
+  const trendDelta = (n) => n == null ? '' :
+    `<div class="trend ${n < 0 ? 'down' : ''}">${n >= 0 ? '↑' : '↓'} ${Math.abs(n)}% from last period</div>`;
 
   const cards = `
-    <div class="cards">
-      <div class="card"><div class="big">${stats.members}</div><div>Active members</div></div>
-      <div class="card"><div class="big">${stats.households}</div><div>Households</div></div>
-      <div class="card"><div class="big">${stats.ministries}</div><div>Active ministries</div></div>
-      <div class="card"><div class="big">${fmtMoney(stats.ytdGiving)}</div><div>YTD giving</div></div>
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="ico purple">👥</div>
+        <div>
+          <div class="label">Total Members</div>
+          <div class="value">${totalMembers.toLocaleString()}</div>
+          <div class="trend">↑ ${newMembersThisMonth} this month</div>
+        </div>
+      </div>
+      <div class="stat">
+        <div class="ico green">✓</div>
+        <div>
+          <div class="label">Sunday Attendance</div>
+          <div class="value">${sundayAttendance}</div>
+          ${trendDelta(attendanceDelta)}
+        </div>
+      </div>
+      <div class="stat">
+        <div class="ico blue">₵</div>
+        <div>
+          <div class="label">Offerings This Month</div>
+          <div class="value">${fmtMoney(offeringsThisMonth)}</div>
+          ${trendDelta(offeringsDelta)}
+        </div>
+      </div>
+      <div class="stat">
+        <div class="ico orange">🚶</div>
+        <div>
+          <div class="label">Visitors This Month</div>
+          <div class="value">${visitorsThisMonth}</div>
+          <div class="trend">↑ ${visitorsThisWeek} new this week</div>
+        </div>
+      </div>
     </div>`;
 
-  const upcomingTbl = upcoming.length
-    ? table(['When', 'Title', 'Type', 'Location'],
-        upcoming.map((e) => [esc(e.starts_at), `<a href="/events/${e.event_id}">${esc(e.title)}</a>`,
-          esc(e.event_type), esc(e.location)]))
-    : '<p>No upcoming events.</p>';
+  const isAdmin = res.locals.isAdmin;
+  const qaLink = (href, icon, label) =>
+    `<a class="qa" href="${href}"><span class="ico">${icon}</span> ${label}</a>`;
+  const quick = isAdmin ? `
+    <div class="quick">
+      <div class="label">Quick Actions</div>
+      ${qaLink('/members/new',       '👤+', 'Add Member')}
+      ${qaLink('/events',            '✓',   'Record Attendance')}
+      ${qaLink('/finance/new',       '₵',   'Record Offering')}
+      ${qaLink('/communications/new','✉',   'Post Announcement')}
+      ${qaLink('/events/new',        '📅',  'Add Event')}
+      ${qaLink('/reports',           '📊',  'Generate Report')}
+    </div>` : '';
 
-  const contribsTbl = recentContribs.length
-    ? table(['Date', 'Donor', 'Fund', 'Amount', 'Method'],
-        recentContribs.map((c) => [esc(c.contributed_on), esc(c.donor),
-          esc(c.fund), fmtMoney(c.amount), esc(c.method)]))
-    : '<p>No contributions yet.</p>';
+  const activityIcons = {
+    member_added: '👤', attendance_recorded: '✓', contribution_recorded: '₵',
+    expense_recorded: '🧾', welfare_opened: '♥', announcement: '✉',
+    event_created: '📅', user_added: '🔑',
+  };
+  const activityCard = `
+    <div class="card">
+      <div class="card-head"><h2>Recent Activities</h2><a href="/reports">View all</a></div>
+      ${recentActivity.length ? `<ul class="list">${recentActivity.map((a) => `
+        <li>
+          <span class="ico">${activityIcons[a.kind] || '•'}</span>
+          <span>${a.link ? `<a href="${esc(a.link)}">${esc(a.description)}</a>` : esc(a.description)}</span>
+          <span class="when">${esc(a.occurred_at.slice(5, 16).replace('T', ' '))}</span>
+        </li>`).join('')}</ul>` : '<p class="muted-text">No recent activity yet.</p>'}
+    </div>`;
+
+  const chartCard = `
+    <div class="card">
+      <div class="card-head"><h2>Attendance Trend</h2><span class="meta">Last 8 services</span></div>
+      ${sparkline(trendPts)}
+    </div>`;
+
+  const tithesMonth = (byFundMonth.find((r) => r.name === 'Tithes') || { t: 0 }).t;
+  const buildingMonth = (byFundMonth.find((r) => r.name === 'Building') || { t: 0 }).t;
+  const benevolentMonth = (byFundMonth.find((r) => r.name === 'Benevolence') || { t: 0 }).t;
+  const netBalance = offeringsThisMonth - monthExpenses;
+  const financeCard = `
+    <div class="card">
+      <div class="card-head"><h2>Finance Summary</h2><span class="meta">This month</span></div>
+      <div class="fin-row"><span class="lbl"><span class="dot">₵</span> Total Offerings</span>
+        <span class="val">${fmtMoney(offeringsThisMonth)}</span></div>
+      <div class="fin-row"><span class="lbl"><span class="dot">✓</span> Tithes</span>
+        <span class="val">${fmtMoney(tithesMonth)}</span></div>
+      <div class="fin-row"><span class="lbl"><span class="dot">♥</span> Benevolence</span>
+        <span class="val">${fmtMoney(benevolentMonth)}</span></div>
+      <div class="fin-row"><span class="lbl"><span class="dot">🏠</span> Building</span>
+        <span class="val">${fmtMoney(buildingMonth)}</span></div>
+      <div class="fin-row"><span class="lbl"><span class="dot">🧾</span> Expenses</span>
+        <span class="val neg">${fmtMoney(monthExpenses)}</span></div>
+      <div class="fin-row total"><span class="lbl">Net Balance</span>
+        <span class="val">${fmtMoney(netBalance)}</span></div>
+    </div>`;
+
+  const upcomingCard = `
+    <div class="card">
+      <div class="card-head"><h2>Upcoming Events</h2><a href="/events">View all</a></div>
+      ${upcoming.length ? upcoming.map((e) => {
+        const d = new Date(e.starts_at);
+        const m = d.toLocaleString('en', { month: 'short' });
+        const day = String(d.getDate()).padStart(2, '0');
+        const when = d.toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        return `<div class="event-row">
+          <div class="date"><div class="m">${esc(m)}</div><div class="d">${day}</div></div>
+          <div>
+            <div><a href="/events/${e.event_id}"><strong>${esc(e.title)}</strong></a></div>
+            <div class="meta">${esc(when)} · ${esc(e.location || '')}</div>
+          </div>
+          <span class="tag">${esc(e.event_type)}</span>
+        </div>`;
+      }).join('') : '<p class="muted-text">No upcoming events.</p>'}
+    </div>`;
+
+  const birthdaysCard = `
+    <div class="card">
+      <div class="card-head"><h2>Birthdays This Week</h2><a href="/members">View all</a></div>
+      ${birthdays.length ? birthdays.map((b) => {
+        const day = new Date(b.date_of_birth);
+        const when = day.toLocaleString('en', { month: 'short', day: '2-digit' });
+        return `<div class="bd-row">
+          <div class="av">${esc(initials(b.name))}</div>
+          <div><a href="/members/${b.member_id}">${esc(b.name)}</a></div>
+          <div class="when">${esc(when)}</div>
+        </div>`;
+      }).join('') : '<p class="muted-text">No birthdays this week.</p>'}
+    </div>`;
+
+  const followupsCard = `
+    <div class="card">
+      <div class="card-head"><h2>Pending Follow-ups</h2><a href="/reports">View all</a></div>
+      <div class="fu-row"><div class="lbl"><div class="ico">🚶</div> Visitors to follow up</div><div class="count">${followups.visitors}</div></div>
+      <div class="fu-row"><div class="lbl"><div class="ico">⚠</div> Members absent &gt; 3 weeks</div><div class="count">${followups.absentees}</div></div>
+      <div class="fu-row"><div class="lbl"><div class="ico">♥</div> Welfare cases</div><div class="count">${followups.welfare}</div></div>
+      <div class="fu-row"><div class="lbl"><div class="ico">✓</div> Pending membership approvals</div><div class="count">${followups.pending}</div></div>
+    </div>`;
+
+  const grid = `
+    <div class="dash-grid">
+      ${activityCard}
+      ${chartCard}
+      ${financeCard}
+      ${upcomingCard}
+      ${birthdaysCard}
+      ${followupsCard}
+    </div>`;
 
   res.page({
-    title: 'Dashboard', active: '/',
-    body: `${cards}<h2>Upcoming events</h2>${upcomingTbl}<h2>Recent contributions</h2>${contribsTbl}`,
+    title: 'Dashboard',
+    subtitle: `Welcome back, ${res.locals.user.display_name || res.locals.user.username}`,
+    active: '/',
+    body: `${cards}${quick}${grid}`,
   });
 });
 
@@ -299,6 +686,8 @@ app.post('/members', requireAdmin, (req, res) => {
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
     notes: b.notes || null,
   });
+  logActivity('member_added', `New member added: ${b.first_name} ${b.last_name}`,
+    `/members/${info.lastInsertRowid}`, res.locals.user.user_id);
   res.redirect(`/members/${info.lastInsertRowid}`);
 });
 
@@ -425,8 +814,11 @@ app.get('/households', (req, res) => {
   res.page({ title: 'Households', active: '/households', body });
 });
 
-// ---------- ministries ----------
-app.get('/ministries', (req, res) => {
+// Keep old URLs working.
+app.get('/ministries', (_, res) => res.redirect('/bible-classes'));
+
+// ---------- bible classes (formerly ministries) ----------
+app.get('/bible-classes', (req, res) => {
   const ministries = db.prepare(`
     SELECT mn.*, ml.first_name || ' ' || ml.last_name AS leader_name
     FROM ministries mn LEFT JOIN members ml ON ml.member_id = mn.leader_id
@@ -454,7 +846,7 @@ app.get('/ministries', (req, res) => {
     </section>`;
   }).join('');
 
-  res.page({ title: 'Ministries', active: '/ministries', body: sections });
+  res.page({ title: 'Bible Classes', active: '/bible-classes', body: sections });
 });
 
 // ---------- events ----------
@@ -502,6 +894,8 @@ app.post('/events', requireAdmin, (req, res) => {
     ends_at: b.ends_at ? b.ends_at.replace('T', ' ') : null,
     location: b.location || null, notes: b.notes || null,
   });
+  logActivity('event_created', `Event scheduled: ${b.title}`,
+    `/events/${info.lastInsertRowid}`, res.locals.user.user_id);
   res.redirect(`/events/${info.lastInsertRowid}`);
 });
 
@@ -570,8 +964,11 @@ app.post('/events/:id/uncheck', requireAdmin, (req, res) => {
   res.redirect(`/events/${id}`);
 });
 
-// ---------- contributions ----------
-app.get('/contributions', (req, res) => {
+// Keep old URLs working.
+app.get('/contributions', (_, res) => res.redirect('/finance'));
+
+// ---------- finance (offerings + expenses) ----------
+app.get('/finance', (req, res) => {
   const funds = db.prepare(`SELECT * FROM funds WHERE active=1 ORDER BY name`).all();
   const members = db.prepare(`
     SELECT member_id, first_name || ' ' || last_name AS name FROM members
@@ -607,27 +1004,70 @@ app.get('/contributions', (req, res) => {
          <div class="actions"><button type="submit">Save</button></div>
        </form>`
     : '';
+  const expenseRows = db.prepare(`
+    SELECT e.expense_id, e.spent_on, e.category, e.amount, e.description, f.name fund
+    FROM expenses e LEFT JOIN funds f USING(fund_id)
+    ORDER BY e.spent_on DESC, e.expense_id DESC LIMIT 50`).all();
+  const totalContrib = db.prepare(
+    `SELECT COALESCE(SUM(amount),0) t FROM contributions WHERE substr(contributed_on,1,4)=strftime('%Y','now')`
+  ).get().t;
+  const totalExpense = db.prepare(
+    `SELECT COALESCE(SUM(amount),0) t FROM expenses WHERE substr(spent_on,1,4)=strftime('%Y','now')`
+  ).get().t;
+
+  const expensePanel = res.locals.isAdmin
+    ? `<h2>Record expense</h2>
+       <form class="form" method="post" action="/finance/expenses">
+         <label>Date<input type="date" name="spent_on" required value="${new Date().toISOString().slice(0,10)}"></label>
+         <label>Category<input name="category" placeholder="e.g. utilities" required></label>
+         <label>Amount<input type="number" step="0.01" min="0.01" name="amount" required></label>
+         <label>Fund<select name="fund_id"><option value="">(none)</option>${fundOpts}</select></label>
+         <label class="wide">Description<input name="description"></label>
+         <div class="actions"><button type="submit">Save</button></div>
+       </form>`
+    : '';
+
+  const summary = `
+    <div class="stat-grid">
+      <div class="stat"><div class="ico green">↑</div><div>
+        <div class="label">YTD Offerings</div>
+        <div class="value">${fmtMoney(totalContrib)}</div></div></div>
+      <div class="stat"><div class="ico orange">↓</div><div>
+        <div class="label">YTD Expenses</div>
+        <div class="value">${fmtMoney(totalExpense)}</div></div></div>
+      <div class="stat"><div class="ico purple">=</div><div>
+        <div class="label">Net YTD</div>
+        <div class="value">${fmtMoney(totalContrib - totalExpense)}</div></div></div>
+    </div>`;
+
   const body = `
+    ${summary}
     <div class="two-col">
-      <section>
-        ${recordPanel}
-      </section>
-      <section>
-        <h2>YTD by fund</h2>
-        ${table(['Fund', 'Total'], byFund.map((r) => [esc(r.fund), fmtMoney(r.total)]))}
-      </section>
+      <section>${recordPanel}</section>
+      <section>${expensePanel}</section>
     </div>
+    <h2>YTD by fund</h2>
+    ${table(['Fund', 'Total'], byFund.map((r) => [esc(r.fund), fmtMoney(r.total)]))}
     <h2>Recent contributions</h2>
     ${table(['Date', 'Donor', 'Fund', 'Amount', 'Method', 'Reference'],
       rows.map((r) => [esc(r.contributed_on),
         r.member_id ? `<a href="/members/${r.member_id}">${esc(r.donor)}</a>` : esc(r.donor),
-        esc(r.fund), fmtMoney(r.amount), esc(r.method), esc(r.reference)]))}`;
-  res.page({ title: 'Contributions', active: '/contributions', body });
+        esc(r.fund), fmtMoney(r.amount), esc(r.method), esc(r.reference)]))}
+    <h2>Recent expenses</h2>
+    ${expenseRows.length
+      ? table(['Date', 'Category', 'Description', 'Fund', 'Amount'],
+          expenseRows.map((e) => [esc(e.spent_on), esc(e.category),
+            esc(e.description), esc(e.fund), fmtMoney(e.amount)]))
+      : '<p class="muted-text">No expenses recorded.</p>'}`;
+  res.page({ title: 'Finance', active: '/finance', body });
 });
+
+// Quick offering form lives at /finance/new for the dashboard Quick Action.
+app.get('/finance/new', requireAdmin, (req, res) => res.redirect('/finance'));
 
 app.post('/contributions', requireAdmin, (req, res) => {
   const b = req.body;
-  db.prepare(`
+  const info = db.prepare(`
     INSERT INTO contributions (member_id, fund_id, amount, contributed_on, method, reference)
     VALUES (@member_id, @fund_id, @amount, @contributed_on, @method, @reference)
   `).run({
@@ -638,7 +1078,29 @@ app.post('/contributions', requireAdmin, (req, res) => {
     method: b.method || null,
     reference: b.reference || null,
   });
-  res.redirect('/contributions');
+  const donor = b.member_id
+    ? db.prepare(`SELECT first_name||' '||last_name AS n FROM members WHERE member_id=?`).get(Number(b.member_id))?.n
+    : 'anonymous';
+  logActivity('contribution_recorded',
+    `Offering of ${fmtMoney(b.amount)} recorded${donor ? ' from ' + donor : ''}`,
+    `/finance`, res.locals.user.user_id);
+  res.redirect('/finance');
+});
+
+app.post('/finance/expenses', requireAdmin, (req, res) => {
+  const b = req.body;
+  db.prepare(`
+    INSERT INTO expenses (category, amount, spent_on, description, fund_id)
+    VALUES (@category, @amount, @spent_on, @description, @fund_id)
+  `).run({
+    category: b.category, amount: Number(b.amount),
+    spent_on: b.spent_on, description: b.description || null,
+    fund_id: b.fund_id ? Number(b.fund_id) : null,
+  });
+  logActivity('expense_recorded',
+    `Expense ${fmtMoney(b.amount)} (${b.category}) recorded`,
+    `/finance`, res.locals.user.user_id);
+  res.redirect('/finance');
 });
 
 // ---------- reports ----------
@@ -689,6 +1151,212 @@ app.get('/reports', (req, res) => {
         : '<p>Everyone has been attending. 🎉</p>'}
     </section>`;
   res.page({ title: 'Reports', active: '/reports', body });
+});
+
+// ---------- attendance (cross-event view) ----------
+app.get('/attendance', (req, res) => {
+  const services = db.prepare(`
+    SELECT e.event_id, e.title, e.starts_at, e.location,
+           COUNT(a.member_id) attendees
+    FROM   events e LEFT JOIN attendance a USING(event_id)
+    WHERE  e.event_type='service'
+    GROUP BY e.event_id ORDER BY e.starts_at DESC LIMIT 20`).all();
+  const trend = services.slice(0, 8).reverse()
+    .map((r, i) => ({ label: `Wk ${i + 1}`, value: r.attendees }));
+  const avg = trend.length
+    ? Math.round(trend.reduce((a, b) => a + b.value, 0) / trend.length) : 0;
+  const body = `
+    <div class="stat-grid">
+      <div class="stat"><div class="ico purple">✓</div><div>
+        <div class="label">Avg attendance (last ${trend.length})</div>
+        <div class="value">${avg}</div></div></div>
+      <div class="stat"><div class="ico green">📅</div><div>
+        <div class="label">Services tracked</div>
+        <div class="value">${services.length}</div></div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Attendance Trend</h2><span class="meta">Last ${trend.length} services</span></div>
+      ${sparkline(trend)}
+    </div>
+    <h2>Recent services</h2>
+    ${table(['When', 'Title', 'Location', 'Attendees', ''],
+      services.map((s) => [esc(s.starts_at), esc(s.title), esc(s.location),
+        s.attendees,
+        `<a class="btn ghost" href="/events/${s.event_id}">Open</a>`]))}`;
+  res.page({ title: 'Attendance', active: '/attendance', body });
+});
+
+// ---------- welfare ----------
+app.get('/welfare', (req, res) => {
+  const cases = db.prepare(`
+    SELECT w.case_id, w.category, w.status, w.amount_disbursed, w.opened_on,
+           w.summary, m.member_id, m.first_name||' '||m.last_name AS member
+    FROM welfare_cases w JOIN members m USING(member_id)
+    ORDER BY w.opened_on DESC`).all();
+  const members = db.prepare(`
+    SELECT member_id, first_name||' '||last_name AS name FROM members
+    ORDER BY last_name`).all();
+  const memOpts = members.map((m) => `<option value="${m.member_id}">${esc(m.name)}</option>`).join('');
+  const newForm = res.locals.isAdmin
+    ? `<h2>Open a welfare case</h2>
+       <form class="form" method="post" action="/welfare">
+         <label>Member<select name="member_id" required>${memOpts}</select></label>
+         <label>Category<select name="category">
+           ${['medical','financial','bereavement','marital','food','other']
+             .map((c) => `<option>${c}</option>`).join('')}
+         </select></label>
+         <label class="wide">Summary<input name="summary" required></label>
+         <label class="wide">Notes<textarea name="notes" rows="2"></textarea></label>
+         <div class="actions"><button type="submit">Open case</button></div>
+       </form>` : '';
+  const rows = cases.map((c) => [
+    esc(c.opened_on),
+    `<a href="/members/${c.member_id}">${esc(c.member)}</a>`,
+    esc(c.category),
+    `<span class="pill pill-${esc(c.status)}">${esc(c.status.replace('_', ' '))}</span>`,
+    fmtMoney(c.amount_disbursed),
+    esc(c.summary),
+    res.locals.isAdmin
+      ? `<form method="post" action="/welfare/${c.case_id}/status" class="inline">
+           <select name="status">
+             ${['open','in_progress','closed'].map((s) =>
+               `<option value="${s}" ${s === c.status ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join('')}
+           </select>
+           <button type="submit">Update</button>
+         </form>` : '',
+  ]);
+  res.page({
+    title: 'Welfare',
+    active: '/welfare',
+    body: `${newForm}
+      <h2>Cases (${cases.length})</h2>
+      ${cases.length ? table(['Opened', 'Member', 'Category', 'Status', 'Disbursed', 'Summary', ''], rows)
+        : '<p class="muted-text">No welfare cases yet.</p>'}`,
+  });
+});
+
+app.post('/welfare', requireAdmin, (req, res) => {
+  const b = req.body;
+  db.prepare(`
+    INSERT INTO welfare_cases (member_id, category, summary, notes)
+    VALUES (?, ?, ?, ?)`).run(
+    Number(b.member_id), b.category, b.summary, b.notes || null
+  );
+  logActivity('welfare_opened', `Welfare case opened: ${b.summary.slice(0, 60)}`,
+    '/welfare', res.locals.user.user_id);
+  res.redirect('/welfare');
+});
+app.post('/welfare/:id/status', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const status = req.body.status;
+  if (!['open', 'in_progress', 'closed'].includes(status)) return res.redirect('/welfare');
+  db.prepare(`
+    UPDATE welfare_cases SET status=?, closed_on=CASE WHEN ?='closed' THEN date('now') ELSE NULL END
+    WHERE case_id=?`).run(status, status, id);
+  res.redirect('/welfare');
+});
+
+// ---------- communications (announcements) ----------
+app.get('/communications', (req, res) => {
+  const rows = db.prepare(`
+    SELECT a.*, u.display_name, u.username FROM announcements a
+    LEFT JOIN users u ON u.user_id=a.posted_by
+    ORDER BY a.posted_at DESC LIMIT 50`).all();
+  const newForm = res.locals.isAdmin
+    ? `<h2>Post an announcement</h2>
+       <form class="form" method="post" action="/communications">
+         <label class="wide">Title<input name="title" required></label>
+         <label class="wide">Message<textarea name="body" rows="4" required></textarea></label>
+         <label>Audience<select name="audience">
+           <option value="all">Everyone</option>
+           <option value="members">Members only</option>
+         </select></label>
+         <div class="actions"><button type="submit">Post</button></div>
+       </form>` : '';
+  const list = rows.length
+    ? rows.map((a) => `
+        <div class="card" style="margin-bottom:0.75rem">
+          <div class="card-head">
+            <h2>${esc(a.title)}</h2>
+            <span class="meta">${esc(a.posted_at.slice(0, 16).replace('T', ' '))}</span>
+          </div>
+          <p>${esc(a.body)}</p>
+          <p class="muted-text">— ${esc(a.display_name || a.username || 'system')} · audience: ${esc(a.audience)}</p>
+        </div>`).join('')
+    : '<p class="muted-text">No announcements yet.</p>';
+  res.page({
+    title: 'Communications', active: '/communications',
+    body: `${newForm}<h2>Recent announcements</h2>${list}`,
+  });
+});
+
+app.get('/communications/new', requireAdmin, (req, res) => res.redirect('/communications'));
+
+app.post('/communications', requireAdmin, (req, res) => {
+  const { title, body, audience } = req.body;
+  if (!title || !body) return res.redirect('/communications');
+  db.prepare(`
+    INSERT INTO announcements (title, body, audience, posted_by)
+    VALUES (?, ?, ?, ?)`).run(
+    title, body, audience || 'all', res.locals.user.user_id
+  );
+  logActivity('announcement', `New announcement: ${title}`, '/communications', res.locals.user.user_id);
+  res.redirect('/communications');
+});
+
+// ---------- sacraments ----------
+app.get('/sacraments', (req, res) => {
+  const counts = db.prepare(`
+    SELECT sacrament_type t, COUNT(*) c FROM sacraments GROUP BY sacrament_type`).all();
+  const total = counts.reduce((a, b) => a + b.c, 0);
+  const rows = db.prepare(`
+    SELECT s.sacrament_id, s.sacrament_type, s.occurred_on, s.location,
+           s.member_id, m.first_name || ' ' || m.last_name AS member,
+           s.spouse_id, sp.first_name || ' ' || sp.last_name AS spouse
+    FROM sacraments s
+    LEFT JOIN members m  ON m.member_id  = s.member_id
+    LEFT JOIN members sp ON sp.member_id = s.spouse_id
+    ORDER BY s.occurred_on DESC LIMIT 100`).all();
+  const stats = `
+    <div class="stat-grid">
+      <div class="stat"><div class="ico purple">⛪</div><div>
+        <div class="label">Total recorded</div><div class="value">${total}</div></div></div>
+      ${counts.map((c) => `
+        <div class="stat"><div class="ico green">✓</div><div>
+          <div class="label">${esc(c.t)}</div>
+          <div class="value">${c.c}</div></div></div>`).join('')}
+    </div>`;
+  const body = `
+    ${stats}
+    ${table(['Type', 'Date', 'Member', 'Spouse', 'Location'],
+      rows.map((r) => [esc(r.sacrament_type), esc(r.occurred_on),
+        r.member_id ? `<a href="/members/${r.member_id}">${esc(r.member)}</a>` : '—',
+        r.spouse_id ? `<a href="/members/${r.spouse_id}">${esc(r.spouse)}</a>` : '—',
+        esc(r.location)]))}`;
+  res.page({ title: 'Sacraments', active: '/sacraments', body });
+});
+
+// ---------- settings ----------
+app.get('/settings', requireAdmin, (req, res) => {
+  const body = `
+    <div class="card">
+      <h2>Application</h2>
+      <dl class="stats">
+        <dt>Church name</dt><dd>${esc(CHURCH_NAME)} <span class="muted-text">(set via the CHURCH_NAME env var)</span></dd>
+        <dt>Database</dt><dd><code>${esc(DB_PATH)}</code></dd>
+        <dt>Currency</dt><dd>Ghanaian cedi (GH₵)</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h2>Roles & access</h2>
+      <p>Manage user accounts and permissions on the <a href="/users">Users &amp; Roles</a> page.</p>
+    </div>
+    <div class="card">
+      <h2>Backup</h2>
+      <p>Your database file is at <code>${esc(DB_PATH)}</code>. To back it up while running on Fly:</p>
+      <pre>flyctl ssh sftp get ${esc(DB_PATH)} ./church-backup.db</pre>
+    </div>`;
+  res.page({ title: 'Settings', active: '/settings', body });
 });
 
 // ---------- profile (any signed-in user) ----------

@@ -81,3 +81,26 @@ INSERT INTO pastoral_notes (member_id, recorded_by, occurred_on, category, summa
  (5, 9, '2026-05-05', 'visit',          'Hospital visit after surgery; recovering well.'),
  (8, 9, '2026-05-09', 'counseling',     'Career discernment conversation.'),
  (4, 9, '2026-05-12', 'prayer_request', 'Requesting prayer for elderly mother.');
+
+INSERT INTO expenses (category, amount, spent_on, description, fund_id) VALUES
+ ('utilities',  340.00, '2026-05-04', 'Electricity bill',         1),
+ ('salaries', 3500.00, '2026-05-01', 'Pastoral staff May',        1),
+ ('building',  900.00, '2026-05-09', 'Roof leak repair',          2),
+ ('missions',  500.00, '2026-05-12', 'Outreach materials',        3);
+
+INSERT INTO welfare_cases (member_id, category, status, amount_disbursed, opened_on, summary) VALUES
+ (8, 'medical',     'open',        0,    '2026-05-08', 'Support requested for medical bills.'),
+ (3, 'food',        'in_progress', 80.00,'2026-05-10', 'Weekly food package.'),
+ (5, 'bereavement', 'closed',      200.00,'2026-04-15','Funeral assistance.');
+
+INSERT INTO announcements (title, body, audience, posted_by) VALUES
+ ('Youth Service this Sunday',     'Youth Service will be held this Sunday at 6pm in the main hall. Everyone is welcome.', 'all', 1),
+ ('Building Fund update',          'We are 70% of the way to our roof-repair goal. Thank you for your generous giving.', 'members', 1),
+ ('Choir rehearsal moved',         'This week''s choir rehearsal is moved to Friday 7pm.', 'all', 1);
+
+INSERT INTO activity_log (kind, description, link, occurred_at) VALUES
+ ('member_added',         'New member added: Sarah Davis',          '/members/8', datetime('now','-1 day')),
+ ('attendance_recorded',  'Attendance recorded for Sunday Service', '/events/3',  datetime('now','-1 day','-1 hour')),
+ ('contribution_recorded','Offering of GH₵ 500.00 recorded',        '/finance',   datetime('now','-2 days')),
+ ('welfare_opened',       'Welfare case submitted for Sarah Davis', '/welfare',   datetime('now','-2 days')),
+ ('announcement',         'New announcement posted: Youth Service', '/communications', datetime('now','-3 days'));

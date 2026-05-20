@@ -136,6 +136,56 @@ CREATE TABLE pastoral_notes (
     confidential INTEGER NOT NULL DEFAULT 0
 );
 
+-- Expenses (the other side of contributions, for finance summary).
+CREATE TABLE expenses (
+    expense_id  INTEGER PRIMARY KEY,
+    category    TEXT    NOT NULL,
+    amount      REAL    NOT NULL CHECK (amount > 0),
+    spent_on    TEXT    NOT NULL,
+    description TEXT,
+    fund_id     INTEGER REFERENCES funds(fund_id),
+    created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_expenses_date ON expenses(spent_on);
+
+-- Welfare cases tracked by the church.
+CREATE TABLE welfare_cases (
+    case_id           INTEGER PRIMARY KEY,
+    member_id         INTEGER NOT NULL REFERENCES members(member_id) ON DELETE CASCADE,
+    category          TEXT    NOT NULL CHECK (category IN
+                          ('medical','financial','bereavement','marital','food','other')),
+    status            TEXT    NOT NULL DEFAULT 'open'
+                          CHECK (status IN ('open','in_progress','closed')),
+    amount_disbursed  REAL    NOT NULL DEFAULT 0,
+    opened_on         TEXT    NOT NULL DEFAULT CURRENT_DATE,
+    closed_on         TEXT,
+    summary           TEXT    NOT NULL,
+    notes             TEXT
+);
+CREATE INDEX idx_welfare_status ON welfare_cases(status);
+
+-- Announcements / communications.
+CREATE TABLE announcements (
+    announcement_id INTEGER PRIMARY KEY,
+    title           TEXT    NOT NULL,
+    body            TEXT    NOT NULL,
+    audience        TEXT    NOT NULL DEFAULT 'all',
+    posted_by       INTEGER REFERENCES users(user_id),
+    posted_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_announcements_posted ON announcements(posted_at);
+
+-- Activity log for the dashboard's "Recent Activities" widget.
+CREATE TABLE activity_log (
+    activity_id  INTEGER PRIMARY KEY,
+    occurred_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    user_id      INTEGER REFERENCES users(user_id),
+    kind         TEXT NOT NULL,
+    description  TEXT NOT NULL,
+    link         TEXT
+);
+CREATE INDEX idx_activity_recent ON activity_log(occurred_at DESC);
+
 -- Login accounts. role is 'admin' (full access) or 'viewer' (read-only).
 CREATE TABLE IF NOT EXISTS users (
     user_id       INTEGER PRIMARY KEY,
