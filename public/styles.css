@@ -389,6 +389,52 @@ button.link {
 
 .filters { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
 
+.check-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.4rem; margin-top: 0.4rem;
+}
+.check-grid label.check {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  background: var(--soft); padding: 0.35rem 0.6rem; border-radius: 6px;
+  font-size: 0.85rem; color: var(--ink);
+  text-transform: none; cursor: pointer;
+}
+.check-grid label.check input { margin: 0; }
+.form label input[readonly] { background: var(--soft); color: var(--muted); }
+
+details.export {
+  position: relative; margin-left: auto;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.4rem 0.75rem; font-size: 0.85rem;
+}
+details.export summary { cursor: pointer; user-select: none; list-style: none; }
+details.export[open] {
+  background: var(--soft);
+}
+details.export a {
+  display: block; padding: 0.3rem 0; color: var(--ink);
+  text-decoration: none;
+}
+details.export a:hover { color: var(--accent-dark); }
+
+details.form-toggle summary {
+  cursor: pointer; padding: 0.6rem 0.9rem;
+  background: var(--soft); border-radius: 8px; display: inline-block;
+}
+
+/* Print styles: hide chrome, expand content for paper */
+@media print {
+  .sidebar, .topbar, .footer, .filters, .actions, details, button, .quick, .qa,
+  form[method="post"], .scripture {
+    display: none !important;
+  }
+  body, .app, .main, .page { background: white !important; color: black !important; }
+  .app { display: block !important; }
+  .card, table, .stat { box-shadow: none !important; border: 1px solid #ccc !important; page-break-inside: avoid; }
+  a { color: black; text-decoration: none; }
+  .page { padding: 0 !important; }
+}
+
 .form {
   display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem 1rem;
   background: var(--panel); border-radius: 12px; padding: 1.25rem; box-shadow: var(--shadow);

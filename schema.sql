@@ -19,7 +19,9 @@ CREATE TABLE households (
 -- A member is any individual associated with the church.
 CREATE TABLE members (
     member_id        INTEGER PRIMARY KEY,
+    external_id      TEXT    UNIQUE,                -- e.g. DMS-001
     household_id     INTEGER REFERENCES households(household_id) ON DELETE SET NULL,
+    bible_class_id   INTEGER REFERENCES ministries(ministry_id) ON DELETE SET NULL,
     first_name       TEXT    NOT NULL,
     last_name        TEXT    NOT NULL,
     preferred_name   TEXT,
@@ -33,25 +35,46 @@ CREATE TABLE members (
     membership_status TEXT   NOT NULL DEFAULT 'visitor'
                           CHECK (membership_status IN
                           ('visitor','regular','member','inactive','transferred','deceased')),
-    join_date        TEXT,
-    baptism_date     TEXT,
-    baptism_location TEXT,
+    join_date         TEXT,
+    baptism_date      TEXT,
+    baptism_location  TEXT,
+    confirmation_date TEXT,
     notes            TEXT,
-    created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at       TEXT
 );
 
 CREATE INDEX idx_members_household ON members(household_id);
 CREATE INDEX idx_members_status    ON members(membership_status);
 CREATE INDEX idx_members_lastname  ON members(last_name);
 
--- Ministries / small groups / teams (e.g., Choir, Youth, Ushers).
+-- Ministries / small groups (used as "Bible classes" in the UI).
 CREATE TABLE ministries (
     ministry_id   INTEGER PRIMARY KEY,
     name          TEXT    NOT NULL UNIQUE,
     description   TEXT,
     leader_id     INTEGER REFERENCES members(member_id) ON DELETE SET NULL,
-    meets_on      TEXT,   -- e.g., 'Wednesday 7pm'
+    org_id        INTEGER,   -- FK added later (after organizations table is created)
+    meets_on      TEXT,
     active        INTEGER NOT NULL DEFAULT 1
+);
+
+-- Top-level church organizations (Choir, Gospel Band, Fellowships, Sunday School…).
+CREATE TABLE organizations (
+    org_id      INTEGER PRIMARY KEY,
+    name        TEXT    NOT NULL UNIQUE,
+    description TEXT,
+    leader_id   INTEGER REFERENCES members(member_id) ON DELETE SET NULL,
+    meets_on    TEXT,
+    active      INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE organization_memberships (
+    org_id      INTEGER NOT NULL REFERENCES organizations(org_id) ON DELETE CASCADE,
+    member_id   INTEGER NOT NULL REFERENCES members(member_id)    ON DELETE CASCADE,
+    role        TEXT    NOT NULL DEFAULT 'member',
+    joined_date TEXT    NOT NULL DEFAULT CURRENT_DATE,
+    PRIMARY KEY (org_id, member_id)
 );
 
 CREATE TABLE ministry_memberships (
@@ -194,7 +217,8 @@ CREATE TABLE IF NOT EXISTS users (
     display_name  TEXT,
     role          TEXT    NOT NULL DEFAULT 'admin'
                   CHECK (role IN ('admin','viewer')),
-    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at    TEXT
 );
 
 -- Helpful views ---------------------------------------------------------

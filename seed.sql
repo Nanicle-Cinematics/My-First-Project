@@ -6,35 +6,42 @@ INSERT INTO households (household_id, family_name, address_line1, city, state, p
  (3, 'Chen',     '5 Pine Court',   'Springfield', 'IL', '62703', '217-555-0103'),
  (4, 'Davis',    '301 Elm Street', 'Springfield', 'IL', '62704', '217-555-0104');
 
-INSERT INTO members (member_id, household_id, first_name, last_name, gender, date_of_birth,
-                     email, mobile_phone, marital_status, membership_status, join_date, baptism_date) VALUES
- (1, 1, 'John',    'Anderson', 'M', '1975-03-12', 'john.anderson@example.com',  '217-555-1001', 'married',  'member',  '2005-06-01', '1990-04-15'),
- (2, 1, 'Mary',    'Anderson', 'F', '1977-07-22', 'mary.anderson@example.com',  '217-555-1002', 'married',  'member',  '2005-06-01', '1992-05-10'),
- (3, 1, 'Ethan',   'Anderson', 'M', '2010-11-03', NULL,                          NULL,           NULL,       'regular', '2010-11-03', NULL),
- (4, 2, 'Robert',  'Brown',    'M', '1968-01-18', 'rob.brown@example.com',       '217-555-1003', 'married',  'member',  '2001-09-15', '1985-08-20'),
- (5, 2, 'Linda',   'Brown',    'F', '1970-09-09', 'linda.brown@example.com',     '217-555-1004', 'married',  'member',  '2001-09-15', '1988-06-12'),
- (6, 3, 'Wei',     'Chen',     'M', '1982-05-30', 'wei.chen@example.com',        '217-555-1005', 'married',  'member',  '2018-02-04', '2018-04-01'),
- (7, 3, 'Mei',     'Chen',     'F', '1984-12-14', 'mei.chen@example.com',        '217-555-1006', 'married',  'member',  '2018-02-04', '2018-04-01'),
- (8, 4, 'Sarah',   'Davis',    'F', '1995-04-20', 'sarah.davis@example.com',     '217-555-1007', 'single',   'regular', '2022-01-10', NULL),
- (9, NULL,'Pastor James','Whitfield','M','1960-02-02','pastor@example.com',      '217-555-9999', 'married',  'member',  '1995-01-01', '1980-03-01');
+INSERT INTO organizations (org_id, name) VALUES
+ (1, 'Church Choir'),
+ (2, 'Gospel Band'),
+ (3, "Men's Fellowship"),
+ (4, "Women's Fellowship"),
+ (5, 'Sunday School');
 
-INSERT INTO ministries (ministry_id, name, description, leader_id, meets_on) VALUES
- (1, 'Choir',       'Sunday worship choir',     2, 'Thursday 7pm'),
- (2, 'Youth Group', 'Teens grades 6-12',        8, 'Friday 6pm'),
- (3, 'Ushers',      'Sunday service ushers',    4, 'Sunday 9am'),
- (4, 'Prayer Team', 'Intercessory prayer team', 5, 'Tuesday 6am');
+INSERT INTO members (member_id, external_id, first_name, last_name, gender, date_of_birth,
+                     email, mobile_phone, marital_status, membership_status, join_date, baptism_date, confirmation_date) VALUES
+ (1, 'DMS-001', 'John',    'Anderson', 'M', '1975-03-12', 'john.anderson@example.com',  '0244-555-001', 'married', 'member',  '2005-06-01', '1990-04-15', '1992-05-15'),
+ (2, 'DMS-002', 'Mary',    'Anderson', 'F', '1977-07-22', 'mary.anderson@example.com',  '0244-555-002', 'married', 'member',  '2005-06-01', '1992-05-10', '1994-04-10'),
+ (3, 'DMS-003', 'Ethan',   'Anderson', 'M', '2010-11-03', NULL,                          NULL,           NULL,      'regular', '2010-11-03', NULL,         NULL),
+ (4, 'DMS-004', 'Robert',  'Brown',    'M', '1968-01-18', 'rob.brown@example.com',       '0244-555-003', 'married', 'member',  '2001-09-15', '1985-08-20', '1987-06-14'),
+ (5, 'DMS-005', 'Linda',   'Brown',    'F', '1970-09-09', 'linda.brown@example.com',     '0244-555-004', 'married', 'member',  '2001-09-15', '1988-06-12', '1990-05-20'),
+ (6, 'DMS-006', 'Wei',     'Chen',     'M', '1982-05-30', 'wei.chen@example.com',        '0244-555-005', 'married', 'member',  '2018-02-04', '2018-04-01', '2019-04-21'),
+ (7, 'DMS-007', 'Mei',     'Chen',     'F', '1984-12-14', 'mei.chen@example.com',        '0244-555-006', 'married', 'member',  '2018-02-04', '2018-04-01', '2019-04-21'),
+ (8, 'DMS-008', 'Sarah',   'Davis',    'F', '1995-04-20', 'sarah.davis@example.com',     '0244-555-007', 'single',  'regular', '2022-01-10', NULL,         NULL),
+ (9, 'DMS-009', 'Pastor James', 'Whitfield','M','1960-02-02','pastor@example.com',       '0244-555-999', 'married', 'member',  '1995-01-01', '1980-03-01', '1982-04-11');
 
-INSERT INTO ministry_memberships (ministry_id, member_id, role, joined_date) VALUES
- (1, 2, 'leader', '2020-01-15'),
- (1, 5, 'member', '2020-02-01'),
- (1, 7, 'member', '2021-09-01'),
- (2, 8, 'leader', '2022-03-01'),
- (2, 3, 'member', '2023-09-01'),
- (3, 4, 'leader', '2019-01-01'),
- (3, 1, 'member', '2019-01-01'),
- (3, 6, 'member', '2018-03-01'),
- (4, 5, 'leader', '2018-06-01'),
- (4, 7, 'member', '2020-01-01');
+INSERT INTO organization_memberships (org_id, member_id, role) VALUES
+ (1, 2, 'leader'), (1, 5, 'member'), (1, 7, 'member'),
+ (3, 1, 'member'), (3, 4, 'leader'), (3, 6, 'member'),
+ (4, 2, 'member'), (4, 5, 'leader'), (4, 7, 'member'),
+ (5, 8, 'leader'), (5, 3, 'member');
+
+-- Ministries used as "Bible Classes" in the UI.
+INSERT INTO ministries (ministry_id, name, description, leader_id, org_id, meets_on) VALUES
+ (1, 'Class Daniel',  'Adult Bible class — book of Daniel',  4, NULL, 'Sunday 8am'),
+ (2, 'Class Esther',  'Women adult Bible class',             5, 4,    'Sunday 8am'),
+ (3, 'Class Joshua',  'Men adult Bible class',               1, 3,    'Sunday 8am'),
+ (4, 'Sunday School', 'Children & youth Sunday School',      8, 5,    'Sunday 9am');
+
+UPDATE members SET bible_class_id = 1 WHERE member_id = 9;
+UPDATE members SET bible_class_id = 2 WHERE member_id IN (2, 5, 7);
+UPDATE members SET bible_class_id = 3 WHERE member_id IN (1, 4, 6);
+UPDATE members SET bible_class_id = 4 WHERE member_id IN (3, 8);
 
 INSERT INTO events (event_id, title, event_type, starts_at, ends_at, location) VALUES
  (1, 'Sunday Service',  'service',     '2026-05-03 10:00', '2026-05-03 11:30', 'Main Sanctuary'),
