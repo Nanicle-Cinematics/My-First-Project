@@ -15,6 +15,16 @@ npm start            # http://localhost:3000
 
 Set `PORT` or `CHURCH_DB` to override defaults.
 
+The first time you load the site you'll be sent to **/setup** to create
+an admin account. After that everyone has to sign in to use the app.
+
+For deployments, set a long random `SESSION_SECRET` env var so logins
+survive restarts:
+
+```bash
+SESSION_SECRET="$(openssl rand -hex 32)" npm start
+```
+
 ## What's in the UI
 
 - **Dashboard** — active-member count, household count, YTD giving,

@@ -136,6 +136,15 @@ CREATE TABLE pastoral_notes (
     confidential INTEGER NOT NULL DEFAULT 0
 );
 
+-- Login accounts (admins of the church manager).
+CREATE TABLE IF NOT EXISTS users (
+    user_id       INTEGER PRIMARY KEY,
+    username      TEXT    NOT NULL UNIQUE,
+    password_hash TEXT    NOT NULL,
+    display_name  TEXT,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Helpful views ---------------------------------------------------------
 
 CREATE VIEW v_active_members AS

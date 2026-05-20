@@ -1,7 +1,11 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
 const Database = require('better-sqlite3');
+const SqliteStore = require('better-sqlite3-session-store')(session);
 
 const DB_PATH = process.env.CHURCH_DB || path.join(__dirname, 'church.db');
 const PORT = process.env.PORT || 3000;
@@ -14,9 +18,59 @@ if (!fs.existsSync(DB_PATH)) {
 const db = new Database(DB_PATH);
 db.pragma('foreign_keys = ON');
 
+// Make sure the users table exists for older databases built before auth landed.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    user_id       INTEGER PRIMARY KEY,
+    username      TEXT    NOT NULL UNIQUE,
+    password_hash TEXT    NOT NULL,
+    display_name  TEXT,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use('/static', express.static(path.join(__dirname, 'public')));
+
+if (!process.env.SESSION_SECRET) {
+  console.warn('SESSION_SECRET not set — generating an ephemeral one (logins will be lost on restart).');
+}
+app.use(session({
+  store: new SqliteStore({ client: db, expired: { clear: true } }),
+  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 1000 * 60 * 60 * 24 * 30,
+  },
+}));
+
+// Render helper that auto-injects the current user into the layout.
+app.use((req, res, next) => {
+  res.page = (opts) => res.send(layout({ ...opts, user: opts.user ?? res.locals.user }));
+  next();
+});
+
+// Auth gate: redirect to /setup on first run, /login otherwise.
+app.use((req, res, next) => {
+  if (req.path.startsWith('/static/')) return next();
+  const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
+  if (userCount === 0) {
+    if (req.path === '/setup') return next();
+    return res.redirect('/setup');
+  }
+  if (req.path === '/login' || req.path === '/logout') return next();
+  if (!req.session.userId) return res.redirect('/login');
+  res.locals.user = db.prepare(
+    'SELECT user_id, username, display_name FROM users WHERE user_id=?'
+  ).get(req.session.userId);
+  if (!res.locals.user) { req.session.destroy(() => {}); return res.redirect('/login'); }
+  next();
+});
 
 // ---------- helpers ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -35,11 +89,20 @@ const NAV = [
   ['/reports', 'Reports'],
 ];
 
-function layout({ title, body, active, flash }) {
+function layout({ title, body, active, flash, user, bare }) {
   const nav = NAV.map(([href, label]) => {
     const cls = href === active ? 'active' : '';
     return `<a class="${cls}" href="${href}">${esc(label)}</a>`;
   }).join('');
+  const userBar = user
+    ? `<div class="userbar">
+         <span>${esc(user.display_name || user.username)}</span>
+         <form method="post" action="/logout"><button class="link-light" type="submit">Sign out</button></form>
+       </div>`
+    : '';
+  const header = bare
+    ? `<header class="bare"><div class="brand">⛪ Church Manager</div></header>`
+    : `<header><div class="brand">⛪ Church Manager</div><nav>${nav}</nav>${userBar}</header>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -49,11 +112,8 @@ function layout({ title, body, active, flash }) {
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-<header>
-  <div class="brand">⛪ Church Manager</div>
-  <nav>${nav}</nav>
-</header>
-<main>
+${header}
+<main${bare ? ' class="bare"' : ''}>
   ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
   <h1>${esc(title)}</h1>
   ${body}
@@ -110,10 +170,10 @@ app.get('/', (req, res) => {
           esc(c.fund), fmtMoney(c.amount), esc(c.method)]))
     : '<p>No contributions yet.</p>';
 
-  res.send(layout({
+  res.page({
     title: 'Dashboard', active: '/',
     body: `${cards}<h2>Upcoming events</h2>${upcomingTbl}<h2>Recent contributions</h2>${contribsTbl}`,
-  }));
+  });
 });
 
 // ---------- members ----------
@@ -152,7 +212,7 @@ app.get('/members', (req, res) => {
         esc(r.email),
         esc(r.mobile_phone),
       ]))}`;
-  res.send(layout({ title: `Members (${rows.length})`, active: '/members', body }));
+  res.page({ title: `Members (${rows.length})`, active: '/members', body });
 });
 
 function memberForm(member = {}, households = [], action, csrfFlash) {
@@ -186,10 +246,10 @@ function memberForm(member = {}, households = [], action, csrfFlash) {
 
 app.get('/members/new', (req, res) => {
   const households = db.prepare(`SELECT household_id, family_name FROM households ORDER BY family_name`).all();
-  res.send(layout({
+  res.page({
     title: 'New member', active: '/members',
     body: memberForm({}, households, '/members'),
-  }));
+  });
 });
 
 app.post('/members', (req, res) => {
@@ -275,9 +335,9 @@ app.get('/members/:id', (req, res) => {
           : '<p>No attendance recorded.</p>'}
       </section>
     </div>`;
-  res.send(layout({
+  res.page({
     title: `${m.first_name} ${m.last_name}`, active: '/members', body,
-  }));
+  });
 });
 
 app.post('/members/:id', (req, res) => {
@@ -320,7 +380,7 @@ app.get('/households', (req, res) => {
       esc(r.city),
       esc(r.home_phone),
     ]));
-  res.send(layout({ title: 'Households', active: '/households', body }));
+  res.page({ title: 'Households', active: '/households', body });
 });
 
 // ---------- ministries ----------
@@ -352,7 +412,7 @@ app.get('/ministries', (req, res) => {
     </section>`;
   }).join('');
 
-  res.send(layout({ title: 'Ministries', active: '/ministries', body: sections }));
+  res.page({ title: 'Ministries', active: '/ministries', body: sections });
 });
 
 // ---------- events ----------
@@ -369,7 +429,7 @@ app.get('/events', (req, res) => {
         `<a href="/events/${r.event_id}">${esc(r.title)}</a>`,
         esc(r.event_type), esc(r.location), r.attendees,
       ]))}`;
-  res.send(layout({ title: 'Events', active: '/events', body }));
+  res.page({ title: 'Events', active: '/events', body });
 });
 
 app.get('/events/new', (req, res) => {
@@ -386,7 +446,7 @@ app.get('/events/new', (req, res) => {
       <label class="wide">Notes<textarea name="notes" rows="2"></textarea></label>
       <div class="actions"><button type="submit">Save</button></div>
     </form>`;
-  res.send(layout({ title: 'New event', active: '/events', body }));
+  res.page({ title: 'New event', active: '/events', body });
 });
 
 app.post('/events', (req, res) => {
@@ -445,7 +505,7 @@ app.get('/events/:id', (req, res) => {
         ${ev.notes ? `<h3>Notes</h3><p>${esc(ev.notes)}</p>` : ''}
       </section>
     </div>`;
-  res.send(layout({ title: ev.title, active: '/events', body }));
+  res.page({ title: ev.title, active: '/events', body });
 });
 
 app.post('/events/:id/check', (req, res) => {
@@ -511,7 +571,7 @@ app.get('/contributions', (req, res) => {
       rows.map((r) => [esc(r.contributed_on),
         r.member_id ? `<a href="/members/${r.member_id}">${esc(r.donor)}</a>` : esc(r.donor),
         esc(r.fund), fmtMoney(r.amount), esc(r.method), esc(r.reference)]))}`;
-  res.send(layout({ title: 'Contributions', active: '/contributions', body }));
+  res.page({ title: 'Contributions', active: '/contributions', body });
 });
 
 app.post('/contributions', (req, res) => {
@@ -577,7 +637,75 @@ app.get('/reports', (req, res) => {
         missing.map((r) => [`<a href="/members/${r.member_id}">${esc(r.name)}</a>`, esc(r.email)]))
         : '<p>Everyone has been attending. 🎉</p>'}
     </section>`;
-  res.send(layout({ title: 'Reports', active: '/reports', body }));
+  res.page({ title: 'Reports', active: '/reports', body });
+});
+
+// ---------- auth pages ----------
+function authPage(title, body, flash) {
+  return layout({
+    title, body, bare: true, flash,
+    active: null, user: null,
+  });
+}
+
+app.get('/setup', (req, res) => {
+  const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
+  if (userCount > 0) return res.redirect('/login');
+  res.send(authPage('Create the first admin account', `
+    <form class="form auth-form" method="post" action="/setup">
+      <p class="muted">Welcome! Create an admin account to lock down this church manager.</p>
+      <label class="wide">Display name<input name="display_name" placeholder="e.g. Pastor James"></label>
+      <label class="wide">Username<input name="username" required autofocus></label>
+      <label class="wide">Password<input type="password" name="password" required minlength="8"></label>
+      <label class="wide">Confirm password<input type="password" name="password2" required></label>
+      <div class="actions"><button type="submit">Create account</button></div>
+    </form>
+  `));
+});
+
+app.post('/setup', (req, res) => {
+  const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
+  if (userCount > 0) return res.redirect('/login');
+  const { username, password, password2, display_name } = req.body;
+  if (!username || !password || password.length < 8 || password !== password2) {
+    return res.status(400).send(authPage('Create the first admin account',
+      '<p class="form">Check the form: username required, password ≥ 8 chars, both passwords must match. <a href="/setup">Try again</a>.</p>'));
+  }
+  const hash = bcrypt.hashSync(password, 12);
+  const info = db.prepare(
+    `INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)`
+  ).run(username.trim(), hash, (display_name || '').trim() || null);
+  req.session.userId = info.lastInsertRowid;
+  res.redirect('/');
+});
+
+app.get('/login', (req, res) => {
+  if (req.session.userId) return res.redirect('/');
+  const error = req.query.e === '1' ? 'Wrong username or password.' : null;
+  res.send(authPage('Sign in', `
+    <form class="form auth-form" method="post" action="/login">
+      ${error ? `<p class="error">${esc(error)}</p>` : ''}
+      <label class="wide">Username<input name="username" required autofocus></label>
+      <label class="wide">Password<input type="password" name="password" required></label>
+      <div class="actions"><button type="submit">Sign in</button></div>
+    </form>
+  `));
+});
+
+app.post('/login', (req, res) => {
+  const { username, password } = req.body;
+  const user = db.prepare(
+    `SELECT user_id, password_hash FROM users WHERE username = ?`
+  ).get((username || '').trim());
+  if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
+    return res.redirect('/login?e=1');
+  }
+  req.session.userId = user.user_id;
+  res.redirect('/');
+});
+
+app.post('/logout', (req, res) => {
+  req.session.destroy(() => res.redirect('/login'));
 });
 
 // ---------- start ----------
