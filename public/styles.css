@@ -1,0 +1,133 @@
+:root {
+  --bg: #f7f6f2;
+  --panel: #ffffff;
+  --ink: #1f2933;
+  --muted: #6b7280;
+  --accent: #6b4f9b;
+  --accent-dark: #4b3672;
+  --border: #e3e0d8;
+  --danger: #c0392b;
+  --ok: #1f7a3a;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+header {
+  background: var(--accent);
+  color: white;
+  padding: 0.75rem 1.5rem;
+  display: flex; align-items: center; gap: 2rem;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+}
+header .brand { font-weight: 600; font-size: 1.1rem; }
+header nav { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+header nav a {
+  color: rgba(255,255,255,0.85);
+  text-decoration: none;
+  font-size: 0.95rem;
+  padding-bottom: 2px;
+  border-bottom: 2px solid transparent;
+}
+header nav a:hover { color: #fff; }
+header nav a.active { color: #fff; border-bottom-color: #fff; }
+
+main { max-width: 1100px; margin: 1.5rem auto; padding: 0 1.5rem; }
+h1 { margin-top: 0; }
+h2 { margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; }
+h3 { margin-top: 1.5rem; }
+
+a { color: var(--accent-dark); }
+
+.flash {
+  background: #fff8d6; border: 1px solid #e7d27a;
+  padding: 0.5rem 1rem; border-radius: 6px; margin-bottom: 1rem;
+}
+
+.cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem; margin: 1rem 0 2rem;
+}
+.card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1rem;
+}
+.card .big { font-size: 2rem; font-weight: 600; color: var(--accent-dark); }
+
+.card-wide {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem;
+}
+
+table {
+  width: 100%; border-collapse: collapse; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  margin: 0.5rem 0 1rem;
+}
+th, td { padding: 0.55rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+th { background: #efece4; font-weight: 600; font-size: 0.9rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #faf8f1; }
+
+.pill {
+  display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 600; background: #eee; color: #333;
+}
+.pill-member { background: #d6ead7; color: #14542b; }
+.pill-regular { background: #d6e4f5; color: #0e3a6b; }
+.pill-visitor { background: #fff0d6; color: #6b4915; }
+.pill-inactive { background: #ddd; color: #555; }
+.pill-deceased, .pill-transferred { background: #eedede; color: #6b1f1f; }
+
+.filters {
+  display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;
+  align-items: center;
+}
+input, select, textarea, button {
+  font: inherit; padding: 0.4rem 0.6rem; border: 1px solid var(--border);
+  border-radius: 6px; background: white;
+}
+button, .btn {
+  background: var(--accent); color: white; border: none; cursor: pointer;
+  padding: 0.5rem 0.9rem; border-radius: 6px; text-decoration: none;
+  display: inline-block; font-weight: 500;
+}
+button:hover, .btn:hover { background: var(--accent-dark); }
+button.danger { background: var(--danger); }
+button.link {
+  background: transparent; color: var(--danger); padding: 0;
+  text-decoration: underline; font-weight: normal;
+}
+
+.form {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1rem;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1rem;
+}
+.form label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--muted); }
+.form label input, .form label select, .form label textarea {
+  margin-top: 0.2rem; font-size: 0.95rem; color: var(--ink);
+}
+.form label.wide { grid-column: 1 / -1; }
+.form .actions { grid-column: 1 / -1; }
+
+.two-col {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;
+}
+@media (max-width: 800px) {
+  .two-col { grid-template-columns: 1fr; }
+  .form { grid-template-columns: 1fr; }
+}
+
+dl.stats { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 1rem; }
+dl.stats dt { color: var(--muted); }
+
+.check-list { list-style: none; padding: 0; margin: 0; }
+.check-list li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.4rem 0; border-bottom: 1px solid var(--border);
+}
+.check-list form { display: inline; }
