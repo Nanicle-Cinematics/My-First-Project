@@ -11,7 +11,8 @@ INSERT INTO organizations (org_id, name) VALUES
  (2, 'Gospel Band'),
  (3, "Men's Fellowship"),
  (4, "Women's Fellowship"),
- (5, 'Sunday School');
+ (5, 'Sunday School'),
+ (6, 'Youth Ministry');
 
 INSERT INTO members (member_id, external_id, first_name, last_name, gender, date_of_birth,
                      email, mobile_phone, marital_status, membership_status, join_date, baptism_date, confirmation_date) VALUES
