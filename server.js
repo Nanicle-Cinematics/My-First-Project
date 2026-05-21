@@ -10,6 +10,7 @@ const SqliteStore = require('better-sqlite3-session-store')(session);
 const DB_PATH = process.env.CHURCH_DB || path.join(__dirname, 'church.db');
 const PORT = process.env.PORT || 3000;
 const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
+const PUBLIC_URL  = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 
 // Auto-create the DB from schema.sql on first boot (so deployments work without shell access).
 if (!fs.existsSync(DB_PATH)) {
@@ -119,7 +120,12 @@ addColumnIfMissing('expenses', 'approved_by',      `approved_by INTEGER REFERENC
 addColumnIfMissing('expenses', 'receipt_attached', `receipt_attached INTEGER NOT NULL DEFAULT 0`);
 addColumnIfMissing('expenses', 'reference_number', `reference_number TEXT`);
 addColumnIfMissing('expenses', 'expense_cat_id',   `expense_cat_id INTEGER REFERENCES expense_categories(expense_cat_id)`);
+addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NULL DEFAULT 'either'`);
+addColumnIfMissing('members', 'unsubscribe_token',`unsubscribe_token TEXT`);
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_external_id ON members(external_id) WHERE external_id IS NOT NULL`); } catch (_) {}
+try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_unsub ON members(unsubscribe_token) WHERE unsubscribe_token IS NOT NULL`); } catch (_) {}
+// Backfill an unsubscribe token for every existing member.
+db.prepare(`UPDATE members SET unsubscribe_token = lower(hex(randomblob(16))) WHERE unsubscribe_token IS NULL`).run();
 
 // Finance schema (services, harvests, day-born splits, special offerings, pledges, lookups).
 db.exec(`
@@ -339,6 +345,8 @@ app.use((req, res, next) => {
 // Auth gate: redirect to /setup on first run, /login otherwise.
 app.use((req, res, next) => {
   if (req.path.startsWith('/static/')) return next();
+  if (req.path.startsWith('/u/')) return next();        // public unsubscribe pages
+  if (req.path.startsWith('/webhooks/')) return next(); // inbound webhooks (Arkesel STOP)
   const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
   if (userCount === 0) {
     if (req.path === '/setup') return next();
@@ -446,19 +454,29 @@ async function sendSmsBatch(recipients, message) {
            status: res.status, response: data, sent: recipients.length };
 }
 
-async function sendEmailBulk(addresses, subject, body) {
+// Send one personalized email per recipient. Each gets its own unsubscribe link.
+async function sendEmailEach(recipients, subject, body, opts = {}) {
   const mailer = getMailer();
-  if (!mailer) return { ok: false, dryRun: true, message: 'SMTP not configured; dry run.' };
-  if (!addresses.length) return { ok: true, sent: 0 };
-  // BCC keeps recipients private from each other.
-  const info = await mailer.sendMail({
-    from: SMTP_FROM,
-    to: SMTP_FROM,
-    bcc: addresses,
-    subject,
-    text: body,
-  });
-  return { ok: true, sent: addresses.length, messageId: info.messageId };
+  if (!mailer) return { ok: false, dryRun: true, total: recipients.length };
+  if (!recipients.length) return { ok: true, sent: 0, failed: 0 };
+  let sent = 0, failed = 0;
+  const errors = [];
+  for (const r of recipients) {
+    const footer = (opts.withFooter !== false) && r.token
+      ? (PUBLIC_URL
+          ? `\n\n— ${CHURCH_NAME}\nTo stop receiving these messages, visit ${PUBLIC_URL}/u/${r.token}`
+          : `\n\n— ${CHURCH_NAME}\nTo stop receiving messages, contact the church office.`)
+      : '';
+    try {
+      await mailer.sendMail({
+        from: SMTP_FROM, to: r.addr, subject, text: body + footer,
+      });
+      sent++;
+    } catch (e) {
+      failed++; errors.push(e.message);
+    }
+  }
+  return { ok: failed === 0, sent, failed, errors };
 }
 
 
@@ -1010,6 +1028,10 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
       <label>Gender<select name="gender">${genderOpts}</select></label>
       <label>Marital<select name="marital_status">${maritalOpts}</select></label>
       <label>Bible class<select name="bible_class_id">${bibleClassOpts}</select></label>
+      <label>Communication preference<select name="preferred_channel">
+        ${Object.entries(PREF_LABELS).map(([v, l]) =>
+          `<option value="${v}" ${v === (member.preferred_channel || 'either') ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+      </select></label>
       <label>Join date<input type="date" name="join_date" value="${fmtDate(member.join_date)}"></label>
       <label>Baptism date<input type="date" name="baptism_date" value="${fmtDate(member.baptism_date)}"></label>
       <label>Confirmation date<input type="date" name="confirmation_date" value="${fmtDate(member.confirmation_date)}"></label>
@@ -1051,10 +1073,12 @@ app.post('/members', requireAdmin, (req, res) => {
   const info = db.prepare(`
     INSERT INTO members (external_id, bible_class_id, first_name, last_name, email, mobile_phone,
       date_of_birth, day_born, gender, marital_status, membership_status,
-      join_date, baptism_date, confirmation_date, notes)
+      join_date, baptism_date, confirmation_date, notes,
+      preferred_channel, unsubscribe_token)
     VALUES (@external_id, @bible_class_id, @first_name, @last_name, @email, @mobile_phone,
       @date_of_birth, @day_born, @gender, @marital_status, @membership_status,
-      @join_date, @baptism_date, @confirmation_date, @notes)
+      @join_date, @baptism_date, @confirmation_date, @notes,
+      @preferred_channel, lower(hex(randomblob(16))))
   `).run({
     external_id: externalId,
     bible_class_id: b.bible_class_id ? Number(b.bible_class_id) : null,
@@ -1063,6 +1087,7 @@ app.post('/members', requireAdmin, (req, res) => {
     date_of_birth: b.date_of_birth || null,
     day_born: DAYS_OF_WEEK.includes(b.day_born) ? b.day_born : null,
     gender: b.gender || null,
+    preferred_channel: PREF_LABELS[b.preferred_channel] ? b.preferred_channel : 'either',
     marital_status: b.marital_status || null,
     membership_status: b.membership_status || 'visitor',
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
@@ -1178,7 +1203,8 @@ app.post('/members/:id', requireAdmin, (req, res) => {
       day_born=@day_born, gender=@gender,
       marital_status=@marital_status, membership_status=@membership_status,
       join_date=@join_date, baptism_date=@baptism_date,
-      confirmation_date=@confirmation_date, notes=@notes
+      confirmation_date=@confirmation_date, notes=@notes,
+      preferred_channel=@preferred_channel
     WHERE member_id=@id`).run({
     id,
     bible_class_id: b.bible_class_id ? Number(b.bible_class_id) : null,
@@ -1187,6 +1213,7 @@ app.post('/members/:id', requireAdmin, (req, res) => {
     date_of_birth: b.date_of_birth || null,
     day_born: DAYS_OF_WEEK.includes(b.day_born) ? b.day_born : null,
     gender: b.gender || null,
+    preferred_channel: PREF_LABELS[b.preferred_channel] ? b.preferred_channel : 'either',
     marital_status: b.marital_status || null,
     membership_status: b.membership_status || 'visitor',
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
@@ -3186,7 +3213,7 @@ function resolveAudience(orgIds) {
   if (!orgIds || orgIds.length === 0) {
     return db.prepare(
       `SELECT m.member_id, m.first_name||' '||m.last_name AS name,
-              m.email, m.mobile_phone
+              m.email, m.mobile_phone, m.preferred_channel, m.unsubscribe_token
        FROM members m
        WHERE m.deleted_at IS NULL
          AND m.membership_status IN ('member','regular','visitor')
@@ -3196,7 +3223,7 @@ function resolveAudience(orgIds) {
   const placeholders = orgIds.map(() => '?').join(',');
   return db.prepare(
     `SELECT DISTINCT m.member_id, m.first_name||' '||m.last_name AS name,
-            m.email, m.mobile_phone
+            m.email, m.mobile_phone, m.preferred_channel, m.unsubscribe_token
      FROM organization_memberships om
      JOIN members m USING(member_id)
      WHERE om.org_id IN (${placeholders})
@@ -3205,6 +3232,22 @@ function resolveAudience(orgIds) {
      ORDER BY m.last_name`
   ).all(...orgIds);
 }
+
+// Decide whether a member can receive a given channel, respecting their preferred_channel.
+function canReceive(member, channel) {
+  const pref = (member.preferred_channel || 'either');
+  if (pref === 'none') return false;
+  if (channel === 'sms')   return pref !== 'email_only';
+  if (channel === 'email') return pref !== 'sms_only';
+  return true;
+}
+
+const PREF_LABELS = {
+  either:     'Both',
+  sms_only:   'SMS only',
+  email_only: 'Email only',
+  none:       'Do not contact',
+};
 
 function parseOrgChoice(b) {
   if (b.all_members === '1') return { allMembers: true, orgIds: [] };
@@ -3227,11 +3270,12 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
   const audienceChosen = choice.allMembers || choice.orgIds.length > 0;
   const recipients = audienceChosen ? resolveAudience(choice.allMembers ? [] : choice.orgIds) : [];
 
-  // Channel breakdown.
-  let bothCount = 0, smsOnlyCount = 0, emailOnlyCount = 0, noneCount = 0;
+  // Channel breakdown — already respects preferred_channel.
+  let bothCount = 0, smsOnlyCount = 0, emailOnlyCount = 0, noneCount = 0, excludedPref = 0;
   for (const r of recipients) {
-    const hasPhone = !!normalizePhoneGH(r.mobile_phone);
-    const hasEmail = !!r.email;
+    if ((r.preferred_channel || 'either') === 'none') { excludedPref++; continue; }
+    const hasPhone = !!normalizePhoneGH(r.mobile_phone) && canReceive(r, 'sms');
+    const hasEmail = !!r.email && canReceive(r, 'email');
     if (hasPhone && hasEmail) bothCount++;
     else if (hasPhone) smsOnlyCount++;
     else if (hasEmail) emailOnlyCount++;
@@ -3282,13 +3326,17 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
       <div class="stat"><div class="ico orange">⚠</div><div>
         <div class="label">No contact info</div>
         <div class="value">${noneCount}</div></div></div>
+      <div class="stat"><div class="ico orange">🚫</div><div>
+        <div class="label">Excluded (opted out)</div>
+        <div class="value">${excludedPref}</div></div></div>
     </div>
     ${recipients.length ? `<details style="margin:0.75rem 0 1rem">
       <summary>Show recipient list</summary>
-      ${table(['Name', 'Phone', 'Email'],
+      ${table(['Name', 'Phone', 'Email', 'Preference'],
         recipients.map((r) => [esc(r.name),
           normalizePhoneGH(r.mobile_phone) || `<span class="muted-text">${esc(r.mobile_phone) || '—'}</span>`,
-          esc(r.email) || '<span class="muted-text">—</span>']))}
+          esc(r.email) || '<span class="muted-text">—</span>',
+          esc(PREF_LABELS[r.preferred_channel || 'either'] || 'Both')]))}
     </details>` : ''}
   ` : '';
 
@@ -3310,6 +3358,12 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
       <label class="wide">Message body<textarea name="body" rows="5" required maxlength="900"
         placeholder="Keep it under 160 chars for a single SMS."></textarea></label>
       <p class="muted-text wide" style="margin:0">Members with only a phone receive just the SMS; members with only an email receive just the email. Members missing both are skipped.</p>
+
+      <label class="wide check" style="background:var(--danger-soft);padding:0.5rem 0.75rem;border-radius:8px;margin-top:0.5rem">
+        <input type="checkbox" name="ignore_prefs" value="1">
+        <strong>Override member preferences (urgent only)</strong> — sends to opted-out members too.
+        Use sparingly, e.g. funeral / safety notices.
+      </label>
 
       <fieldset class="wide" style="margin-top:0.5rem">
         <legend>Test send (optional)</legend>
@@ -3387,18 +3441,30 @@ app.post('/communications/broadcast', requireAdmin, async (req, res) => {
     INSERT INTO broadcast_recipients (broadcast_id, member_id, channel, destination, status)
     VALUES (?, ?, ?, ?, ?)`);
 
-  // Build per-channel recipient lists.
+  // Build per-channel recipient lists. Respects preferred_channel unless override.
+  const ignorePrefs = req.body.ignore_prefs === '1';
   const smsList = [];   // {member_id, phone}
-  const emailList = []; // {member_id, addr}
+  const emailList = []; // {member_id, addr, token}
   for (const m of audience) {
+    const prefAllowsSms   = ignorePrefs || canReceive(m, 'sms');
+    const prefAllowsEmail = ignorePrefs || canReceive(m, 'email');
     if (channel === 'sms' || channel === 'both') {
-      const phone = normalizePhoneGH(m.mobile_phone);
-      if (phone) smsList.push({ member_id: m.member_id, phone });
-      else insRecip.run(broadcastId, m.member_id, 'sms', m.mobile_phone || '', 'skipped');
+      if (!prefAllowsSms) {
+        insRecip.run(broadcastId, m.member_id, 'sms', m.mobile_phone || '', 'skipped');
+      } else {
+        const phone = normalizePhoneGH(m.mobile_phone);
+        if (phone) smsList.push({ member_id: m.member_id, phone });
+        else insRecip.run(broadcastId, m.member_id, 'sms', m.mobile_phone || '', 'skipped');
+      }
     }
     if (channel === 'email' || channel === 'both') {
-      if (m.email) emailList.push({ member_id: m.member_id, addr: m.email });
-      else insRecip.run(broadcastId, m.member_id, 'email', m.email || '', 'skipped');
+      if (!prefAllowsEmail) {
+        insRecip.run(broadcastId, m.member_id, 'email', m.email || '', 'skipped');
+      } else if (m.email) {
+        emailList.push({ member_id: m.member_id, addr: m.email, token: m.unsubscribe_token });
+      } else {
+        insRecip.run(broadcastId, m.member_id, 'email', m.email || '', 'skipped');
+      }
     }
   }
 
@@ -3424,7 +3490,7 @@ app.post('/communications/broadcast', requireAdmin, async (req, res) => {
   if (emailList.length && (channel === 'email' || channel === 'both')) {
     const emailSubject = subject || (orgName ? `Message from ${CHURCH_NAME}` : `Message from ${CHURCH_NAME}`);
     try {
-      emailRes = await sendEmailBulk(emailList.map((e) => e.addr), emailSubject, body);
+      emailRes = await sendEmailEach(emailList, emailSubject, body);
     } catch (e) { emailRes = { ok: false, error: e.message }; }
     const status = emailRes && emailRes.dryRun ? 'pending' : (emailRes && emailRes.ok ? 'sent' : 'failed');
     const errText = emailRes && emailRes.dryRun ? 'dry run' : (emailRes && emailRes.error) || null;
@@ -3520,6 +3586,80 @@ app.get('/communications/broadcasts/:id', (req, res) => {
         `<span class="pill pill-${esc(r.status)}">${esc(r.status)}</span>`,
         esc(r.error) || '']))}`;
   res.page({ title: 'Broadcast detail', active: '/communications', body });
+});
+
+// ---------- public unsubscribe (no auth) ----------
+app.get('/u/:token', (req, res) => {
+  const m = db.prepare(
+    `SELECT member_id, first_name, last_name, preferred_channel
+       FROM members WHERE unsubscribe_token = ? AND deleted_at IS NULL`
+  ).get(req.params.token);
+  if (!m) {
+    return res.status(404).send(layout({
+      title: 'Link not recognized', bare: true,
+      body: '<p>This unsubscribe link is invalid or has been revoked. If you continue to receive messages you do not want, please contact the church office.</p>',
+    }));
+  }
+  const already = m.preferred_channel === 'none';
+  res.send(layout({
+    title: already ? 'You are already unsubscribed' : 'Confirm unsubscribe',
+    bare: true,
+    body: `
+      <p>Hello ${esc(m.first_name)},</p>
+      ${already
+        ? '<p>You are already opted out of bulk SMS and email broadcasts from us.</p>'
+        : `<p>Click the button below to stop receiving bulk SMS and email broadcasts from <strong>${esc(CHURCH_NAME)}</strong>. Your member record stays on file; we just stop messaging you.</p>
+           <form method="post" action="/u/${esc(req.params.token)}">
+             <button type="submit">Yes, unsubscribe me</button>
+           </form>`}
+      <p style="margin-top:1rem"><a href="${esc(PUBLIC_URL) || '/'}">Back to the website</a></p>
+    `,
+  }));
+});
+
+app.post('/u/:token', (req, res) => {
+  const result = db.prepare(
+    `UPDATE members SET preferred_channel = 'none'
+       WHERE unsubscribe_token = ? AND deleted_at IS NULL`
+  ).run(req.params.token);
+  if (result.changes === 0) {
+    return res.status(404).send(layout({ title: 'Link not recognized', bare: true,
+      body: '<p>This unsubscribe link is invalid.</p>' }));
+  }
+  logActivity('announcement', 'A member unsubscribed via email link', null, null);
+  res.send(layout({
+    title: 'You have been unsubscribed', bare: true,
+    body: `<p>You will no longer receive bulk SMS or email from <strong>${esc(CHURCH_NAME)}</strong>. If you change your mind, please contact the church office.</p>`,
+  }));
+});
+
+// ---------- Arkesel inbound webhook (STOP keyword) ----------
+app.use('/webhooks', express.json());
+app.post('/webhooks/arkesel-inbound', (req, res) => {
+  // Arkesel sends a JSON payload; the field names vary slightly between
+  // 2-way SMS plans. We accept several shapes.
+  const b = req.body || {};
+  const from = b.from || b.sender || b.msisdn || b.phone || b.source || '';
+  const text = (b.text || b.message || b.content || b.body || '').toString().trim();
+  if (!from) return res.status(400).json({ ok: false, error: 'missing sender' });
+  if (!/^stop$|^stop all$|^unsubscribe$|^cancel$/i.test(text)) {
+    return res.json({ ok: true, action: 'ignored' });
+  }
+  const incoming = normalizePhoneGH(from);
+  if (!incoming) return res.json({ ok: true, action: 'ignored', reason: 'unparseable phone' });
+  // Compare normalized forms — stored phones may include dashes/spaces.
+  const rows = db.prepare(
+    `SELECT member_id, first_name, mobile_phone FROM members WHERE deleted_at IS NULL AND mobile_phone IS NOT NULL`
+  ).all();
+  const member = rows.find((r) => normalizePhoneGH(r.mobile_phone) === incoming);
+  if (member) {
+    db.prepare(`UPDATE members SET preferred_channel='none' WHERE member_id=?`).run(member.member_id);
+    logActivity('announcement',
+      `Member ${member.first_name} (#${member.member_id}) opted out via SMS STOP`,
+      `/members/${member.member_id}`, null);
+    return res.json({ ok: true, action: 'unsubscribed', member_id: member.member_id });
+  }
+  res.json({ ok: true, action: 'no_match', phone: incoming });
 });
 
 // ---------- sacraments ----------
