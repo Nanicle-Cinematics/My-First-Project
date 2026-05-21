@@ -3181,31 +3181,64 @@ app.post('/communications', requireAdmin, (req, res) => {
 });
 
 // ---------- communications: bulk SMS + email broadcasts ----------
-function resolveAudience(orgId) {
-  const sql = orgId
-    ? `SELECT DISTINCT m.member_id, m.first_name||' '||m.last_name AS name,
-             m.email, m.mobile_phone
-       FROM organization_memberships om
-       JOIN members m USING(member_id)
-       WHERE om.org_id = ? AND m.deleted_at IS NULL
+function resolveAudience(orgIds) {
+  // orgIds: array of org IDs, OR an empty array for "All members".
+  if (!orgIds || orgIds.length === 0) {
+    return db.prepare(
+      `SELECT m.member_id, m.first_name||' '||m.last_name AS name,
+              m.email, m.mobile_phone
+       FROM members m
+       WHERE m.deleted_at IS NULL
          AND m.membership_status IN ('member','regular','visitor')
        ORDER BY m.last_name`
-    : `SELECT m.member_id, m.first_name||' '||m.last_name AS name,
-              m.email, m.mobile_phone
-       FROM members m WHERE m.deleted_at IS NULL
-         AND m.membership_status IN ('member','regular','visitor')
-       ORDER BY m.last_name`;
-  return orgId ? db.prepare(sql).all(orgId) : db.prepare(sql).all();
+    ).all();
+  }
+  const placeholders = orgIds.map(() => '?').join(',');
+  return db.prepare(
+    `SELECT DISTINCT m.member_id, m.first_name||' '||m.last_name AS name,
+            m.email, m.mobile_phone
+     FROM organization_memberships om
+     JOIN members m USING(member_id)
+     WHERE om.org_id IN (${placeholders})
+       AND m.deleted_at IS NULL
+       AND m.membership_status IN ('member','regular','visitor')
+     ORDER BY m.last_name`
+  ).all(...orgIds);
+}
+
+function parseOrgChoice(b) {
+  if (b.all_members === '1') return { allMembers: true, orgIds: [] };
+  let raw = b.org_ids;
+  if (!raw) return { allMembers: false, orgIds: [] };
+  const ids = (Array.isArray(raw) ? raw : [raw]).map((x) => Number(x)).filter(Boolean);
+  return { allMembers: false, orgIds: ids };
+}
+
+function audienceLabel(orgs, choice) {
+  if (choice.allMembers) return 'All members';
+  if (!choice.orgIds.length) return 'None';
+  const names = orgs.filter((o) => choice.orgIds.includes(o.org_id)).map((o) => o.name);
+  return names.length === 1 ? names[0] : names.join(' + ');
 }
 
 app.get('/communications/broadcast', requireAdmin, (req, res) => {
   const orgs = loadOrganizations();
-  const orgId = req.query.org_id ? Number(req.query.org_id) : null;
-  const recipients = orgId ? resolveAudience(orgId) : [];
-  const phoneCount = recipients.filter((r) => normalizePhoneGH(r.mobile_phone)).length;
-  const emailCount = recipients.filter((r) => r.email).length;
-  const orgOpts = '<option value="">— pick an organization —</option>' +
-    orgs.map((o) => `<option value="${o.org_id}" ${o.org_id === orgId ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+  const choice = parseOrgChoice(req.query);
+  const audienceChosen = choice.allMembers || choice.orgIds.length > 0;
+  const recipients = audienceChosen ? resolveAudience(choice.allMembers ? [] : choice.orgIds) : [];
+
+  // Channel breakdown.
+  let bothCount = 0, smsOnlyCount = 0, emailOnlyCount = 0, noneCount = 0;
+  for (const r of recipients) {
+    const hasPhone = !!normalizePhoneGH(r.mobile_phone);
+    const hasEmail = !!r.email;
+    if (hasPhone && hasEmail) bothCount++;
+    else if (hasPhone) smsOnlyCount++;
+    else if (hasEmail) emailOnlyCount++;
+    else noneCount++;
+  }
+  const reachableSms   = bothCount + smsOnlyCount;
+  const reachableEmail = bothCount + emailOnlyCount;
 
   const smsReady    = !!ARKESEL_API_KEY;
   const emailReady  = !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
@@ -3215,64 +3248,140 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
        ${emailReady ? '' : '<strong>Email dry-run mode.</strong> SMTP env vars are not configured.'}
      </div>`;
 
-  const previewSection = orgId ? `
-    <h2>Audience preview · ${recipients.length} members</h2>
-    <p class="muted-text">Sendable: ${phoneCount} by SMS, ${emailCount} by email</p>
-    ${recipients.length ? table(['Name', 'Phone', 'Email'],
-      recipients.map((r) => [esc(r.name),
-        normalizePhoneGH(r.mobile_phone) || `<span class="muted-text">${esc(r.mobile_phone) || '—'}</span>`,
-        esc(r.email) || '<span class="muted-text">—</span>']))
-      : '<p class="muted-text">No members in this organization.</p>'}` : '';
+  const audienceForm = `
+    <form method="get" action="/communications/broadcast" class="card" style="margin-bottom:1rem">
+      <h2 style="margin-top:0">Audience</h2>
+      <label class="check" style="background:none;padding:0;margin-bottom:0.5rem">
+        <input type="checkbox" name="all_members" value="1" ${choice.allMembers ? 'checked' : ''}>
+        <strong>All members</strong> <span class="muted-text">(every active member)</span>
+      </label>
+      <div class="check-grid" style="opacity:${choice.allMembers ? '0.5' : '1'}">
+        ${orgs.map((o) => `
+          <label class="check">
+            <input type="checkbox" name="org_ids" value="${o.org_id}"
+              ${choice.orgIds.includes(o.org_id) ? 'checked' : ''}
+              ${choice.allMembers ? 'disabled' : ''}>
+            ${esc(o.name)}
+          </label>`).join('')}
+      </div>
+      <div class="actions" style="margin-top:0.75rem"><button type="submit">Load audience</button></div>
+    </form>`;
+
+  const previewSection = audienceChosen ? `
+    <h2>Audience preview · ${recipients.length} member${recipients.length === 1 ? '' : 's'}</h2>
+    <div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
+      <div class="stat"><div class="ico green">✓</div><div>
+        <div class="label">Reachable by SMS</div>
+        <div class="value">${reachableSms}</div></div></div>
+      <div class="stat"><div class="ico blue">✉</div><div>
+        <div class="label">Reachable by email</div>
+        <div class="value">${reachableEmail}</div></div></div>
+      <div class="stat"><div class="ico purple">📲</div><div>
+        <div class="label">Both</div>
+        <div class="value">${bothCount}</div></div></div>
+      <div class="stat"><div class="ico orange">⚠</div><div>
+        <div class="label">No contact info</div>
+        <div class="value">${noneCount}</div></div></div>
+    </div>
+    ${recipients.length ? `<details style="margin:0.75rem 0 1rem">
+      <summary>Show recipient list</summary>
+      ${table(['Name', 'Phone', 'Email'],
+        recipients.map((r) => [esc(r.name),
+          normalizePhoneGH(r.mobile_phone) || `<span class="muted-text">${esc(r.mobile_phone) || '—'}</span>`,
+          esc(r.email) || '<span class="muted-text">—</span>']))}
+    </details>` : ''}
+  ` : '';
+
+  // Hidden inputs to preserve audience selection in the compose form POST.
+  const audienceHidden = (choice.allMembers
+    ? `<input type="hidden" name="all_members" value="1">`
+    : choice.orgIds.map((id) => `<input type="hidden" name="org_ids" value="${id}">`).join(''));
+
+  const composeForm = audienceChosen && recipients.length ? `
+    <h2>Compose message</h2>
+    <form class="form" method="post" action="/communications/broadcast">
+      ${audienceHidden}
+      <label>Channel<select name="channel" required>
+        <option value="sms">SMS only (${reachableSms})</option>
+        <option value="email">Email only (${reachableEmail})</option>
+        <option value="both" selected>Both (${reachableSms} SMS · ${reachableEmail} email)</option>
+      </select></label>
+      <label>Email subject<input name="subject" placeholder="(required for email)"></label>
+      <label class="wide">Message body<textarea name="body" rows="5" required maxlength="900"
+        placeholder="Keep it under 160 chars for a single SMS."></textarea></label>
+      <p class="muted-text wide" style="margin:0">Members with only a phone receive just the SMS; members with only an email receive just the email. Members missing both are skipped.</p>
+
+      <fieldset class="wide" style="margin-top:0.5rem">
+        <legend>Test send (optional)</legend>
+        <label class="check" style="background:none;padding:0">
+          <input type="checkbox" name="test_only" value="1">
+          <strong>Test only — send to the addresses below instead of the audience</strong>
+        </label>
+        <div class="day-born-grid" style="grid-template-columns:1fr 1fr;margin-top:0.5rem">
+          <label>Test phone<input name="test_phone" placeholder="e.g. 0244555001"></label>
+          <label>Test email<input name="test_email" type="email" placeholder="e.g. you@example.com"></label>
+        </div>
+        <p class="muted-text" style="margin:0.4rem 0 0">Once the test arrives correctly, untick the box and send again to deliver to the full audience.</p>
+      </fieldset>
+
+      <div class="actions">
+        <button type="submit" onclick="return confirm('Send this broadcast?')">📣 Send broadcast</button>
+      </div>
+    </form>` : '';
 
   const body = `
     ${statusBanner}
-    <form method="get" action="/communications/broadcast" class="filters">
-      <label>Audience <select name="org_id" onchange="this.form.submit()">${orgOpts}</select></label>
-      <noscript><button type="submit">Load audience</button></noscript>
-    </form>
-
+    ${audienceForm}
     ${previewSection}
-
-    ${orgId && recipients.length ? `
-      <h2>Compose message</h2>
-      <form class="form" method="post" action="/communications/broadcast">
-        <input type="hidden" name="org_id" value="${orgId}">
-        <label>Channel<select name="channel" required>
-          <option value="sms">SMS only (${phoneCount})</option>
-          <option value="email">Email only (${emailCount})</option>
-          <option value="both">Both (SMS to ${phoneCount}, email to ${emailCount})</option>
-        </select></label>
-        <label>Email subject<input name="subject" placeholder="(required for email)"></label>
-        <label class="wide">Message body<textarea name="body" rows="5" required maxlength="900"
-          placeholder="Keep it under 160 chars for a single SMS."></textarea></label>
-        <p class="muted-text wide">Long messages over 160 characters are sent as multiple SMS segments and billed accordingly.</p>
-        <div class="actions">
-          <button type="submit" onclick="return confirm('Send this broadcast to ${recipients.length} recipient(s)?')">📣 Send broadcast</button>
-        </div>
-      </form>` : ''}
-
+    ${composeForm}
     <p style="margin-top:1.5rem"><a href="/communications/broadcasts">View broadcast history →</a></p>
   `;
   res.page({ title: 'Send broadcast', active: '/communications', body });
 });
 
 app.post('/communications/broadcast', requireAdmin, async (req, res) => {
-  const { channel, subject, body, org_id } = req.body;
+  const { channel, subject, body } = req.body;
   if (!body || !['sms', 'email', 'both'].includes(channel)) return res.redirect('/communications/broadcast');
-  const orgId = org_id ? Number(org_id) : null;
-  const audience = resolveAudience(orgId);
-  if (!audience.length) return res.redirect('/communications/broadcast');
-  const orgName = orgId
-    ? (db.prepare(`SELECT name FROM organizations WHERE org_id=?`).get(orgId) || {}).name
-    : 'All members';
+
+  const orgs = loadOrganizations();
+  const choice = parseOrgChoice(req.body);
+  const testOnly = req.body.test_only === '1';
+
+  // Build the actual audience to send to.
+  let audience;
+  let audienceLbl;
+  let orgIdForRow;
+  if (testOnly) {
+    const phone = (req.body.test_phone || '').trim();
+    const email = (req.body.test_email || '').trim();
+    if (!phone && !email) return res.redirect('/communications/broadcast');
+    audience = [{
+      member_id: null,
+      name: 'Test recipient',
+      mobile_phone: phone || null,
+      email: email || null,
+    }];
+    audienceLbl = `Test send (${[phone, email].filter(Boolean).join(' / ')})`;
+    orgIdForRow = null;
+  } else {
+    if (!choice.allMembers && choice.orgIds.length === 0) {
+      return res.redirect('/communications/broadcast');
+    }
+    audience = resolveAudience(choice.allMembers ? [] : choice.orgIds);
+    if (!audience.length) return res.redirect('/communications/broadcast');
+    audienceLbl = audienceLabel(orgs, choice);
+    // Only set org_id when exactly one org is selected (schema is single-FK).
+    orgIdForRow = (!choice.allMembers && choice.orgIds.length === 1) ? choice.orgIds[0] : null;
+  }
 
   // Create the broadcast row.
   const bres = db.prepare(`
     INSERT INTO broadcasts (channel, audience_label, org_id, subject, body, total_recipients, status, sent_by)
     VALUES (?, ?, ?, ?, ?, ?, 'sending', ?)`).run(
-    channel, orgName, orgId, subject || null, body, audience.length, res.locals.user.user_id
+    channel, audienceLbl, orgIdForRow, subject || null, body, audience.length, res.locals.user.user_id
   );
   const broadcastId = bres.lastInsertRowid;
+  const orgName = audienceLbl;
 
   const insRecip = db.prepare(`
     INSERT INTO broadcast_recipients (broadcast_id, member_id, channel, destination, status)
