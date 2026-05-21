@@ -1948,11 +1948,301 @@ app.get('/reports', (req, res) => {
       `<a class="report-tile" href="${href}">
          <div class="ico">${ico}</div>
          <div><div class="name">${esc(name)}</div><div class="desc">${esc(desc)}</div></div>
-       </a>`).join('')}</div>`;
+       </a>`).join('')}</div>
+    <h2>Print everything</h2>
+    <p>Build a single printable document containing every report section for a date range. Use your browser's Print dialog → "Save as PDF" to keep a copy.</p>
+    <form class="filters" method="get" action="/reports/print">
+      <label>From <input type="date" name="start" value="${esc(new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10))}"></label>
+      <label>To <input type="date" name="end" value="${esc(new Date().toISOString().slice(0, 10))}"></label>
+      <button type="submit">🖨 Open print view</button>
+    </form>`;
   res.page({ title: 'Reports', active: '/reports', body });
 });
 
-// ---------- reports: day-born (flagship sample screen) ----------
+// ---------- reports: print all ----------
+app.get('/reports/print', (req, res) => {
+  const { start, end } = defaultRange(req);
+  const year = req.query.year || new Date().getFullYear().toString();
+  const p = { start, end };
+
+  // --- Day-born ---
+  const summary = db.prepare(`
+    SELECT
+      (SELECT COALESCE(SUM(total_amount),0) FROM services
+        WHERE deleted_at IS NULL AND service_date BETWEEN @start AND @end) AS total_collected,
+      (SELECT COUNT(*) FROM services
+        WHERE deleted_at IS NULL AND service_date BETWEEN @start AND @end) AS services_held,
+      (SELECT CASE WHEN COUNT(*)=0 THEN 0 ELSE ROUND(SUM(total_amount)*1.0/COUNT(*),2) END
+        FROM services WHERE deleted_at IS NULL AND service_date BETWEEN @start AND @end) AS avg_per_service,
+      (SELECT day_born FROM day_born_splits dbs
+        JOIN services s ON s.service_id=dbs.service_id
+        WHERE s.deleted_at IS NULL AND s.service_date BETWEEN @start AND @end
+        GROUP BY day_born ORDER BY SUM(amount) DESC LIMIT 1) AS top_day_born
+  `).get(p);
+  const bars = db.prepare(`
+    WITH totals AS (
+      SELECT day_born, SUM(amount) AS amt
+      FROM day_born_splits dbs
+      JOIN services s ON s.service_id=dbs.service_id
+      WHERE s.deleted_at IS NULL AND s.service_date BETWEEN @start AND @end
+      GROUP BY day_born
+    ),
+    mx AS (SELECT COALESCE(MAX(amt),1) AS m FROM totals)
+    SELECT day_born, amt AS total_amount,
+           ROUND(amt * 100.0 / (SELECT m FROM mx), 1) AS bar_width_pct
+    FROM totals ORDER BY amt DESC
+  `).all(p);
+  const cross = db.prepare(`
+    SELECT dbs.day_born,
+      SUM(CASE WHEN st.type_name='Sunday Service'    THEN dbs.amount ELSE 0 END) AS sunday_svc,
+      SUM(CASE WHEN st.type_name='Wednesday Service' THEN dbs.amount ELSE 0 END) AS wednesday_svc,
+      SUM(CASE WHEN st.type_name='Wedding Service'   THEN dbs.amount ELSE 0 END) AS weddings,
+      SUM(CASE WHEN st.type_name='Funeral Service'   THEN dbs.amount ELSE 0 END) AS funerals,
+      SUM(dbs.amount) AS day_total,
+      ROUND(SUM(dbs.amount) * 100.0 / NULLIF((
+        SELECT SUM(dbs3.amount) FROM day_born_splits dbs3
+        JOIN services s3 ON s3.service_id=dbs3.service_id
+        WHERE s3.deleted_at IS NULL AND s3.service_date BETWEEN @start AND @end), 0), 1) AS pct
+    FROM day_born_splits dbs
+    JOIN services s ON s.service_id=dbs.service_id
+    JOIN service_types st ON st.service_type_id=s.service_type_id
+    WHERE s.deleted_at IS NULL AND s.service_date BETWEEN @start AND @end
+    GROUP BY dbs.day_born
+    ORDER BY ${DAY_ORDER_CASE}
+  `).all(p);
+  const crossTotals = cross.reduce((a, r) => ({
+    sunday: a.sunday + r.sunday_svc, wed: a.wed + r.wednesday_svc,
+    weddings: a.weddings + r.weddings, funerals: a.funerals + r.funerals,
+    grand: a.grand + r.day_total,
+  }), { sunday: 0, wed: 0, weddings: 0, funerals: 0, grand: 0 });
+
+  // --- Collections ---
+  const weekly = db.prepare(`
+    SELECT service_date,
+      CASE strftime('%w', service_date)
+        WHEN '0' THEN 'Sun' WHEN '1' THEN 'Mon' WHEN '2' THEN 'Tue'
+        WHEN '3' THEN 'Wed' WHEN '4' THEN 'Thu' WHEN '5' THEN 'Fri'
+        WHEN '6' THEN 'Sat' END AS day_name,
+      COUNT(*) AS num, SUM(total_amount) AS total
+    FROM services WHERE deleted_at IS NULL AND service_date BETWEEN ? AND ?
+    GROUP BY service_date ORDER BY service_date`).all(start, end);
+  const annual = db.prepare(`
+    SELECT strftime('%m', service_date) AS m, COUNT(*) AS num, SUM(total_amount) AS total
+    FROM services WHERE deleted_at IS NULL AND strftime('%Y', service_date)=?
+    GROUP BY m ORDER BY m`).all(year);
+
+  // --- Harvests ---
+  const harvestStatus = db.prepare(`
+    SELECT h.harvest_id, h.harvest_name, h.harvest_type, h.harvest_year, h.theme,
+           o.name AS org_name, h.total_collected,
+           COALESCE((SELECT SUM(pledged_amount) FROM pledges WHERE harvest_id=h.harvest_id),0) AS pledged,
+           COALESCE((SELECT SUM(paid_amount)    FROM pledges WHERE harvest_id=h.harvest_id),0) AS pledged_paid
+    FROM harvests h LEFT JOIN organizations o USING(org_id)
+    WHERE h.deleted_at IS NULL AND h.harvest_year=?
+    ORDER BY h.harvest_type, o.name`).all(year);
+
+  // --- Special offerings ---
+  const specialByCat = db.prepare(`
+    SELECT sc.category_name, COUNT(*) AS num, SUM(sp.amount) AS total
+    FROM special_offerings sp
+    JOIN special_categories sc USING(special_cat_id)
+    WHERE sp.deleted_at IS NULL AND sp.offering_date BETWEEN ? AND ?
+    GROUP BY sc.special_cat_id ORDER BY total DESC`).all(start, end);
+  const specialByDonor = db.prepare(`
+    SELECT COALESCE(m.first_name||' '||m.last_name, sp.donor_name_manual, 'Anonymous') AS donor,
+           COUNT(*) AS times, SUM(sp.amount) AS total
+    FROM special_offerings sp LEFT JOIN members m ON m.member_id=sp.donor_id
+    WHERE sp.deleted_at IS NULL AND sp.offering_date BETWEEN ? AND ?
+    GROUP BY donor ORDER BY total DESC LIMIT 20`).all(start, end);
+
+  // --- Expenses ---
+  const expByCat = db.prepare(`
+    SELECT COALESCE(ec.category_name, e.category) AS cat,
+           COUNT(*) AS num, SUM(e.amount) AS total
+    FROM expenses e LEFT JOIN expense_categories ec USING(expense_cat_id)
+    WHERE e.spent_on BETWEEN ? AND ?
+    GROUP BY cat ORDER BY total DESC`).all(start, end);
+  const expByMethod = db.prepare(`
+    SELECT COALESCE(payment_method,'(unspecified)') AS method,
+           COUNT(*) AS num, SUM(amount) AS total
+    FROM expenses WHERE spent_on BETWEEN ? AND ?
+    GROUP BY method ORDER BY total DESC`).all(start, end);
+
+  // --- Financial ---
+  const fin = db.prepare(`
+    SELECT
+      (SELECT COALESCE(SUM(total_amount),0) FROM services
+        WHERE deleted_at IS NULL AND service_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(total_collected),0) FROM harvests
+        WHERE deleted_at IS NULL AND COALESCE(harvest_date, harvest_year || '-01-01') BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM special_offerings
+        WHERE deleted_at IS NULL AND offering_date BETWEEN @s AND @e) AS income,
+      (SELECT COALESCE(SUM(amount),0) FROM expenses
+        WHERE spent_on BETWEEN @s AND @e) AS expenses
+  `).get({ s: start, e: end });
+  const finNet = fin.income - fin.expenses;
+  const cashFlow = db.prepare(`
+    WITH mi AS (
+      SELECT strftime('%Y-%m', service_date) ym, SUM(total_amount) amt
+        FROM services WHERE deleted_at IS NULL AND strftime('%Y', service_date)=@y GROUP BY ym
+      UNION ALL
+      SELECT strftime('%Y-%m', COALESCE(harvest_date, harvest_year || '-01-01')), SUM(total_collected)
+        FROM harvests WHERE deleted_at IS NULL AND harvest_year=CAST(@y AS INTEGER) GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', offering_date), SUM(amount)
+        FROM special_offerings WHERE deleted_at IS NULL AND strftime('%Y', offering_date)=@y GROUP BY 1
+    ),
+    me AS (SELECT strftime('%Y-%m', spent_on) ym, SUM(amount) amt
+             FROM expenses WHERE strftime('%Y', spent_on)=@y GROUP BY ym),
+    months AS (SELECT DISTINCT ym FROM mi UNION SELECT DISTINCT ym FROM me)
+    SELECT m.ym AS year_month,
+           COALESCE((SELECT SUM(amt) FROM mi WHERE mi.ym=m.ym),0) AS income,
+           COALESCE((SELECT amt FROM me WHERE me.ym=m.ym),0) AS expenses
+    FROM months m ORDER BY m.ym`).all({ y: year });
+
+  // --- Members ---
+  const topGivers = db.prepare(`
+    SELECT m.member_id, m.first_name || ' ' || m.last_name name, ROUND(SUM(sp.amount),2) total
+    FROM special_offerings sp JOIN members m ON m.member_id = sp.donor_id
+    WHERE sp.deleted_at IS NULL AND m.deleted_at IS NULL
+      AND sp.offering_date BETWEEN ? AND ?
+    GROUP BY m.member_id ORDER BY total DESC LIMIT 10`).all(start, end);
+  const birthdays = db.prepare(`
+    SELECT first_name || ' ' || last_name name, date_of_birth
+    FROM members WHERE deleted_at IS NULL AND date_of_birth IS NOT NULL
+      AND strftime('%m', date_of_birth)=strftime('%m','now')
+    ORDER BY strftime('%d', date_of_birth)`).all();
+
+  // --- Render the print document (uses normal layout — print stylesheet hides chrome) ---
+  const body = `
+    <div class="print-doc">
+      <p class="print-meta">Period: <strong>${esc(start)}</strong> → <strong>${esc(end)}</strong>
+        · Generated ${new Date().toLocaleString('en-GB')}
+        · ${esc(CHURCH_NAME)}</p>
+      <p class="screen-only"><button onclick="window.print()">🖨 Print this document</button>
+        <a class="btn ghost" href="/reports">Back to Reports</a></p>
+
+      <section class="print-section">
+        <h2>1. Day-Born Collection Report</h2>
+        <div class="stat-grid">
+          <div class="stat"><div class="ico green">₵</div><div>
+            <div class="label">Total Collected</div>
+            <div class="value">${fmtMoney(summary.total_collected)}</div></div></div>
+          <div class="stat"><div class="ico blue">📅</div><div>
+            <div class="label">Services Held</div><div class="value">${summary.services_held}</div></div></div>
+          <div class="stat"><div class="ico purple">∅</div><div>
+            <div class="label">Avg per Service</div>
+            <div class="value">${fmtMoney(summary.avg_per_service)}</div></div></div>
+          <div class="stat"><div class="ico orange">★</div><div>
+            <div class="label">Top Day-Born</div>
+            <div class="value" style="font-size:1.2rem">${esc(summary.top_day_born) || '—'}</div></div></div>
+        </div>
+        ${bars.length ? `<h3>Day-Born Contribution Bars</h3>
+          <div class="bar-list">${bars.map((b) => `
+            <div class="bar-row">
+              <div class="bar-label">${esc(b.day_born)}</div>
+              <div class="bar-track"><div class="bar-fill" style="width:${Math.max(b.bar_width_pct, 1)}%"></div></div>
+              <div class="bar-value">${fmtMoney(b.total_amount)}</div>
+            </div>`).join('')}</div>` : ''}
+        <h3>Detailed crosstab</h3>
+        ${cross.length ? table(['Day-Born', 'Sunday Svc', 'Wed Svc', 'Weddings', 'Funerals', 'Total', '% of period'],
+          cross.map((r) => [esc(r.day_born),
+            fmtMoney(r.sunday_svc), fmtMoney(r.wednesday_svc),
+            fmtMoney(r.weddings), fmtMoney(r.funerals),
+            `<strong>${fmtMoney(r.day_total)}</strong>`,
+            (r.pct == null ? '—' : r.pct + '%')])
+            .concat([[
+              '<strong>TOTAL</strong>',
+              `<strong>${fmtMoney(crossTotals.sunday)}</strong>`,
+              `<strong>${fmtMoney(crossTotals.wed)}</strong>`,
+              `<strong>${fmtMoney(crossTotals.weddings)}</strong>`,
+              `<strong>${fmtMoney(crossTotals.funerals)}</strong>`,
+              `<strong>${fmtMoney(crossTotals.grand)}</strong>`,
+              '<strong>100.0%</strong>',
+            ]]))
+          : '<p class="muted-text">No data for this period.</p>'}
+      </section>
+
+      <section class="print-section">
+        <h2>2. Collections</h2>
+        <h3>Daily totals</h3>
+        ${weekly.length ? table(['Date', 'Day', 'Services', 'Total'],
+          weekly.map((r) => [esc(r.service_date), esc(r.day_name), r.num, fmtMoney(r.total)]))
+          : '<p class="muted-text">No services recorded.</p>'}
+        <h3>Annual breakdown · ${esc(year)}</h3>
+        ${annual.length ? table(['Month', 'Services', 'Total'],
+          annual.map((r) => [MONTH_NAMES[parseInt(r.m, 10)], r.num, fmtMoney(r.total)]))
+          : '<p class="muted-text">No services this year.</p>'}
+      </section>
+
+      <section class="print-section">
+        <h2>3. Harvests · ${esc(year)}</h2>
+        ${harvestStatus.length ? table(['Type', 'Name', 'Organization', 'Theme', 'Collected', 'Pledged', 'Pledges paid'],
+          harvestStatus.map((r) => [esc(r.harvest_type), esc(r.harvest_name),
+            esc(r.org_name) || 'Church-wide', esc(r.theme),
+            fmtMoney(r.total_collected), fmtMoney(r.pledged), fmtMoney(r.pledged_paid)]))
+          : '<p class="muted-text">No harvests this year.</p>'}
+      </section>
+
+      <section class="print-section">
+        <h2>4. Special Offerings</h2>
+        <h3>By category</h3>
+        ${specialByCat.length ? table(['Category', '#', 'Total'],
+          specialByCat.map((r) => [esc(r.category_name), r.num, fmtMoney(r.total)]))
+          : '<p class="muted-text">None in this period.</p>'}
+        <h3>Top donors</h3>
+        ${specialByDonor.length ? table(['Donor', '#', 'Total'],
+          specialByDonor.map((r) => [esc(r.donor), r.times, fmtMoney(r.total)]))
+          : '<p class="muted-text">None in this period.</p>'}
+      </section>
+
+      <section class="print-section">
+        <h2>5. Expenses</h2>
+        <h3>By category</h3>
+        ${expByCat.length ? table(['Category', '#', 'Total'],
+          expByCat.map((r) => [esc(r.cat), r.num, fmtMoney(r.total)]))
+          : '<p class="muted-text">No expenses in this period.</p>'}
+        <h3>By payment method</h3>
+        ${expByMethod.length ? table(['Method', '#', 'Total'],
+          expByMethod.map((r) => [esc(r.method), r.num, fmtMoney(r.total)]))
+          : ''}
+      </section>
+
+      <section class="print-section">
+        <h2>6. Financial Summary</h2>
+        <div class="stat-grid">
+          <div class="stat"><div class="ico green">↑</div><div>
+            <div class="label">Total income</div>
+            <div class="value">${fmtMoney(fin.income)}</div></div></div>
+          <div class="stat"><div class="ico orange">↓</div><div>
+            <div class="label">Total expenses</div>
+            <div class="value">${fmtMoney(fin.expenses)}</div></div></div>
+          <div class="stat"><div class="ico purple">=</div><div>
+            <div class="label">Net</div>
+            <div class="value" style="color:${finNet >= 0 ? 'var(--pos)' : 'var(--danger)'}">${fmtMoney(finNet)}</div></div></div>
+        </div>
+        <h3>Cash flow · ${esc(year)}</h3>
+        ${cashFlow.length ? table(['Month', 'Income', 'Expenses', 'Net'],
+          cashFlow.map((r) => [esc(r.year_month), fmtMoney(r.income),
+            fmtMoney(r.expenses), fmtMoney(r.income - r.expenses)]))
+          : '<p class="muted-text">No financial activity this year.</p>'}
+      </section>
+
+      <section class="print-section">
+        <h2>7. Members</h2>
+        <h3>Top givers for the period</h3>
+        ${topGivers.length ? table(['Member', 'Total'],
+          topGivers.map((r) => [esc(r.name), fmtMoney(r.total)]))
+          : '<p class="muted-text">No giving recorded for this period.</p>'}
+        <h3>Birthdays this month</h3>
+        ${birthdays.length ? table(['Name', 'Date of birth'],
+          birthdays.map((r) => [esc(r.name), esc(r.date_of_birth)]))
+          : '<p class="muted-text">None.</p>'}
+      </section>
+    </div>`;
+  res.page({ title: 'All Reports', active: '/reports', body });
+});
+
 app.get('/reports/day-born', (req, res) => {
   const { start, end } = defaultRange(req);
   const params = { start, end };

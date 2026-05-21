@@ -247,6 +247,18 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
   transition: width 0.3s;
 }
 .bar-value { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+.print-doc .print-section { margin-bottom: 2rem; page-break-inside: avoid; }
+.print-doc .print-meta {
+  color: var(--muted); border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem; margin-bottom: 1rem;
+}
+@media print {
+  .screen-only { display: none !important; }
+  .print-doc .print-section { page-break-inside: auto; page-break-after: auto; }
+  .print-doc h2 { page-break-before: auto; }
+  .print-doc .stat-grid { page-break-inside: avoid; }
+}
 .muted-text { color: var(--muted); }
 
 /* ---------- Stat cards ---------- */
