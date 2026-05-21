@@ -109,10 +109,143 @@ function addColumnIfMissing(table, col, ddl) {
 addColumnIfMissing('members', 'external_id',       `external_id TEXT`);
 addColumnIfMissing('members', 'confirmation_date', `confirmation_date TEXT`);
 addColumnIfMissing('members', 'bible_class_id',    `bible_class_id INTEGER REFERENCES ministries(ministry_id)`);
+addColumnIfMissing('members', 'day_born',          `day_born TEXT`);
 addColumnIfMissing('members', 'deleted_at',        `deleted_at TEXT`);
 addColumnIfMissing('users',   'deleted_at',        `deleted_at TEXT`);
 addColumnIfMissing('ministries', 'org_id',         `org_id INTEGER REFERENCES organizations(org_id)`);
+addColumnIfMissing('expenses', 'paid_to',          `paid_to TEXT`);
+addColumnIfMissing('expenses', 'payment_method',   `payment_method TEXT`);
+addColumnIfMissing('expenses', 'approved_by',      `approved_by INTEGER REFERENCES users(user_id)`);
+addColumnIfMissing('expenses', 'receipt_attached', `receipt_attached INTEGER NOT NULL DEFAULT 0`);
+addColumnIfMissing('expenses', 'reference_number', `reference_number TEXT`);
+addColumnIfMissing('expenses', 'expense_cat_id',   `expense_cat_id INTEGER REFERENCES expense_categories(expense_cat_id)`);
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_external_id ON members(external_id) WHERE external_id IS NOT NULL`); } catch (_) {}
+
+// Finance schema (services, harvests, day-born splits, special offerings, pledges, lookups).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS service_types (
+    service_type_id INTEGER PRIMARY KEY,
+    type_name       TEXT NOT NULL UNIQUE,
+    description     TEXT,
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS services (
+    service_id      INTEGER PRIMARY KEY,
+    service_type_id INTEGER NOT NULL REFERENCES service_types(service_type_id),
+    service_date    TEXT NOT NULL,
+    total_amount    REAL NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+    recorded_by     INTEGER REFERENCES users(user_id),
+    notes           TEXT,
+    deleted_at      TEXT,
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_services_date ON services(service_date);
+
+  CREATE TABLE IF NOT EXISTS harvests (
+    harvest_id      INTEGER PRIMARY KEY,
+    harvest_type    TEXT NOT NULL CHECK (harvest_type IN ('Organizational','End-of-Year')),
+    harvest_name    TEXT NOT NULL,
+    harvest_year    INTEGER NOT NULL,
+    harvest_date    TEXT,
+    theme           TEXT,
+    org_id          INTEGER REFERENCES organizations(org_id),
+    total_collected REAL NOT NULL DEFAULT 0 CHECK (total_collected >= 0),
+    recorded_by     INTEGER REFERENCES users(user_id),
+    notes           TEXT,
+    deleted_at      TEXT,
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_harvests_year ON harvests(harvest_year);
+
+  CREATE TABLE IF NOT EXISTS day_born_splits (
+    split_id    INTEGER PRIMARY KEY,
+    service_id  INTEGER REFERENCES services(service_id)  ON DELETE CASCADE,
+    harvest_id  INTEGER REFERENCES harvests(harvest_id)  ON DELETE CASCADE,
+    day_born    TEXT NOT NULL CHECK (day_born IN ('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')),
+    amount      REAL NOT NULL DEFAULT 0 CHECK (amount >= 0),
+    head_count  INTEGER DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((service_id IS NOT NULL AND harvest_id IS NULL)
+        OR (service_id IS NULL     AND harvest_id IS NOT NULL))
+  );
+  CREATE INDEX IF NOT EXISTS idx_splits_service ON day_born_splits(service_id);
+  CREATE INDEX IF NOT EXISTS idx_splits_harvest ON day_born_splits(harvest_id);
+
+  CREATE TABLE IF NOT EXISTS special_categories (
+    special_cat_id INTEGER PRIMARY KEY,
+    category_name  TEXT NOT NULL UNIQUE,
+    description    TEXT,
+    is_active      INTEGER NOT NULL DEFAULT 1,
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS special_offerings (
+    special_id        INTEGER PRIMARY KEY,
+    special_cat_id    INTEGER NOT NULL REFERENCES special_categories(special_cat_id),
+    offering_date     TEXT NOT NULL,
+    donor_id          INTEGER REFERENCES members(member_id),
+    donor_name_manual TEXT,
+    amount            REAL NOT NULL CHECK (amount > 0),
+    purpose           TEXT,
+    receipt_number    TEXT,
+    recorded_by       INTEGER REFERENCES users(user_id),
+    notes             TEXT,
+    deleted_at        TEXT,
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_special_date ON special_offerings(offering_date);
+
+  CREATE TABLE IF NOT EXISTS pledges (
+    pledge_id      INTEGER PRIMARY KEY,
+    member_id      INTEGER NOT NULL REFERENCES members(member_id) ON DELETE CASCADE,
+    harvest_id     INTEGER NOT NULL REFERENCES harvests(harvest_id) ON DELETE CASCADE,
+    pledged_amount REAL NOT NULL CHECK (pledged_amount > 0),
+    paid_amount    REAL NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+    pledge_date    TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'Pending'
+                   CHECK (status IN ('Pending','Partial','Fulfilled','Cancelled')),
+    notes          TEXT,
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS expense_categories (
+    expense_cat_id INTEGER PRIMARY KEY,
+    category_name  TEXT NOT NULL UNIQUE,
+    description    TEXT,
+    is_active      INTEGER NOT NULL DEFAULT 1
+  );
+`);
+
+// Seed default lookup values (idempotent).
+const insertServiceType = db.prepare(`INSERT OR IGNORE INTO service_types (type_name, description) VALUES (?, ?)`);
+[
+  ['Sunday Service',    'Regular Sunday worship service'],
+  ['Wednesday Service', 'Midweek service'],
+  ['Wedding Service',   'Wedding ceremony offering'],
+  ['Funeral Service',   'Funeral / memorial service offering'],
+].forEach(([n, d]) => insertServiceType.run(n, d));
+
+const insertSpecialCat = db.prepare(`INSERT OR IGNORE INTO special_categories (category_name, description) VALUES (?, ?)`);
+[
+  ['Building Fund',          'Church construction / renovation'],
+  ['Mission / Outreach',     'Evangelism and outreach work'],
+  ['Thanksgiving',           'Thanksgiving offerings'],
+  ["Pastor's Appreciation",  'Pastor appreciation offering'],
+  ['Welfare / Benevolence',  'Support for members in need'],
+  ['Convention / Camp',      'Conventions, camps, conferences'],
+  ['Vow / Pledge',           'Personal vows and pledges'],
+].forEach(([n, d]) => insertSpecialCat.run(n, d));
+
+const insertExpenseCat = db.prepare(`INSERT OR IGNORE INTO expense_categories (category_name, description) VALUES (?, ?)`);
+[
+  ['Utilities',       'Electricity, water, internet'],
+  ['Salaries',        'Pastor and staff salaries'],
+  ['Maintenance',     'Building and equipment upkeep'],
+  ['Office Supplies', 'Stationery, printing'],
+  ['Outreach',        'Mission and outreach expenses'],
+  ['Welfare',         'Support to members'],
+  ['Events',          'Convention, camp, special events'],
+].forEach(([n, d]) => insertExpenseCat.run(n, d));
 
 // Seed the five default organizations (idempotent).
 const DEFAULT_ORGS = [
@@ -124,6 +257,22 @@ const DEFAULT_ORGS = [
 ];
 const insertOrg = db.prepare(`INSERT OR IGNORE INTO organizations (name) VALUES (?)`);
 for (const n of DEFAULT_ORGS) insertOrg.run(n);
+
+// One-time migrations log (so destructive changes only run once).
+db.exec(`CREATE TABLE IF NOT EXISTS app_migrations (
+  migration_id TEXT PRIMARY KEY,
+  applied_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`);
+function runOnce(id, fn) {
+  const seen = db.prepare(`SELECT 1 FROM app_migrations WHERE migration_id = ?`).get(id);
+  if (seen) return;
+  try { fn(); db.prepare(`INSERT INTO app_migrations (migration_id) VALUES (?)`).run(id); }
+  catch (e) { console.error(`Migration ${id} failed:`, e.message); }
+}
+runOnce('wipe_old_contributions_v1', () => {
+  // The new Finance module replaces the legacy `contributions` table for new entries.
+  db.exec(`DELETE FROM contributions`);
+});
 
 // Households are no longer used — clean them up if anything is left.
 try {
@@ -214,6 +363,8 @@ const NAV = [
   ['/users',           'Users & Roles',  '🔑', 'admin'],
   ['/settings',        'Settings',       '⚙'],
 ];
+
+const DAYS_OF_WEEK = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 // Auto-generated DMS-### member IDs.
 const MEMBER_ID_PREFIX = process.env.MEMBER_ID_PREFIX || 'DMS';
@@ -415,12 +566,16 @@ app.get('/', (req, res) => {
     : null;
 
   const offeringsThisMonth = db.prepare(`
-    SELECT COALESCE(SUM(amount),0) t FROM contributions
-    WHERE substr(contributed_on,1,7) = strftime('%Y-%m','now')
+    SELECT COALESCE((SELECT SUM(total_amount) FROM services
+      WHERE deleted_at IS NULL AND substr(service_date,1,7)=strftime('%Y-%m','now')),0)
+         + COALESCE((SELECT SUM(amount) FROM special_offerings
+      WHERE deleted_at IS NULL AND substr(offering_date,1,7)=strftime('%Y-%m','now')),0) AS t
   `).get().t;
   const offeringsLastMonth = db.prepare(`
-    SELECT COALESCE(SUM(amount),0) t FROM contributions
-    WHERE substr(contributed_on,1,7) = strftime('%Y-%m', date('now','start of month','-1 day'))
+    SELECT COALESCE((SELECT SUM(total_amount) FROM services
+      WHERE deleted_at IS NULL AND substr(service_date,1,7)=strftime('%Y-%m', date('now','start of month','-1 day'))),0)
+         + COALESCE((SELECT SUM(amount) FROM special_offerings
+      WHERE deleted_at IS NULL AND substr(offering_date,1,7)=strftime('%Y-%m', date('now','start of month','-1 day'))),0) AS t
   `).get().t;
   const offeringsDelta = offeringsLastMonth > 0
     ? Math.round(((offeringsThisMonth - offeringsLastMonth) / offeringsLastMonth) * 100)
@@ -460,12 +615,24 @@ app.get('/', (req, res) => {
     SELECT COALESCE(SUM(amount),0) t FROM expenses
     WHERE substr(spent_on,1,7) = strftime('%Y-%m','now')
   `).get().t;
-  const byFundMonth = db.prepare(`
-    SELECT f.name, COALESCE(SUM(c.amount),0) t
-    FROM funds f LEFT JOIN contributions c
-      ON c.fund_id=f.fund_id AND substr(c.contributed_on,1,7)=strftime('%Y-%m','now')
-    GROUP BY f.fund_id ORDER BY t DESC
-  `).all();
+  const servicesMonth = db.prepare(
+    `SELECT COALESCE(SUM(total_amount),0) t FROM services
+       WHERE deleted_at IS NULL AND substr(service_date,1,7)=strftime('%Y-%m','now')`
+  ).get().t;
+  const harvestsMonth = db.prepare(
+    `SELECT COALESCE(SUM(total_collected),0) t FROM harvests
+       WHERE deleted_at IS NULL AND harvest_year=strftime('%Y','now')`
+  ).get().t;
+  const specialByCat = db.prepare(`
+    SELECT sc.category_name AS name, COALESCE(SUM(sp.amount),0) t
+    FROM special_categories sc
+    LEFT JOIN special_offerings sp
+      ON sp.special_cat_id=sc.special_cat_id
+      AND sp.deleted_at IS NULL
+      AND substr(sp.offering_date,1,7)=strftime('%Y-%m','now')
+    GROUP BY sc.special_cat_id
+    HAVING t > 0
+    ORDER BY t DESC`).all();
 
   const birthdays = db.prepare(`
     SELECT member_id, first_name || ' ' || last_name AS name, date_of_birth
@@ -572,21 +739,18 @@ app.get('/', (req, res) => {
       ${sparkline(trendPts)}
     </div>`;
 
-  const tithesMonth = (byFundMonth.find((r) => r.name === 'Tithes') || { t: 0 }).t;
-  const buildingMonth = (byFundMonth.find((r) => r.name === 'Building') || { t: 0 }).t;
-  const benevolentMonth = (byFundMonth.find((r) => r.name === 'Benevolence') || { t: 0 }).t;
-  const netBalance = offeringsThisMonth - monthExpenses;
+  const netBalance = offeringsThisMonth + harvestsMonth - monthExpenses;
+  const specialRows = specialByCat.slice(0, 3).map((s) =>
+    `<div class="fin-row"><span class="lbl"><span class="dot">✨</span> ${esc(s.name)}</span>
+       <span class="val">${fmtMoney(s.t)}</span></div>`).join('');
   const financeCard = `
     <div class="card">
       <div class="card-head"><h2>Finance Summary</h2><span class="meta">This month</span></div>
-      <div class="fin-row"><span class="lbl"><span class="dot">₵</span> Total Offerings</span>
-        <span class="val">${fmtMoney(offeringsThisMonth)}</span></div>
-      <div class="fin-row"><span class="lbl"><span class="dot">✓</span> Tithes</span>
-        <span class="val">${fmtMoney(tithesMonth)}</span></div>
-      <div class="fin-row"><span class="lbl"><span class="dot">♥</span> Benevolence</span>
-        <span class="val">${fmtMoney(benevolentMonth)}</span></div>
-      <div class="fin-row"><span class="lbl"><span class="dot">🏠</span> Building</span>
-        <span class="val">${fmtMoney(buildingMonth)}</span></div>
+      <div class="fin-row"><span class="lbl"><span class="dot">₵</span> Service Offerings</span>
+        <span class="val">${fmtMoney(servicesMonth)}</span></div>
+      <div class="fin-row"><span class="lbl"><span class="dot">🌾</span> Harvests</span>
+        <span class="val">${fmtMoney(harvestsMonth)}</span></div>
+      ${specialRows}
       <div class="fin-row"><span class="lbl"><span class="dot">🧾</span> Expenses</span>
         <span class="val neg">${fmtMoney(monthExpenses)}</span></div>
       <div class="fin-row total"><span class="lbl">Net Balance</span>
@@ -743,6 +907,10 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
       <label>Email<input type="email" name="email" value="${esc(member.email)}"></label>
       <label>Mobile<input name="mobile_phone" value="${esc(member.mobile_phone)}"></label>
       <label>Date of birth<input type="date" name="date_of_birth" value="${fmtDate(member.date_of_birth)}"></label>
+      <label>Day born<select name="day_born">
+        <option value="">—</option>
+        ${DAYS_OF_WEEK.map((d) => `<option value="${d}" ${d === (member.day_born || '') ? 'selected' : ''}>${d}</option>`).join('')}
+      </select></label>
       <label>Gender<select name="gender">${genderOpts}</select></label>
       <label>Marital<select name="marital_status">${maritalOpts}</select></label>
       <label>Bible class<select name="bible_class_id">${bibleClassOpts}</select></label>
@@ -786,17 +954,19 @@ app.post('/members', requireAdmin, (req, res) => {
   const externalId = nextMemberId();
   const info = db.prepare(`
     INSERT INTO members (external_id, bible_class_id, first_name, last_name, email, mobile_phone,
-      date_of_birth, gender, marital_status, membership_status,
+      date_of_birth, day_born, gender, marital_status, membership_status,
       join_date, baptism_date, confirmation_date, notes)
     VALUES (@external_id, @bible_class_id, @first_name, @last_name, @email, @mobile_phone,
-      @date_of_birth, @gender, @marital_status, @membership_status,
+      @date_of_birth, @day_born, @gender, @marital_status, @membership_status,
       @join_date, @baptism_date, @confirmation_date, @notes)
   `).run({
     external_id: externalId,
     bible_class_id: b.bible_class_id ? Number(b.bible_class_id) : null,
     first_name: b.first_name, last_name: b.last_name,
     email: b.email || null, mobile_phone: b.mobile_phone || null,
-    date_of_birth: b.date_of_birth || null, gender: b.gender || null,
+    date_of_birth: b.date_of_birth || null,
+    day_born: DAYS_OF_WEEK.includes(b.day_born) ? b.day_born : null,
+    gender: b.gender || null,
     marital_status: b.marital_status || null,
     membership_status: b.membership_status || 'visitor',
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
@@ -828,12 +998,15 @@ app.get('/members/:id', (req, res) => {
     JOIN ministries mn USING(ministry_id) WHERE mm.member_id = ? AND mm.left_date IS NULL
     ORDER BY mn.name`).all(id);
   const contribs = db.prepare(`
-    SELECT c.contributed_on, f.name fund, c.amount, c.method
-    FROM contributions c JOIN funds f USING(fund_id)
-    WHERE c.member_id = ? ORDER BY c.contributed_on DESC LIMIT 20`).all(id);
+    SELECT sp.offering_date AS contributed_on, sc.category_name AS fund, sp.amount, NULL AS method
+    FROM special_offerings sp
+    JOIN special_categories sc USING(special_cat_id)
+    WHERE sp.donor_id = ? AND sp.deleted_at IS NULL
+    ORDER BY sp.offering_date DESC LIMIT 20`).all(id);
   const ytd = db.prepare(`
-    SELECT COALESCE(SUM(amount),0) total FROM contributions
-    WHERE member_id = ? AND substr(contributed_on,1,4) = strftime('%Y','now')`).get(id).total;
+    SELECT COALESCE(SUM(amount),0) total FROM special_offerings
+    WHERE donor_id = ? AND deleted_at IS NULL
+      AND substr(offering_date,1,4) = strftime('%Y','now')`).get(id).total;
   const sacraments = db.prepare(`
     SELECT sacrament_type, occurred_on, location FROM sacraments
     WHERE member_id = ? OR spouse_id = ? ORDER BY occurred_on DESC`).all(id, id);
@@ -905,7 +1078,8 @@ app.post('/members/:id', requireAdmin, (req, res) => {
   const b = req.body;
   db.prepare(`
     UPDATE members SET bible_class_id=@bible_class_id, first_name=@first_name, last_name=@last_name,
-      email=@email, mobile_phone=@mobile_phone, date_of_birth=@date_of_birth, gender=@gender,
+      email=@email, mobile_phone=@mobile_phone, date_of_birth=@date_of_birth,
+      day_born=@day_born, gender=@gender,
       marital_status=@marital_status, membership_status=@membership_status,
       join_date=@join_date, baptism_date=@baptism_date,
       confirmation_date=@confirmation_date, notes=@notes
@@ -914,7 +1088,9 @@ app.post('/members/:id', requireAdmin, (req, res) => {
     bible_class_id: b.bible_class_id ? Number(b.bible_class_id) : null,
     first_name: b.first_name, last_name: b.last_name,
     email: b.email || null, mobile_phone: b.mobile_phone || null,
-    date_of_birth: b.date_of_birth || null, gender: b.gender || null,
+    date_of_birth: b.date_of_birth || null,
+    day_born: DAYS_OF_WEEK.includes(b.day_born) ? b.day_born : null,
+    gender: b.gender || null,
     marital_status: b.marital_status || null,
     membership_status: b.membership_status || 'visitor',
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
@@ -1133,140 +1309,585 @@ app.post('/events/:id/uncheck', requireAdmin, (req, res) => {
 // Keep old URLs working.
 app.get('/contributions', (_, res) => res.redirect('/finance'));
 
-// ---------- finance (offerings + expenses) ----------
+// ---------- finance: shared helpers ----------
+const FINANCE_TABS = [
+  ['/finance',          'Overview'],
+  ['/finance/services', 'Services'],
+  ['/finance/harvests', 'Harvests'],
+  ['/finance/special',  'Special Offerings'],
+  ['/finance/pledges',  'Pledges'],
+  ['/finance/expenses', 'Expenses'],
+];
+function financeTabs(activePath) {
+  return `<div class="finance-tabs">${FINANCE_TABS.map(([href, label]) =>
+    `<a class="${href === activePath ? 'active' : ''}" href="${href}">${esc(label)}</a>`).join('')}</div>`;
+}
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function loadServiceTypes() {
+  return db.prepare(`SELECT service_type_id, type_name FROM service_types WHERE is_active=1 ORDER BY type_name`).all();
+}
+function loadSpecialCategories() {
+  return db.prepare(`SELECT special_cat_id, category_name FROM special_categories WHERE is_active=1 ORDER BY category_name`).all();
+}
+function loadExpenseCategories() {
+  return db.prepare(`SELECT expense_cat_id, category_name FROM expense_categories WHERE is_active=1 ORDER BY category_name`).all();
+}
+function loadMembersList() {
+  return db.prepare(`SELECT member_id, first_name || ' ' || last_name AS name, external_id
+                     FROM members WHERE deleted_at IS NULL ORDER BY last_name`).all();
+}
+
+// Parse day-born inputs from a form body. Returns array of {day, amount, head_count}.
+function parseDayBornInputs(b) {
+  return DAYS_OF_WEEK.map((day) => ({
+    day,
+    amount: Number(b[`day_${day}_amount`] || 0),
+    head_count: Number(b[`day_${day}_heads`] || 0),
+  })).filter((r) => r.amount > 0 || r.head_count > 0);
+}
+function dayBornFormInputs() {
+  return `<div class="day-born-grid">${DAYS_OF_WEEK.map((d) => `
+    <div class="db-cell">
+      <div class="db-day">${d}</div>
+      <label>Amount<input type="number" step="0.01" min="0" name="day_${d}_amount"></label>
+      <label>Heads<input type="number" min="0" name="day_${d}_heads"></label>
+    </div>`).join('')}</div>`;
+}
+
+// ---------- finance: overview ----------
 app.get('/finance', (req, res) => {
-  const funds = db.prepare(`SELECT * FROM funds WHERE active=1 ORDER BY name`).all();
-  const members = db.prepare(`
-    SELECT member_id, first_name || ' ' || last_name AS name FROM members
-    WHERE deleted_at IS NULL ORDER BY last_name`).all();
-  const rows = db.prepare(`
-    SELECT c.contribution_id, c.contributed_on,
-           COALESCE(m.first_name || ' ' || m.last_name, '(anonymous)') donor,
-           m.member_id, f.name fund, c.amount, c.method, c.reference
-    FROM contributions c LEFT JOIN members m USING(member_id)
-    JOIN funds f USING(fund_id)
-    ORDER BY c.contributed_on DESC, c.contribution_id DESC LIMIT 100`).all();
-  const byFund = db.prepare(`
-    SELECT f.name fund, ROUND(SUM(c.amount),2) total
-    FROM contributions c JOIN funds f USING(fund_id)
-    WHERE substr(c.contributed_on,1,4)=strftime('%Y','now')
-    GROUP BY f.fund_id ORDER BY total DESC`).all();
+  const yearFilter = `substr(?,1,4) = strftime('%Y','now')`;
+  const sumYTD = (sql) => db.prepare(sql).get().t;
+  const services = sumYTD(`SELECT COALESCE(SUM(total_amount),0) t FROM services WHERE deleted_at IS NULL AND substr(service_date,1,4)=strftime('%Y','now')`);
+  const harvests = sumYTD(`SELECT COALESCE(SUM(total_collected),0) t FROM harvests WHERE deleted_at IS NULL AND harvest_year=strftime('%Y','now')`);
+  const special = sumYTD(`SELECT COALESCE(SUM(amount),0) t FROM special_offerings WHERE deleted_at IS NULL AND substr(offering_date,1,4)=strftime('%Y','now')`);
+  const expenses = sumYTD(`SELECT COALESCE(SUM(amount),0) t FROM expenses WHERE substr(spent_on,1,4)=strftime('%Y','now')`);
+  const offerings = services + special;
+  const net = offerings + harvests - expenses;
 
-  const fundOpts = funds.map((f) => `<option value="${f.fund_id}">${esc(f.name)}</option>`).join('');
-  const memOpts = '<option value="">(anonymous)</option>' +
-    members.map((m) => `<option value="${m.member_id}">${esc(m.name)}</option>`).join('');
-
-  const recordPanel = res.locals.isAdmin
-    ? `<h2>Record contribution</h2>
-       <form class="form" method="post" action="/contributions">
-         <label>Date<input type="date" name="contributed_on" required value="${new Date().toISOString().slice(0,10)}"></label>
-         <label>Member<select name="member_id">${memOpts}</select></label>
-         <label>Fund<select name="fund_id" required>${fundOpts}</select></label>
-         <label>Amount<input type="number" step="0.01" min="0.01" name="amount" required></label>
-         <label>Method<select name="method">
-           ${['cash','check','card','online','transfer','other'].map((m) => `<option>${m}</option>`).join('')}
-         </select></label>
-         <label>Reference<input name="reference"></label>
-         <div class="actions"><button type="submit">Save</button></div>
-       </form>`
-    : '';
-  const expenseRows = db.prepare(`
-    SELECT e.expense_id, e.spent_on, e.category, e.amount, e.description, f.name fund
-    FROM expenses e LEFT JOIN funds f USING(fund_id)
-    ORDER BY e.spent_on DESC, e.expense_id DESC LIMIT 50`).all();
-  const totalContrib = db.prepare(
-    `SELECT COALESCE(SUM(amount),0) t FROM contributions WHERE substr(contributed_on,1,4)=strftime('%Y','now')`
-  ).get().t;
-  const totalExpense = db.prepare(
-    `SELECT COALESCE(SUM(amount),0) t FROM expenses WHERE substr(spent_on,1,4)=strftime('%Y','now')`
-  ).get().t;
-
-  const expensePanel = res.locals.isAdmin
-    ? `<h2>Record expense</h2>
-       <form class="form" method="post" action="/finance/expenses">
-         <label>Date<input type="date" name="spent_on" required value="${new Date().toISOString().slice(0,10)}"></label>
-         <label>Category<input name="category" placeholder="e.g. utilities" required></label>
-         <label>Amount<input type="number" step="0.01" min="0.01" name="amount" required></label>
-         <label>Fund<select name="fund_id"><option value="">(none)</option>${fundOpts}</select></label>
-         <label class="wide">Description<input name="description"></label>
-         <div class="actions"><button type="submit">Save</button></div>
-       </form>`
-    : '';
-
-  const summary = `
-    <div class="stat-grid">
-      <div class="stat"><div class="ico green">↑</div><div>
-        <div class="label">YTD Offerings</div>
-        <div class="value">${fmtMoney(totalContrib)}</div></div></div>
-      <div class="stat"><div class="ico orange">↓</div><div>
-        <div class="label">YTD Expenses</div>
-        <div class="value">${fmtMoney(totalExpense)}</div></div></div>
-      <div class="stat"><div class="ico purple">=</div><div>
-        <div class="label">Net YTD</div>
-        <div class="value">${fmtMoney(totalContrib - totalExpense)}</div></div></div>
-    </div>`;
+  const recentServices = db.prepare(`
+    SELECT s.service_id, s.service_date, s.total_amount, st.type_name
+    FROM services s JOIN service_types st USING(service_type_id)
+    WHERE s.deleted_at IS NULL
+    ORDER BY s.service_date DESC, s.service_id DESC LIMIT 5`).all();
+  const recentSpecial = db.prepare(`
+    SELECT sp.special_id, sp.offering_date, sp.amount, sc.category_name,
+           COALESCE(m.first_name || ' ' || m.last_name, sp.donor_name_manual, '(anonymous)') donor
+    FROM special_offerings sp
+    JOIN special_categories sc USING(special_cat_id)
+    LEFT JOIN members m ON m.member_id = sp.donor_id
+    WHERE sp.deleted_at IS NULL
+    ORDER BY sp.offering_date DESC, sp.special_id DESC LIMIT 5`).all();
+  const dayBornYtd = db.prepare(`
+    SELECT day_born, ROUND(SUM(amount),2) total, SUM(head_count) heads
+    FROM day_born_splits dbs
+    LEFT JOIN services s USING(service_id)
+    WHERE (s.service_date IS NULL OR substr(s.service_date,1,4)=strftime('%Y','now'))
+    GROUP BY day_born`).all();
+  const dayBornMap = Object.fromEntries(dayBornYtd.map((r) => [r.day_born, r]));
 
   const body = `
-    ${summary}
-    <div class="two-col">
-      <section>${recordPanel}</section>
-      <section>${expensePanel}</section>
+    ${financeTabs('/finance')}
+    <div class="stat-grid">
+      <div class="stat"><div class="ico green">↑</div><div>
+        <div class="label">Service Offerings YTD</div>
+        <div class="value">${fmtMoney(services)}</div></div></div>
+      <div class="stat"><div class="ico blue">🌾</div><div>
+        <div class="label">Harvests YTD</div>
+        <div class="value">${fmtMoney(harvests)}</div></div></div>
+      <div class="stat"><div class="ico purple">✨</div><div>
+        <div class="label">Special Offerings YTD</div>
+        <div class="value">${fmtMoney(special)}</div></div></div>
+      <div class="stat"><div class="ico orange">🧾</div><div>
+        <div class="label">Expenses YTD</div>
+        <div class="value">${fmtMoney(expenses)}</div></div></div>
     </div>
-    <h2>YTD by fund</h2>
-    ${table(['Fund', 'Total'], byFund.map((r) => [esc(r.fund), fmtMoney(r.total)]))}
-    <h2>Recent contributions</h2>
-    ${table(['Date', 'Donor', 'Fund', 'Amount', 'Method', 'Reference'],
-      rows.map((r) => [esc(r.contributed_on),
-        r.member_id ? `<a href="/members/${r.member_id}">${esc(r.donor)}</a>` : esc(r.donor),
-        esc(r.fund), fmtMoney(r.amount), esc(r.method), esc(r.reference)]))}
-    <h2>Recent expenses</h2>
-    ${expenseRows.length
-      ? table(['Date', 'Category', 'Description', 'Fund', 'Amount'],
-          expenseRows.map((e) => [esc(e.spent_on), esc(e.category),
-            esc(e.description), esc(e.fund), fmtMoney(e.amount)]))
-      : '<p class="muted-text">No expenses recorded.</p>'}`;
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Net YTD</h2><span class="meta">Offerings + Harvests − Expenses</span></div>
+      <div class="value" style="font-size:1.8rem;font-weight:700;color:${net >= 0 ? 'var(--pos)' : 'var(--danger)'}">${fmtMoney(net)}</div>
+    </div>
+
+    <div class="two-col">
+      <section class="card">
+        <div class="card-head"><h2>Recent Services</h2><a href="/finance/services">View all</a></div>
+        ${recentServices.length ? table(['Date', 'Type', 'Total'],
+          recentServices.map((s) => [esc(s.service_date),
+            `<a href="/finance/services/${s.service_id}">${esc(s.type_name)}</a>`,
+            fmtMoney(s.total_amount)])) : '<p class="muted-text">No services recorded yet.</p>'}
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Recent Special Offerings</h2><a href="/finance/special">View all</a></div>
+        ${recentSpecial.length ? table(['Date', 'Donor', 'Category', 'Amount'],
+          recentSpecial.map((s) => [esc(s.offering_date), esc(s.donor),
+            esc(s.category_name), fmtMoney(s.amount)])) : '<p class="muted-text">None yet.</p>'}
+      </section>
+    </div>
+
+    <div class="card" style="margin-top:1rem">
+      <div class="card-head"><h2>Day-Born Totals (YTD)</h2><span class="meta">Service offerings</span></div>
+      ${table(['Day', 'Amount', 'Heads'],
+        DAYS_OF_WEEK.map((d) => {
+          const r = dayBornMap[d] || { total: 0, heads: 0 };
+          return [esc(d), fmtMoney(r.total || 0), r.heads || 0];
+        }))}
+    </div>`;
   res.page({ title: 'Finance', active: '/finance', body });
 });
 
-// Quick offering form lives at /finance/new for the dashboard Quick Action.
-app.get('/finance/new', requireAdmin, (req, res) => res.redirect('/finance'));
+// Old "quick add" shortcut — point to the services page.
+app.get('/finance/new', requireAdmin, (req, res) => res.redirect('/finance/services'));
 
-app.post('/contributions', requireAdmin, (req, res) => {
+// ---------- finance: services ----------
+app.get('/finance/services', (req, res) => {
+  const types = loadServiceTypes();
+  const recent = db.prepare(`
+    SELECT s.service_id, s.service_date, s.total_amount, s.notes,
+           st.type_name, u.display_name, u.username
+    FROM services s
+    JOIN service_types st USING(service_type_id)
+    LEFT JOIN users u ON u.user_id = s.recorded_by
+    WHERE s.deleted_at IS NULL
+    ORDER BY s.service_date DESC, s.service_id DESC LIMIT 50`).all();
+  const typeOpts = types.map((t) => `<option value="${t.service_type_id}">${esc(t.type_name)}</option>`).join('');
+  const addForm = res.locals.isAdmin
+    ? `<details class="form-toggle" style="margin-bottom:1rem">
+         <summary><strong>+ Record a service</strong></summary>
+         <form class="form" method="post" action="/finance/services" style="margin-top:0.75rem">
+           <label>Date<input type="date" name="service_date" required value="${todayISO()}"></label>
+           <label>Service type<select name="service_type_id" required>${typeOpts}</select></label>
+           <label>Total amount (GH₵)<input type="number" step="0.01" min="0" name="total_amount" required></label>
+           <label class="wide">Notes<input name="notes"></label>
+           <fieldset class="wide">
+             <legend>Day-born breakdown (optional)</legend>
+             ${dayBornFormInputs()}
+           </fieldset>
+           <div class="actions"><button type="submit">Save service</button></div>
+         </form>
+       </details>` : '';
+  const body = `
+    ${financeTabs('/finance/services')}
+    ${addForm}
+    ${recent.length ? table(['Date', 'Type', 'Total', 'Recorded by', ''],
+      recent.map((s) => [esc(s.service_date),
+        `<a href="/finance/services/${s.service_id}">${esc(s.type_name)}</a>`,
+        fmtMoney(s.total_amount),
+        esc(s.display_name || s.username || '—'),
+        `<a class="btn ghost" href="/finance/services/${s.service_id}">Open</a>`]))
+      : '<p class="muted-text">No services recorded yet.</p>'}`;
+  res.page({ title: 'Finance · Services', active: '/finance', body });
+});
+
+app.post('/finance/services', requireAdmin, (req, res) => {
   const b = req.body;
   const info = db.prepare(`
-    INSERT INTO contributions (member_id, fund_id, amount, contributed_on, method, reference)
-    VALUES (@member_id, @fund_id, @amount, @contributed_on, @method, @reference)
-  `).run({
-    member_id: b.member_id ? Number(b.member_id) : null,
-    fund_id: Number(b.fund_id),
-    amount: Number(b.amount),
-    contributed_on: b.contributed_on,
-    method: b.method || null,
-    reference: b.reference || null,
-  });
-  const donor = b.member_id
-    ? db.prepare(`SELECT first_name||' '||last_name AS n FROM members WHERE member_id=?`).get(Number(b.member_id))?.n
-    : 'anonymous';
+    INSERT INTO services (service_type_id, service_date, total_amount, recorded_by, notes)
+    VALUES (?, ?, ?, ?, ?)`).run(
+    Number(b.service_type_id), b.service_date, Number(b.total_amount),
+    res.locals.user.user_id, b.notes || null
+  );
+  const splits = parseDayBornInputs(b);
+  const insSplit = db.prepare(`INSERT INTO day_born_splits (service_id, day_born, amount, head_count) VALUES (?, ?, ?, ?)`);
+  for (const s of splits) insSplit.run(info.lastInsertRowid, s.day, s.amount, s.head_count);
   logActivity('contribution_recorded',
-    `Offering of ${fmtMoney(b.amount)} recorded${donor ? ' from ' + donor : ''}`,
-    `/finance`, res.locals.user.user_id);
-  res.redirect('/finance');
+    `Service offering of ${fmtMoney(b.total_amount)} recorded`,
+    `/finance/services/${info.lastInsertRowid}`, res.locals.user.user_id);
+  res.redirect(`/finance/services/${info.lastInsertRowid}`);
+});
+
+app.get('/finance/services/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const s = db.prepare(`
+    SELECT s.*, st.type_name FROM services s
+    JOIN service_types st USING(service_type_id)
+    WHERE s.service_id=? AND s.deleted_at IS NULL`).get(id);
+  if (!s) return res.status(404).send('Not found');
+  const splits = db.prepare(
+    `SELECT day_born, amount, head_count FROM day_born_splits WHERE service_id=? ORDER BY split_id`
+  ).all(id);
+  const splitMap = Object.fromEntries(splits.map((sp) => [sp.day_born, sp]));
+  const addSplit = res.locals.isAdmin
+    ? `<h2>Day-born breakdown</h2>
+       <form class="form" method="post" action="/finance/services/${id}/splits">
+         <fieldset class="wide">
+           ${dayBornFormInputs()}
+         </fieldset>
+         <div class="actions"><button type="submit">Save breakdown</button></div>
+       </form>` : '';
+  const splitTotal = splits.reduce((a, b) => a + b.amount, 0);
+  const headTotal = splits.reduce((a, b) => a + (b.head_count || 0), 0);
+  const body = `
+    ${financeTabs('/finance/services')}
+    <div class="card">
+      <div class="card-head"><h2>${esc(s.type_name)} · ${esc(s.service_date)}</h2>
+        <span class="meta">${fmtMoney(s.total_amount)}</span></div>
+      ${s.notes ? `<p>${esc(s.notes)}</p>` : ''}
+    </div>
+    <h2>Current breakdown</h2>
+    ${splits.length
+      ? table(['Day', 'Amount', 'Heads'],
+          DAYS_OF_WEEK.map((d) => [d,
+            fmtMoney((splitMap[d] || {}).amount || 0),
+            (splitMap[d] || {}).head_count || 0])
+            .concat([['Total', fmtMoney(splitTotal), headTotal]]))
+      : '<p class="muted-text">No breakdown recorded.</p>'}
+    ${addSplit}
+    ${res.locals.isAdmin ? `<form method="post" action="/finance/services/${id}/delete"
+        onsubmit="return confirm('Archive this service?')" style="margin-top:1rem">
+        <button class="danger" type="submit">Archive service</button>
+      </form>` : ''}`;
+  res.page({ title: `${s.type_name} · ${s.service_date}`, active: '/finance', body });
+});
+
+app.post('/finance/services/:id/splits', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare(`DELETE FROM day_born_splits WHERE service_id=?`).run(id);
+  const splits = parseDayBornInputs(req.body);
+  const insSplit = db.prepare(`INSERT INTO day_born_splits (service_id, day_born, amount, head_count) VALUES (?, ?, ?, ?)`);
+  for (const s of splits) insSplit.run(id, s.day, s.amount, s.head_count);
+  res.redirect(`/finance/services/${id}`);
+});
+
+app.post('/finance/services/:id/delete', requireAdmin, (req, res) => {
+  db.prepare(`UPDATE services SET deleted_at=CURRENT_TIMESTAMP WHERE service_id=?`).run(Number(req.params.id));
+  res.redirect('/finance/services');
+});
+
+// ---------- finance: harvests ----------
+app.get('/finance/harvests', (req, res) => {
+  const orgs = loadOrganizations();
+  const recent = db.prepare(`
+    SELECT h.*, o.name AS org_name FROM harvests h
+    LEFT JOIN organizations o USING(org_id)
+    WHERE h.deleted_at IS NULL
+    ORDER BY h.harvest_year DESC, h.harvest_id DESC LIMIT 50`).all();
+  const orgOpts = '<option value="">(church-wide)</option>' +
+    orgs.map((o) => `<option value="${o.org_id}">${esc(o.name)}</option>`).join('');
+  const addForm = res.locals.isAdmin
+    ? `<details class="form-toggle" style="margin-bottom:1rem">
+         <summary><strong>+ Add a harvest</strong></summary>
+         <form class="form" method="post" action="/finance/harvests" style="margin-top:0.75rem">
+           <label>Type<select name="harvest_type" required>
+             <option value="End-of-Year">End-of-Year</option>
+             <option value="Organizational">Organizational</option>
+           </select></label>
+           <label>Year<input type="number" name="harvest_year" required value="${new Date().getFullYear()}"></label>
+           <label class="wide">Name<input name="harvest_name" required placeholder="e.g. 2026 End-of-Year Harvest"></label>
+           <label>Harvest date<input type="date" name="harvest_date" value="${todayISO()}"></label>
+           <label>Organization<select name="org_id">${orgOpts}</select></label>
+           <label class="wide">Theme<input name="theme"></label>
+           <label>Total collected (GH₵)<input type="number" step="0.01" min="0" name="total_collected" value="0"></label>
+           <label class="wide">Notes<input name="notes"></label>
+           <div class="actions"><button type="submit">Save harvest</button></div>
+         </form>
+       </details>` : '';
+  const body = `
+    ${financeTabs('/finance/harvests')}
+    ${addForm}
+    ${recent.length ? table(['Year', 'Type', 'Name', 'Organization', 'Date', 'Collected', ''],
+      recent.map((h) => [h.harvest_year, esc(h.harvest_type),
+        `<a href="/finance/harvests/${h.harvest_id}">${esc(h.harvest_name)}</a>`,
+        esc(h.org_name) || '—', esc(h.harvest_date) || '—',
+        fmtMoney(h.total_collected),
+        `<a class="btn ghost" href="/finance/harvests/${h.harvest_id}">Open</a>`]))
+      : '<p class="muted-text">No harvests recorded yet.</p>'}`;
+  res.page({ title: 'Finance · Harvests', active: '/finance', body });
+});
+
+app.post('/finance/harvests', requireAdmin, (req, res) => {
+  const b = req.body;
+  const info = db.prepare(`
+    INSERT INTO harvests (harvest_type, harvest_name, harvest_year, harvest_date, theme,
+                          org_id, total_collected, recorded_by, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    b.harvest_type, b.harvest_name, Number(b.harvest_year),
+    b.harvest_date || null, b.theme || null,
+    b.org_id ? Number(b.org_id) : null,
+    Number(b.total_collected || 0), res.locals.user.user_id, b.notes || null
+  );
+  res.redirect(`/finance/harvests/${info.lastInsertRowid}`);
+});
+
+app.get('/finance/harvests/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const h = db.prepare(`
+    SELECT h.*, o.name AS org_name FROM harvests h
+    LEFT JOIN organizations o USING(org_id)
+    WHERE h.harvest_id=? AND h.deleted_at IS NULL`).get(id);
+  if (!h) return res.status(404).send('Not found');
+  const splits = db.prepare(
+    `SELECT day_born, amount, head_count FROM day_born_splits WHERE harvest_id=?`
+  ).all(id);
+  const splitMap = Object.fromEntries(splits.map((sp) => [sp.day_born, sp]));
+  const pledges = db.prepare(`
+    SELECT p.*, m.member_id, m.first_name || ' ' || m.last_name AS member
+    FROM pledges p JOIN members m USING(member_id)
+    WHERE p.harvest_id=? ORDER BY p.pledge_date DESC`).all(id);
+  const totalPledged = pledges.reduce((a, b) => a + b.pledged_amount, 0);
+  const totalPaid = pledges.reduce((a, b) => a + b.paid_amount, 0);
+
+  const addSplit = res.locals.isAdmin
+    ? `<h2>Day-born breakdown</h2>
+       <form class="form" method="post" action="/finance/harvests/${id}/splits">
+         <fieldset class="wide">${dayBornFormInputs()}</fieldset>
+         <div class="actions"><button type="submit">Save breakdown</button></div>
+       </form>` : '';
+
+  const body = `
+    ${financeTabs('/finance/harvests')}
+    <div class="card">
+      <div class="card-head"><h2>${esc(h.harvest_name)}</h2>
+        <span class="meta">${esc(h.harvest_type)} · ${h.harvest_year}</span></div>
+      <p>${esc(h.theme) || ''}</p>
+      <dl class="stats">
+        <dt>Date</dt><dd>${esc(h.harvest_date) || '—'}</dd>
+        <dt>Organization</dt><dd>${esc(h.org_name) || 'Church-wide'}</dd>
+        <dt>Total collected</dt><dd>${fmtMoney(h.total_collected)}</dd>
+        <dt>Total pledged</dt><dd>${fmtMoney(totalPledged)} (paid ${fmtMoney(totalPaid)})</dd>
+      </dl>
+    </div>
+    <h2>Day-born breakdown</h2>
+    ${splits.length
+      ? table(['Day', 'Amount', 'Heads'],
+          DAYS_OF_WEEK.map((d) => [d,
+            fmtMoney((splitMap[d] || {}).amount || 0),
+            (splitMap[d] || {}).head_count || 0]))
+      : '<p class="muted-text">No breakdown recorded.</p>'}
+    ${addSplit}
+    <h2>Pledges</h2>
+    ${pledges.length
+      ? table(['Date', 'Member', 'Pledged', 'Paid', 'Outstanding', 'Status'],
+          pledges.map((p) => [esc(p.pledge_date),
+            `<a href="/members/${p.member_id}">${esc(p.member)}</a>`,
+            fmtMoney(p.pledged_amount), fmtMoney(p.paid_amount),
+            fmtMoney(p.pledged_amount - p.paid_amount),
+            esc(p.status)]))
+      : '<p class="muted-text">No pledges yet. Add them from the <a href="/finance/pledges">Pledges</a> tab.</p>'}
+    ${res.locals.isAdmin ? `<form method="post" action="/finance/harvests/${id}/delete"
+        onsubmit="return confirm('Archive this harvest?')" style="margin-top:1rem">
+        <button class="danger" type="submit">Archive harvest</button>
+      </form>` : ''}`;
+  res.page({ title: h.harvest_name, active: '/finance', body });
+});
+
+app.post('/finance/harvests/:id/splits', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare(`DELETE FROM day_born_splits WHERE harvest_id=?`).run(id);
+  const splits = parseDayBornInputs(req.body);
+  const insSplit = db.prepare(`INSERT INTO day_born_splits (harvest_id, day_born, amount, head_count) VALUES (?, ?, ?, ?)`);
+  for (const s of splits) insSplit.run(id, s.day, s.amount, s.head_count);
+  res.redirect(`/finance/harvests/${id}`);
+});
+
+app.post('/finance/harvests/:id/delete', requireAdmin, (req, res) => {
+  db.prepare(`UPDATE harvests SET deleted_at=CURRENT_TIMESTAMP WHERE harvest_id=?`).run(Number(req.params.id));
+  res.redirect('/finance/harvests');
+});
+
+// ---------- finance: special offerings ----------
+app.get('/finance/special', (req, res) => {
+  const cats = loadSpecialCategories();
+  const members = loadMembersList();
+  const rows = db.prepare(`
+    SELECT sp.special_id, sp.offering_date, sp.amount, sp.purpose, sp.receipt_number,
+           sc.category_name, sp.donor_id, sp.donor_name_manual,
+           m.first_name || ' ' || m.last_name AS member_name
+    FROM special_offerings sp
+    JOIN special_categories sc USING(special_cat_id)
+    LEFT JOIN members m ON m.member_id = sp.donor_id
+    WHERE sp.deleted_at IS NULL
+    ORDER BY sp.offering_date DESC, sp.special_id DESC LIMIT 100`).all();
+  const catOpts = cats.map((c) => `<option value="${c.special_cat_id}">${esc(c.category_name)}</option>`).join('');
+  const memOpts = '<option value="">(non-member or anonymous)</option>' +
+    members.map((m) => `<option value="${m.member_id}">${esc(m.name)}${m.external_id ? ' · ' + esc(m.external_id) : ''}</option>`).join('');
+  const addForm = res.locals.isAdmin
+    ? `<details class="form-toggle" style="margin-bottom:1rem">
+         <summary><strong>+ Record a special offering</strong></summary>
+         <form class="form" method="post" action="/finance/special" style="margin-top:0.75rem">
+           <label>Date<input type="date" name="offering_date" required value="${todayISO()}"></label>
+           <label>Category<select name="special_cat_id" required>${catOpts}</select></label>
+           <label>Member<select name="donor_id">${memOpts}</select></label>
+           <label>Manual donor name<input name="donor_name_manual" placeholder="if not a member"></label>
+           <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required></label>
+           <label>Receipt #<input name="receipt_number"></label>
+           <label class="wide">Purpose<input name="purpose"></label>
+           <label class="wide">Notes<input name="notes"></label>
+           <div class="actions"><button type="submit">Save</button></div>
+         </form>
+       </details>` : '';
+  const body = `
+    ${financeTabs('/finance/special')}
+    ${addForm}
+    ${rows.length ? table(['Date', 'Donor', 'Category', 'Amount', 'Receipt', 'Purpose'],
+      rows.map((r) => [esc(r.offering_date),
+        r.donor_id ? `<a href="/members/${r.donor_id}">${esc(r.member_name)}</a>`
+          : esc(r.donor_name_manual) || '(anonymous)',
+        esc(r.category_name), fmtMoney(r.amount), esc(r.receipt_number),
+        esc(r.purpose)]))
+      : '<p class="muted-text">No special offerings recorded yet.</p>'}`;
+  res.page({ title: 'Finance · Special Offerings', active: '/finance', body });
+});
+
+app.post('/finance/special', requireAdmin, (req, res) => {
+  const b = req.body;
+  db.prepare(`
+    INSERT INTO special_offerings (special_cat_id, offering_date, donor_id, donor_name_manual,
+      amount, purpose, receipt_number, recorded_by, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    Number(b.special_cat_id), b.offering_date,
+    b.donor_id ? Number(b.donor_id) : null,
+    b.donor_name_manual || null,
+    Number(b.amount), b.purpose || null, b.receipt_number || null,
+    res.locals.user.user_id, b.notes || null
+  );
+  logActivity('contribution_recorded',
+    `Special offering of ${fmtMoney(b.amount)} recorded`,
+    '/finance/special', res.locals.user.user_id);
+  res.redirect('/finance/special');
+});
+
+// ---------- finance: pledges ----------
+app.get('/finance/pledges', (req, res) => {
+  const harvests = db.prepare(
+    `SELECT harvest_id, harvest_name, harvest_year FROM harvests
+       WHERE deleted_at IS NULL ORDER BY harvest_year DESC`
+  ).all();
+  const members = loadMembersList();
+  const rows = db.prepare(`
+    SELECT p.*, m.member_id, m.first_name || ' ' || m.last_name AS member,
+           h.harvest_name
+    FROM pledges p
+    JOIN members m USING(member_id)
+    JOIN harvests h USING(harvest_id)
+    WHERE m.deleted_at IS NULL
+    ORDER BY p.pledge_date DESC, p.pledge_id DESC LIMIT 100`).all();
+  const harvestOpts = harvests.map((h) => `<option value="${h.harvest_id}">${esc(h.harvest_name)}</option>`).join('');
+  const memOpts = members.map((m) => `<option value="${m.member_id}">${esc(m.name)}</option>`).join('');
+  const addForm = res.locals.isAdmin && harvests.length
+    ? `<details class="form-toggle" style="margin-bottom:1rem">
+         <summary><strong>+ Record a pledge</strong></summary>
+         <form class="form" method="post" action="/finance/pledges" style="margin-top:0.75rem">
+           <label>Member<select name="member_id" required>${memOpts}</select></label>
+           <label>Harvest<select name="harvest_id" required>${harvestOpts}</select></label>
+           <label>Pledged amount<input type="number" step="0.01" min="0.01" name="pledged_amount" required></label>
+           <label>Paid amount<input type="number" step="0.01" min="0" name="paid_amount" value="0"></label>
+           <label>Pledge date<input type="date" name="pledge_date" required value="${todayISO()}"></label>
+           <label class="wide">Notes<input name="notes"></label>
+           <div class="actions"><button type="submit">Save</button></div>
+         </form>
+       </details>`
+    : (res.locals.isAdmin ? '<p class="muted-text">Add a harvest first on the Harvests tab.</p>' : '');
+  const tbl = rows.length
+    ? table(['Date', 'Member', 'Harvest', 'Pledged', 'Paid', 'Outstanding', 'Status', ''],
+        rows.map((p) => [esc(p.pledge_date),
+          `<a href="/members/${p.member_id}">${esc(p.member)}</a>`,
+          esc(p.harvest_name),
+          fmtMoney(p.pledged_amount), fmtMoney(p.paid_amount),
+          fmtMoney(p.pledged_amount - p.paid_amount),
+          `<span class="pill pill-${esc(p.status.toLowerCase())}">${esc(p.status)}</span>`,
+          res.locals.isAdmin
+            ? `<form method="post" action="/finance/pledges/${p.pledge_id}/pay" class="inline">
+                 <input type="number" step="0.01" min="0" name="add" placeholder="add">
+                 <button type="submit">Record</button>
+               </form>` : '']))
+    : '<p class="muted-text">No pledges recorded yet.</p>';
+  const body = `
+    ${financeTabs('/finance/pledges')}
+    ${addForm}
+    ${tbl}`;
+  res.page({ title: 'Finance · Pledges', active: '/finance', body });
+});
+
+app.post('/finance/pledges', requireAdmin, (req, res) => {
+  const b = req.body;
+  const pledged = Number(b.pledged_amount);
+  const paid = Number(b.paid_amount || 0);
+  const status = paid <= 0 ? 'Pending' : paid >= pledged ? 'Fulfilled' : 'Partial';
+  db.prepare(`
+    INSERT INTO pledges (member_id, harvest_id, pledged_amount, paid_amount, pledge_date, status, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    Number(b.member_id), Number(b.harvest_id),
+    pledged, paid, b.pledge_date, status, b.notes || null
+  );
+  res.redirect('/finance/pledges');
+});
+
+app.post('/finance/pledges/:id/pay', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const add = Number(req.body.add || 0);
+  if (add <= 0) return res.redirect('/finance/pledges');
+  const p = db.prepare(`SELECT pledged_amount, paid_amount FROM pledges WHERE pledge_id=?`).get(id);
+  if (!p) return res.redirect('/finance/pledges');
+  const newPaid = p.paid_amount + add;
+  const status = newPaid >= p.pledged_amount ? 'Fulfilled' : 'Partial';
+  db.prepare(`UPDATE pledges SET paid_amount=?, status=? WHERE pledge_id=?`).run(newPaid, status, id);
+  res.redirect('/finance/pledges');
+});
+
+// ---------- finance: expenses ----------
+app.get('/finance/expenses', (req, res) => {
+  const cats = loadExpenseCategories();
+  const users = db.prepare(`SELECT user_id, COALESCE(display_name, username) AS name FROM users WHERE deleted_at IS NULL ORDER BY name`).all();
+  const rows = db.prepare(`
+    SELECT e.expense_id, e.spent_on, e.amount, e.description, e.paid_to,
+           e.payment_method, e.reference_number, e.receipt_attached,
+           ec.category_name AS cat_name, e.category AS legacy_cat,
+           u.display_name, u.username
+    FROM expenses e
+    LEFT JOIN expense_categories ec USING(expense_cat_id)
+    LEFT JOIN users u ON u.user_id = e.approved_by
+    ORDER BY e.spent_on DESC, e.expense_id DESC LIMIT 100`).all();
+  const catOpts = cats.map((c) => `<option value="${c.expense_cat_id}">${esc(c.category_name)}</option>`).join('');
+  const userOpts = '<option value="">(unapproved)</option>' +
+    users.map((u) => `<option value="${u.user_id}">${esc(u.name)}</option>`).join('');
+  const addForm = res.locals.isAdmin
+    ? `<details class="form-toggle" style="margin-bottom:1rem">
+         <summary><strong>+ Record an expense</strong></summary>
+         <form class="form" method="post" action="/finance/expenses" style="margin-top:0.75rem">
+           <label>Date<input type="date" name="spent_on" required value="${todayISO()}"></label>
+           <label>Category<select name="expense_cat_id" required>${catOpts}</select></label>
+           <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required></label>
+           <label>Payment method<select name="payment_method">
+             ${['Cash','Bank Transfer','Cheque','Mobile Money'].map((m) => `<option>${m}</option>`).join('')}
+           </select></label>
+           <label class="wide">Description<input name="description" required></label>
+           <label>Paid to<input name="paid_to"></label>
+           <label>Reference #<input name="reference_number"></label>
+           <label>Approved by<select name="approved_by">${userOpts}</select></label>
+           <label><span>&nbsp;</span><label class="check" style="background:none;padding:0">
+             <input type="checkbox" name="receipt_attached" value="1"> Receipt attached</label></label>
+           <label class="wide">Notes<input name="notes"></label>
+           <div class="actions"><button type="submit">Save</button></div>
+         </form>
+       </details>` : '';
+  const body = `
+    ${financeTabs('/finance/expenses')}
+    ${addForm}
+    ${rows.length ? table(['Date', 'Category', 'Description', 'Paid to', 'Method', 'Amount', 'Receipt'],
+      rows.map((e) => [esc(e.spent_on), esc(e.cat_name || e.legacy_cat),
+        esc(e.description), esc(e.paid_to), esc(e.payment_method),
+        fmtMoney(e.amount),
+        e.receipt_attached ? '✓' : '—']))
+      : '<p class="muted-text">No expenses recorded yet.</p>'}`;
+  res.page({ title: 'Finance · Expenses', active: '/finance', body });
 });
 
 app.post('/finance/expenses', requireAdmin, (req, res) => {
   const b = req.body;
+  const cat = db.prepare(`SELECT category_name FROM expense_categories WHERE expense_cat_id=?`).get(Number(b.expense_cat_id));
   db.prepare(`
-    INSERT INTO expenses (category, amount, spent_on, description, fund_id)
-    VALUES (@category, @amount, @spent_on, @description, @fund_id)
-  `).run({
-    category: b.category, amount: Number(b.amount),
-    spent_on: b.spent_on, description: b.description || null,
-    fund_id: b.fund_id ? Number(b.fund_id) : null,
-  });
+    INSERT INTO expenses (expense_cat_id, category, amount, spent_on, description, paid_to,
+                          payment_method, reference_number, approved_by, receipt_attached)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    Number(b.expense_cat_id), cat ? cat.category_name : 'other',
+    Number(b.amount), b.spent_on, b.description, b.paid_to || null,
+    b.payment_method || null, b.reference_number || null,
+    b.approved_by ? Number(b.approved_by) : null,
+    b.receipt_attached ? 1 : 0
+  );
   logActivity('expense_recorded',
-    `Expense ${fmtMoney(b.amount)} (${b.category}) recorded`,
-    `/finance`, res.locals.user.user_id);
-  res.redirect('/finance');
+    `Expense ${fmtMoney(b.amount)} (${cat ? cat.category_name : ''}) recorded`,
+    '/finance/expenses', res.locals.user.user_id);
+  res.redirect('/finance/expenses');
 });
 
 // ---------- reports ----------
@@ -1278,9 +1899,10 @@ app.get('/reports', (req, res) => {
     GROUP BY e.event_id ORDER BY e.starts_at DESC LIMIT 12`).all();
   const topGivers = db.prepare(`
     SELECT m.member_id, m.first_name || ' ' || m.last_name name,
-           ROUND(SUM(c.amount),2) total
-    FROM contributions c JOIN members m USING(member_id)
-    WHERE substr(c.contributed_on,1,4)=strftime('%Y','now')
+           ROUND(SUM(sp.amount),2) total
+    FROM special_offerings sp JOIN members m ON m.member_id = sp.donor_id
+    WHERE sp.deleted_at IS NULL
+      AND substr(sp.offering_date,1,4)=strftime('%Y','now')
     GROUP BY m.member_id ORDER BY total DESC LIMIT 10`).all();
   const birthdays = db.prepare(`
     SELECT first_name || ' ' || last_name name, date_of_birth

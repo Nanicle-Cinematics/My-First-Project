@@ -63,21 +63,33 @@ INSERT INTO funds (fund_id, name) VALUES
  (3, 'Missions'),
  (4, 'Benevolence');
 
-INSERT INTO contributions (member_id, fund_id, amount, contributed_on, method, reference) VALUES
- (1, 1, 250.00, '2026-05-03', 'check',  '1042'),
- (2, 1, 100.00, '2026-05-03', 'cash',   NULL),
- (4, 1, 500.00, '2026-05-03', 'online', 'TXN-77001'),
- (4, 2, 100.00, '2026-05-03', 'online', 'TXN-77002'),
- (6, 1, 300.00, '2026-05-03', 'card',   'TXN-77010'),
- (NULL,1, 45.00,'2026-05-03', 'cash',   NULL),
- (1, 1, 250.00, '2026-05-10', 'check',  '1051'),
- (5, 3,  75.00, '2026-05-10', 'online', 'TXN-77100'),
- (6, 1, 300.00, '2026-05-10', 'card',   'TXN-77105'),
- (8, 1,  40.00, '2026-05-10', 'online', 'TXN-77110'),
- (1, 1, 250.00, '2026-05-17', 'check',  '1059'),
- (4, 1, 500.00, '2026-05-17', 'online', 'TXN-77200'),
- (4, 4, 200.00, '2026-05-17', 'online', 'TXN-77201'),
- (7, 3, 150.00, '2026-05-17', 'card',   'TXN-77210');
+-- Sample service offerings + day-born splits (Sundays in May 2026).
+INSERT INTO services (service_id, service_type_id, service_date, total_amount, notes) VALUES
+ (1, 1, '2026-05-03', 1500.00, 'Sunday service'),
+ (2, 1, '2026-05-10', 1700.00, 'Mothers Day service'),
+ (3, 1, '2026-05-17', 1850.00, 'Sunday service');
+
+INSERT INTO day_born_splits (service_id, day_born, amount, head_count) VALUES
+ (1, 'Sunday',   400.00, 60),  (1, 'Monday',  150.00, 20), (1, 'Tuesday',  100.00, 12),
+ (1, 'Wednesday',180.00, 22),  (1, 'Thursday',170.00, 21), (1, 'Friday',   250.00, 30),
+ (1, 'Saturday', 250.00, 28),
+ (2, 'Sunday',   450.00, 65),  (2, 'Wednesday',250.00, 30), (2, 'Friday',   300.00, 35),
+ (3, 'Sunday',   500.00, 70),  (3, 'Wednesday',300.00, 32), (3, 'Friday',   350.00, 38);
+
+INSERT INTO harvests (harvest_id, harvest_type, harvest_name, harvest_year, harvest_date, theme, total_collected) VALUES
+ (1, 'Organizational', 'Choir Harvest 2026',     2026, '2026-04-12', NULL,                3200.00),
+ (2, 'End-of-Year',    '2026 End-of-Year Harvest', 2026, NULL,         'Year of Faithfulness', 0.00);
+
+INSERT INTO special_offerings (special_cat_id, offering_date, donor_id, amount, purpose) VALUES
+ (1, '2026-05-03', 4, 500.00, 'Roof fund'),
+ (1, '2026-05-10', 6, 300.00, 'Roof fund'),
+ (2, '2026-05-17', 1, 250.00, 'Outreach to Akropong'),
+ (3, '2026-05-03', 2, 100.00, 'Thanksgiving for new baby');
+
+INSERT INTO pledges (member_id, harvest_id, pledged_amount, paid_amount, pledge_date, status) VALUES
+ (1, 2, 1000.00, 200.00, '2026-04-10', 'Partial'),
+ (4, 2, 2000.00,   0.00, '2026-04-10', 'Pending'),
+ (5, 2,  500.00, 500.00, '2026-04-15', 'Fulfilled');
 
 INSERT INTO sacraments (sacrament_type, member_id, spouse_id, officiant_id, occurred_on, location) VALUES
  ('baptism',  3, NULL, 9, '2024-04-07', 'Main Sanctuary'),

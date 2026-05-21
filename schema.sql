@@ -161,13 +161,19 @@ CREATE TABLE pastoral_notes (
 
 -- Expenses (the other side of contributions, for finance summary).
 CREATE TABLE expenses (
-    expense_id  INTEGER PRIMARY KEY,
-    category    TEXT    NOT NULL,
-    amount      REAL    NOT NULL CHECK (amount > 0),
-    spent_on    TEXT    NOT NULL,
-    description TEXT,
-    fund_id     INTEGER REFERENCES funds(fund_id),
-    created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    expense_id       INTEGER PRIMARY KEY,
+    expense_cat_id   INTEGER REFERENCES expense_categories(expense_cat_id),
+    category         TEXT    NOT NULL,
+    amount           REAL    NOT NULL CHECK (amount > 0),
+    spent_on         TEXT    NOT NULL,
+    description      TEXT,
+    paid_to          TEXT,
+    payment_method   TEXT,
+    reference_number TEXT,
+    approved_by      INTEGER REFERENCES users(user_id),
+    receipt_attached INTEGER NOT NULL DEFAULT 0,
+    fund_id          INTEGER REFERENCES funds(fund_id),
+    created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_expenses_date ON expenses(spent_on);
 
@@ -220,6 +226,121 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at    TEXT
 );
+
+-- ---------- Finance: services, harvests, day-born splits ----------------
+
+CREATE TABLE service_types (
+    service_type_id INTEGER PRIMARY KEY,
+    type_name       TEXT NOT NULL UNIQUE,
+    description     TEXT,
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE services (
+    service_id      INTEGER PRIMARY KEY,
+    service_type_id INTEGER NOT NULL REFERENCES service_types(service_type_id),
+    service_date    TEXT NOT NULL,
+    total_amount    REAL NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+    recorded_by     INTEGER REFERENCES users(user_id),
+    notes           TEXT,
+    deleted_at      TEXT,
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE harvests (
+    harvest_id      INTEGER PRIMARY KEY,
+    harvest_type    TEXT NOT NULL CHECK (harvest_type IN ('Organizational','End-of-Year')),
+    harvest_name    TEXT NOT NULL,
+    harvest_year    INTEGER NOT NULL,
+    harvest_date    TEXT,
+    theme           TEXT,
+    org_id          INTEGER REFERENCES organizations(org_id),
+    total_collected REAL NOT NULL DEFAULT 0 CHECK (total_collected >= 0),
+    recorded_by     INTEGER REFERENCES users(user_id),
+    notes           TEXT,
+    deleted_at      TEXT,
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE day_born_splits (
+    split_id    INTEGER PRIMARY KEY,
+    service_id  INTEGER REFERENCES services(service_id)  ON DELETE CASCADE,
+    harvest_id  INTEGER REFERENCES harvests(harvest_id)  ON DELETE CASCADE,
+    day_born    TEXT NOT NULL CHECK (day_born IN ('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')),
+    amount      REAL NOT NULL DEFAULT 0 CHECK (amount >= 0),
+    head_count  INTEGER DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((service_id IS NOT NULL AND harvest_id IS NULL)
+        OR (service_id IS NULL     AND harvest_id IS NOT NULL))
+);
+
+CREATE TABLE special_categories (
+    special_cat_id INTEGER PRIMARY KEY,
+    category_name  TEXT NOT NULL UNIQUE,
+    description    TEXT,
+    is_active      INTEGER NOT NULL DEFAULT 1,
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE special_offerings (
+    special_id        INTEGER PRIMARY KEY,
+    special_cat_id    INTEGER NOT NULL REFERENCES special_categories(special_cat_id),
+    offering_date     TEXT NOT NULL,
+    donor_id          INTEGER REFERENCES members(member_id),
+    donor_name_manual TEXT,
+    amount            REAL NOT NULL CHECK (amount > 0),
+    purpose           TEXT,
+    receipt_number    TEXT,
+    recorded_by       INTEGER REFERENCES users(user_id),
+    notes             TEXT,
+    deleted_at        TEXT,
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE pledges (
+    pledge_id      INTEGER PRIMARY KEY,
+    member_id      INTEGER NOT NULL REFERENCES members(member_id) ON DELETE CASCADE,
+    harvest_id     INTEGER NOT NULL REFERENCES harvests(harvest_id) ON DELETE CASCADE,
+    pledged_amount REAL NOT NULL CHECK (pledged_amount > 0),
+    paid_amount    REAL NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+    pledge_date    TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'Pending'
+                   CHECK (status IN ('Pending','Partial','Fulfilled','Cancelled')),
+    notes          TEXT,
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE expense_categories (
+    expense_cat_id INTEGER PRIMARY KEY,
+    category_name  TEXT NOT NULL UNIQUE,
+    description    TEXT,
+    is_active      INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT INTO service_types (type_name, description) VALUES
+ ('Sunday Service',    'Regular Sunday worship service'),
+ ('Wednesday Service', 'Midweek service'),
+ ('Wedding Service',   'Wedding ceremony offering'),
+ ('Funeral Service',   'Funeral / memorial service offering');
+
+INSERT INTO special_categories (category_name, description) VALUES
+ ('Building Fund',         'Church construction / renovation'),
+ ('Mission / Outreach',    'Evangelism and outreach work'),
+ ('Thanksgiving',          'Thanksgiving offerings'),
+ ('Pastor''s Appreciation','Pastor appreciation offering'),
+ ('Welfare / Benevolence', 'Support for members in need'),
+ ('Convention / Camp',     'Conventions, camps, conferences'),
+ ('Vow / Pledge',          'Personal vows and pledges');
+
+INSERT INTO expense_categories (category_name, description) VALUES
+ ('Utilities',       'Electricity, water, internet'),
+ ('Salaries',        'Pastor and staff salaries'),
+ ('Maintenance',     'Building and equipment upkeep'),
+ ('Office Supplies', 'Stationery, printing'),
+ ('Outreach',        'Mission and outreach expenses'),
+ ('Welfare',         'Support to members'),
+ ('Events',          'Convention, camp, special events');
 
 -- Helpful views ---------------------------------------------------------
 
