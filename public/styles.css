@@ -458,6 +458,12 @@ tr:hover td { background: #faf9fd; }
 .pill-open { background: var(--orange-soft); color: var(--orange); }
 .pill-in_progress { background: var(--blue-soft); color: var(--blue); }
 .pill-closed { background: var(--green-soft); color: var(--green); }
+.pill-sent      { background: var(--green-soft);  color: var(--green); }
+.pill-failed    { background: var(--danger-soft); color: var(--danger); }
+.pill-pending   { background: var(--orange-soft); color: var(--orange); }
+.pill-sending   { background: var(--blue-soft);   color: var(--blue); }
+.pill-skipped   { background: #eee;               color: var(--muted); }
+.pill-dry_run   { background: var(--gold-soft);   color: var(--gold-dark); }
 
 /* ---------- Forms / inputs / buttons ---------- */
 input, select, textarea {

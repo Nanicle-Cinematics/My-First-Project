@@ -214,6 +214,33 @@ db.exec(`
     description    TEXT,
     is_active      INTEGER NOT NULL DEFAULT 1
   );
+  CREATE TABLE IF NOT EXISTS broadcasts (
+    broadcast_id     INTEGER PRIMARY KEY,
+    channel          TEXT NOT NULL CHECK (channel IN ('sms','email','both')),
+    audience_label   TEXT NOT NULL,
+    org_id           INTEGER REFERENCES organizations(org_id),
+    subject          TEXT,
+    body             TEXT NOT NULL,
+    total_recipients INTEGER NOT NULL DEFAULT 0,
+    successful_sends INTEGER NOT NULL DEFAULT 0,
+    failed_sends     INTEGER NOT NULL DEFAULT 0,
+    status           TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','sending','sent','failed','dry_run')),
+    sent_by          INTEGER REFERENCES users(user_id),
+    sent_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS broadcast_recipients (
+    recipient_id INTEGER PRIMARY KEY,
+    broadcast_id INTEGER NOT NULL REFERENCES broadcasts(broadcast_id) ON DELETE CASCADE,
+    member_id    INTEGER REFERENCES members(member_id),
+    channel      TEXT NOT NULL,
+    destination  TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending','sent','failed','skipped')),
+    error        TEXT,
+    sent_at      TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_broadcast ON broadcast_recipients(broadcast_id);
 `);
 
 // Seed default lookup values (idempotent).
@@ -366,6 +393,74 @@ const NAV = [
 ];
 
 const DAYS_OF_WEEK = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+// ---------- SMS (Arkesel) + Email (SMTP) helpers ----------
+const ARKESEL_API_KEY = process.env.ARKESEL_API_KEY || '';
+const ARKESEL_SENDER  = process.env.ARKESEL_SENDER  || 'DUNWELL';
+const ARKESEL_URL     = 'https://sms.arkesel.com/api/v2/sms/send';
+
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_FROM = process.env.SMTP_FROM || (SMTP_USER ? `Church <${SMTP_USER}>` : '');
+
+let mailTransporter = null;
+function getMailer() {
+  if (mailTransporter || !SMTP_HOST || !SMTP_USER || !SMTP_PASS) return mailTransporter;
+  const nodemailer = require('nodemailer');
+  mailTransporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
+  });
+  return mailTransporter;
+}
+
+// Normalize Ghana phone numbers to E.164 (+233XXXXXXXXX).
+function normalizePhoneGH(raw) {
+  if (!raw) return null;
+  let s = String(raw).replace(/[\s\-()]/g, '');
+  if (s.startsWith('+')) return /^\+\d{8,15}$/.test(s) ? s : null;
+  if (s.startsWith('00')) s = '+' + s.slice(2);
+  else if (s.startsWith('0') && s.length === 10) s = '+233' + s.slice(1);
+  else if (/^\d{9}$/.test(s)) s = '+233' + s;
+  else if (/^233\d{9}$/.test(s)) s = '+' + s;
+  return /^\+\d{8,15}$/.test(s) ? s : null;
+}
+
+async function sendSmsBatch(recipients, message) {
+  if (!ARKESEL_API_KEY) return { ok: false, dryRun: true, message: 'ARKESEL_API_KEY not set; dry run.' };
+  if (!recipients.length) return { ok: true, sent: 0 };
+  const res = await fetch(ARKESEL_URL, {
+    method: 'POST',
+    headers: { 'api-key': ARKESEL_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sender: ARKESEL_SENDER, message, recipients,
+    }),
+  });
+  let data = null;
+  try { data = await res.json(); } catch (_) {}
+  return { ok: res.ok && data && data.code === 'ok',
+           status: res.status, response: data, sent: recipients.length };
+}
+
+async function sendEmailBulk(addresses, subject, body) {
+  const mailer = getMailer();
+  if (!mailer) return { ok: false, dryRun: true, message: 'SMTP not configured; dry run.' };
+  if (!addresses.length) return { ok: true, sent: 0 };
+  // BCC keeps recipients private from each other.
+  const info = await mailer.sendMail({
+    from: SMTP_FROM,
+    to: SMTP_FROM,
+    bcc: addresses,
+    subject,
+    text: body,
+  });
+  return { ok: true, sent: addresses.length, messageId: info.messageId };
+}
+
 
 // Auto-generated DMS-### member IDs.
 const MEMBER_ID_PREFIX = process.env.MEMBER_ID_PREFIX || 'DMS';
@@ -3060,9 +3155,14 @@ app.get('/communications', (req, res) => {
           <p class="muted-text">— ${esc(a.display_name || a.username || 'system')} · audience: ${esc(a.audience)}</p>
         </div>`).join('')
     : '<p class="muted-text">No announcements yet.</p>';
+  const broadcastCta = res.locals.isAdmin
+    ? `<p style="margin-bottom:1rem">
+         <a class="btn" href="/communications/broadcast">📣 Send SMS / email broadcast</a>
+         <a class="btn ghost" href="/communications/broadcasts">View broadcast history</a>
+       </p>` : '';
   res.page({
     title: 'Communications', active: '/communications',
-    body: `${newForm}<h2>Recent announcements</h2>${list}`,
+    body: `${broadcastCta}${newForm}<h2>Recent announcements</h2>${list}`,
   });
 });
 
@@ -3078,6 +3178,239 @@ app.post('/communications', requireAdmin, (req, res) => {
   );
   logActivity('announcement', `New announcement: ${title}`, '/communications', res.locals.user.user_id);
   res.redirect('/communications');
+});
+
+// ---------- communications: bulk SMS + email broadcasts ----------
+function resolveAudience(orgId) {
+  const sql = orgId
+    ? `SELECT DISTINCT m.member_id, m.first_name||' '||m.last_name AS name,
+             m.email, m.mobile_phone
+       FROM organization_memberships om
+       JOIN members m USING(member_id)
+       WHERE om.org_id = ? AND m.deleted_at IS NULL
+         AND m.membership_status IN ('member','regular','visitor')
+       ORDER BY m.last_name`
+    : `SELECT m.member_id, m.first_name||' '||m.last_name AS name,
+              m.email, m.mobile_phone
+       FROM members m WHERE m.deleted_at IS NULL
+         AND m.membership_status IN ('member','regular','visitor')
+       ORDER BY m.last_name`;
+  return orgId ? db.prepare(sql).all(orgId) : db.prepare(sql).all();
+}
+
+app.get('/communications/broadcast', requireAdmin, (req, res) => {
+  const orgs = loadOrganizations();
+  const orgId = req.query.org_id ? Number(req.query.org_id) : null;
+  const recipients = orgId ? resolveAudience(orgId) : [];
+  const phoneCount = recipients.filter((r) => normalizePhoneGH(r.mobile_phone)).length;
+  const emailCount = recipients.filter((r) => r.email).length;
+  const orgOpts = '<option value="">— pick an organization —</option>' +
+    orgs.map((o) => `<option value="${o.org_id}" ${o.org_id === orgId ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+
+  const smsReady    = !!ARKESEL_API_KEY;
+  const emailReady  = !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
+  const statusBanner = (smsReady && emailReady) ? '' :
+    `<div class="flash">
+       ${smsReady ? '' : '<strong>SMS dry-run mode.</strong> ARKESEL_API_KEY is not set — messages will be logged but not actually sent. '}
+       ${emailReady ? '' : '<strong>Email dry-run mode.</strong> SMTP env vars are not configured.'}
+     </div>`;
+
+  const previewSection = orgId ? `
+    <h2>Audience preview · ${recipients.length} members</h2>
+    <p class="muted-text">Sendable: ${phoneCount} by SMS, ${emailCount} by email</p>
+    ${recipients.length ? table(['Name', 'Phone', 'Email'],
+      recipients.map((r) => [esc(r.name),
+        normalizePhoneGH(r.mobile_phone) || `<span class="muted-text">${esc(r.mobile_phone) || '—'}</span>`,
+        esc(r.email) || '<span class="muted-text">—</span>']))
+      : '<p class="muted-text">No members in this organization.</p>'}` : '';
+
+  const body = `
+    ${statusBanner}
+    <form method="get" action="/communications/broadcast" class="filters">
+      <label>Audience <select name="org_id" onchange="this.form.submit()">${orgOpts}</select></label>
+      <noscript><button type="submit">Load audience</button></noscript>
+    </form>
+
+    ${previewSection}
+
+    ${orgId && recipients.length ? `
+      <h2>Compose message</h2>
+      <form class="form" method="post" action="/communications/broadcast">
+        <input type="hidden" name="org_id" value="${orgId}">
+        <label>Channel<select name="channel" required>
+          <option value="sms">SMS only (${phoneCount})</option>
+          <option value="email">Email only (${emailCount})</option>
+          <option value="both">Both (SMS to ${phoneCount}, email to ${emailCount})</option>
+        </select></label>
+        <label>Email subject<input name="subject" placeholder="(required for email)"></label>
+        <label class="wide">Message body<textarea name="body" rows="5" required maxlength="900"
+          placeholder="Keep it under 160 chars for a single SMS."></textarea></label>
+        <p class="muted-text wide">Long messages over 160 characters are sent as multiple SMS segments and billed accordingly.</p>
+        <div class="actions">
+          <button type="submit" onclick="return confirm('Send this broadcast to ${recipients.length} recipient(s)?')">📣 Send broadcast</button>
+        </div>
+      </form>` : ''}
+
+    <p style="margin-top:1.5rem"><a href="/communications/broadcasts">View broadcast history →</a></p>
+  `;
+  res.page({ title: 'Send broadcast', active: '/communications', body });
+});
+
+app.post('/communications/broadcast', requireAdmin, async (req, res) => {
+  const { channel, subject, body, org_id } = req.body;
+  if (!body || !['sms', 'email', 'both'].includes(channel)) return res.redirect('/communications/broadcast');
+  const orgId = org_id ? Number(org_id) : null;
+  const audience = resolveAudience(orgId);
+  if (!audience.length) return res.redirect('/communications/broadcast');
+  const orgName = orgId
+    ? (db.prepare(`SELECT name FROM organizations WHERE org_id=?`).get(orgId) || {}).name
+    : 'All members';
+
+  // Create the broadcast row.
+  const bres = db.prepare(`
+    INSERT INTO broadcasts (channel, audience_label, org_id, subject, body, total_recipients, status, sent_by)
+    VALUES (?, ?, ?, ?, ?, ?, 'sending', ?)`).run(
+    channel, orgName, orgId, subject || null, body, audience.length, res.locals.user.user_id
+  );
+  const broadcastId = bres.lastInsertRowid;
+
+  const insRecip = db.prepare(`
+    INSERT INTO broadcast_recipients (broadcast_id, member_id, channel, destination, status)
+    VALUES (?, ?, ?, ?, ?)`);
+
+  // Build per-channel recipient lists.
+  const smsList = [];   // {member_id, phone}
+  const emailList = []; // {member_id, addr}
+  for (const m of audience) {
+    if (channel === 'sms' || channel === 'both') {
+      const phone = normalizePhoneGH(m.mobile_phone);
+      if (phone) smsList.push({ member_id: m.member_id, phone });
+      else insRecip.run(broadcastId, m.member_id, 'sms', m.mobile_phone || '', 'skipped');
+    }
+    if (channel === 'email' || channel === 'both') {
+      if (m.email) emailList.push({ member_id: m.member_id, addr: m.email });
+      else insRecip.run(broadcastId, m.member_id, 'email', m.email || '', 'skipped');
+    }
+  }
+
+  let smsRes = null, emailRes = null;
+  if (smsList.length) {
+    try {
+      smsRes = await sendSmsBatch(smsList.map((s) => s.phone), body);
+    } catch (e) { smsRes = { ok: false, error: e.message }; }
+    const status = smsRes && smsRes.dryRun ? 'pending' : (smsRes && smsRes.ok ? 'sent' : 'failed');
+    const errText = smsRes && smsRes.dryRun ? 'dry run' : (smsRes && smsRes.error) || null;
+    const now = new Date().toISOString();
+    for (const s of smsList) insRecip.run(broadcastId, s.member_id, 'sms', s.phone, status);
+    if (status === 'sent' || status === 'pending') {
+      db.prepare(`UPDATE broadcast_recipients SET sent_at=? WHERE broadcast_id=? AND channel='sms' AND status=?`)
+        .run(now, broadcastId, status);
+    }
+    if (errText) {
+      db.prepare(`UPDATE broadcast_recipients SET error=? WHERE broadcast_id=? AND channel='sms'`)
+        .run(errText, broadcastId);
+    }
+  }
+
+  if (emailList.length && (channel === 'email' || channel === 'both')) {
+    const emailSubject = subject || (orgName ? `Message from ${CHURCH_NAME}` : `Message from ${CHURCH_NAME}`);
+    try {
+      emailRes = await sendEmailBulk(emailList.map((e) => e.addr), emailSubject, body);
+    } catch (e) { emailRes = { ok: false, error: e.message }; }
+    const status = emailRes && emailRes.dryRun ? 'pending' : (emailRes && emailRes.ok ? 'sent' : 'failed');
+    const errText = emailRes && emailRes.dryRun ? 'dry run' : (emailRes && emailRes.error) || null;
+    const now = new Date().toISOString();
+    for (const e of emailList) insRecip.run(broadcastId, e.member_id, 'email', e.addr, status);
+    if (status === 'sent' || status === 'pending') {
+      db.prepare(`UPDATE broadcast_recipients SET sent_at=? WHERE broadcast_id=? AND channel='email' AND status=?`)
+        .run(now, broadcastId, status);
+    }
+    if (errText) {
+      db.prepare(`UPDATE broadcast_recipients SET error=? WHERE broadcast_id=? AND channel='email'`)
+        .run(errText, broadcastId);
+    }
+  }
+
+  // Tally up.
+  const counts = db.prepare(`
+    SELECT
+      SUM(CASE WHEN status='sent'    THEN 1 ELSE 0 END) AS s,
+      SUM(CASE WHEN status='failed'  THEN 1 ELSE 0 END) AS f,
+      SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS p
+    FROM broadcast_recipients WHERE broadcast_id=?`).get(broadcastId);
+
+  const dryRun = (smsRes && smsRes.dryRun) || (emailRes && emailRes.dryRun);
+  const finalStatus = dryRun
+    ? 'dry_run'
+    : (counts.f > 0 && counts.s === 0 ? 'failed' : 'sent');
+
+  db.prepare(`
+    UPDATE broadcasts SET successful_sends=?, failed_sends=?, status=?
+    WHERE broadcast_id=?`).run(counts.s || 0, counts.f || 0, finalStatus, broadcastId);
+
+  logActivity('announcement',
+    `Broadcast to ${orgName}: ${audience.length} recipient(s) [${finalStatus}]`,
+    `/communications/broadcasts/${broadcastId}`, res.locals.user.user_id);
+  res.redirect(`/communications/broadcasts/${broadcastId}`);
+});
+
+app.get('/communications/broadcasts', (req, res) => {
+  const rows = db.prepare(`
+    SELECT b.*, COALESCE(u.display_name, u.username) AS sender
+    FROM broadcasts b LEFT JOIN users u ON u.user_id=b.sent_by
+    ORDER BY b.sent_at DESC LIMIT 100`).all();
+  const body = `
+    <p><a class="btn" href="/communications/broadcast">📣 Compose new broadcast</a></p>
+    ${rows.length ? table(['Sent', 'Channel', 'Audience', 'Recipients', '✓ sent', '✗ failed', 'Status', 'By'],
+      rows.map((b) => [esc(b.sent_at.slice(0, 16).replace('T', ' ')),
+        esc(b.channel),
+        `<a href="/communications/broadcasts/${b.broadcast_id}">${esc(b.audience_label)}</a>`,
+        b.total_recipients,
+        b.successful_sends,
+        b.failed_sends,
+        `<span class="pill pill-${esc(b.status)}">${esc(b.status.replace('_', ' '))}</span>`,
+        esc(b.sender)]))
+      : '<p class="muted-text">No broadcasts sent yet.</p>'}`;
+  res.page({ title: 'Broadcast history', active: '/communications', body });
+});
+
+app.get('/communications/broadcasts/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const b = db.prepare(`
+    SELECT b.*, COALESCE(u.display_name, u.username) AS sender,
+           o.name AS org_name
+    FROM broadcasts b
+    LEFT JOIN users u ON u.user_id=b.sent_by
+    LEFT JOIN organizations o ON o.org_id=b.org_id
+    WHERE b.broadcast_id=?`).get(id);
+  if (!b) return res.status(404).send('Not found');
+  const recipients = db.prepare(`
+    SELECT r.*, m.first_name || ' ' || m.last_name AS name
+    FROM broadcast_recipients r
+    LEFT JOIN members m ON m.member_id=r.member_id
+    WHERE r.broadcast_id=?
+    ORDER BY r.status DESC, m.last_name`).all(id);
+  const body = `
+    <div class="card">
+      <div class="card-head">
+        <h2>${esc(b.audience_label)} · ${esc(b.channel)}</h2>
+        <span class="meta">${esc(b.sent_at.slice(0, 16).replace('T', ' '))} · by ${esc(b.sender)}</span>
+      </div>
+      <dl class="stats">
+        <dt>Status</dt><dd><span class="pill pill-${esc(b.status)}">${esc(b.status.replace('_', ' '))}</span></dd>
+        <dt>Recipients</dt><dd>${b.total_recipients} (${b.successful_sends} sent, ${b.failed_sends} failed)</dd>
+        ${b.subject ? `<dt>Subject</dt><dd>${esc(b.subject)}</dd>` : ''}
+      </dl>
+      <h3>Message</h3>
+      <pre style="white-space:pre-wrap;background:var(--soft);padding:0.75rem;border-radius:8px">${esc(b.body)}</pre>
+    </div>
+    <h2>Per-recipient log</h2>
+    ${table(['Name', 'Channel', 'Destination', 'Status', 'Error'],
+      recipients.map((r) => [esc(r.name) || '—', esc(r.channel),
+        esc(r.destination) || '<span class="muted-text">—</span>',
+        `<span class="pill pill-${esc(r.status)}">${esc(r.status)}</span>`,
+        esc(r.error) || '']))}`;
+  res.page({ title: 'Broadcast detail', active: '/communications', body });
 });
 
 // ---------- sacraments ----------
@@ -3126,6 +3459,25 @@ app.get('/settings', requireAdmin, (req, res) => {
     <div class="card">
       <h2>Roles & access</h2>
       <p>Manage user accounts and permissions on the <a href="/users">Users &amp; Roles</a> page.</p>
+    </div>
+    <div class="card">
+      <h2>SMS &amp; Email</h2>
+      <dl class="stats">
+        <dt>SMS provider</dt><dd>Arkesel — <span class="pill pill-${ARKESEL_API_KEY ? 'sent' : 'dry_run'}">${ARKESEL_API_KEY ? 'configured' : 'dry-run'}</span></dd>
+        <dt>SMS sender ID</dt><dd><code>${esc(ARKESEL_SENDER)}</code></dd>
+        <dt>SMTP host</dt><dd>${SMTP_HOST ? `<code>${esc(SMTP_HOST)}:${SMTP_PORT}</code> <span class="pill pill-${SMTP_USER && SMTP_PASS ? 'sent' : 'dry_run'}">${SMTP_USER && SMTP_PASS ? 'configured' : 'dry-run'}</span>` : '<span class="pill pill-dry_run">not configured</span>'}</dd>
+        <dt>From address</dt><dd>${esc(SMTP_FROM) || '<span class="muted-text">unset</span>'}</dd>
+      </dl>
+      <h3>Configure on Fly</h3>
+      <pre>flyctl secrets set \\
+  ARKESEL_API_KEY="your-arkesel-api-key" \\
+  ARKESEL_SENDER="DUNWELL" \\
+  SMTP_HOST="smtp.gmail.com" \\
+  SMTP_PORT="465" \\
+  SMTP_USER="your.address@gmail.com" \\
+  SMTP_PASS="your-16-char-app-password" \\
+  SMTP_FROM="Dunwell Methodist &lt;your.address@gmail.com&gt;"</pre>
+      <p class="muted-text">For Gmail, generate an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> — your normal password will not work.</p>
     </div>
     <div class="card">
       <h2>Backup</h2>
