@@ -2,3 +2,4 @@ church.db
 *.db-journal
 node_modules/
 package-lock.json
+photos/
