@@ -122,10 +122,13 @@ addColumnIfMissing('expenses', 'reference_number', `reference_number TEXT`);
 addColumnIfMissing('expenses', 'expense_cat_id',   `expense_cat_id INTEGER REFERENCES expense_categories(expense_cat_id)`);
 addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NULL DEFAULT 'none'`);
 addColumnIfMissing('members', 'unsubscribe_token',`unsubscribe_token TEXT`);
+addColumnIfMissing('events',  'checkin_token',    `checkin_token TEXT`);
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_external_id ON members(external_id) WHERE external_id IS NOT NULL`); } catch (_) {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_unsub ON members(unsubscribe_token) WHERE unsubscribe_token IS NOT NULL`); } catch (_) {}
-// Backfill an unsubscribe token for every existing member.
+try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_checkin ON events(checkin_token) WHERE checkin_token IS NOT NULL`); } catch (_) {}
+// Backfill tokens for every existing member and event.
 db.prepare(`UPDATE members SET unsubscribe_token = lower(hex(randomblob(16))) WHERE unsubscribe_token IS NULL`).run();
+db.prepare(`UPDATE events  SET checkin_token     = lower(hex(randomblob(16))) WHERE checkin_token     IS NULL`).run();
 
 // Finance schema (services, harvests, day-born splits, special offerings, pledges, lookups).
 db.exec(`
@@ -347,6 +350,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/static/')) return next();
   if (req.path.startsWith('/u/')) return next();        // public unsubscribe pages
   if (req.path.startsWith('/webhooks/')) return next(); // inbound webhooks (Arkesel STOP)
+  if (req.path.startsWith('/checkin/')) return next();  // public QR check-in
   const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
   if (userCount === 0) {
     if (req.path === '/setup') return next();
@@ -1353,8 +1357,8 @@ app.get('/events/new', requireAdmin, (req, res) => {
 app.post('/events', requireAdmin, (req, res) => {
   const b = req.body;
   const info = db.prepare(`
-    INSERT INTO events (title, event_type, starts_at, ends_at, location, notes)
-    VALUES (@title, @event_type, @starts_at, @ends_at, @location, @notes)
+    INSERT INTO events (title, event_type, starts_at, ends_at, location, notes, checkin_token)
+    VALUES (@title, @event_type, @starts_at, @ends_at, @location, @notes, lower(hex(randomblob(16))))
   `).run({
     title: b.title, event_type: b.event_type || 'service',
     starts_at: b.starts_at.replace('T', ' '),
@@ -1403,8 +1407,13 @@ app.get('/events/:id', (req, res) => {
        </form>`
     : '';
 
+  const qrButton = res.locals.isAdmin
+    ? `<p><a class="btn" href="/events/${id}/qr">📱 QR check-in page</a>
+         <a class="btn ghost" href="/checkin/${esc(ev.checkin_token || '')}" target="_blank" rel="noopener">Preview self-check-in</a></p>`
+    : '';
   const body = `
     <p><strong>${esc(ev.event_type)}</strong> · ${esc(ev.starts_at)} · ${esc(ev.location) || ''}</p>
+    ${qrButton}
     <div class="two-col">
       <section>
         <h2>Attendees (${attendees.length})</h2>
@@ -1430,6 +1439,176 @@ app.post('/events/:id/uncheck', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   db.prepare(`DELETE FROM attendance WHERE event_id=? AND member_id=?`).run(id, Number(req.body.member_id));
   res.redirect(`/events/${id}`);
+});
+
+// ---------- QR check-in (admin display) ----------
+app.get('/events/:id/qr', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const ev = db.prepare(`SELECT * FROM events WHERE event_id=?`).get(id);
+  if (!ev) return res.status(404).send('Not found');
+  if (!ev.checkin_token) {
+    db.prepare(`UPDATE events SET checkin_token = lower(hex(randomblob(16))) WHERE event_id=?`).run(id);
+    ev.checkin_token = db.prepare(`SELECT checkin_token FROM events WHERE event_id=?`).get(id).checkin_token;
+  }
+  const baseUrl = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  const url = `${baseUrl}/checkin/${ev.checkin_token}`;
+  const QRCode = require('qrcode');
+  let qrSvg;
+  try {
+    qrSvg = await QRCode.toString(url, { type: 'svg', width: 400, margin: 2, errorCorrectionLevel: 'M' });
+  } catch (e) {
+    return res.status(500).send('QR generation failed: ' + e.message);
+  }
+  const when = new Date(ev.starts_at);
+  const dateStr = when.toLocaleString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  const body = `
+    <p><a href="/events/${id}">← Back to event</a></p>
+    <div class="qr-page">
+      <div class="qr-card">
+        <div class="qr-meta">
+          <h2>${esc(ev.title)}</h2>
+          <p>${esc(dateStr)}</p>
+          ${ev.location ? `<p class="muted-text">${esc(ev.location)}</p>` : ''}
+        </div>
+        <div class="qr-art">${qrSvg}</div>
+        <p class="qr-instruct"><strong>Scan with your phone camera</strong> to check in.</p>
+        <p class="qr-url muted-text">${esc(url)}</p>
+      </div>
+      <div class="qr-actions screen-only">
+        <button onclick="window.print()">🖨 Print this QR sign</button>
+        <a class="btn ghost" href="javascript:document.body.requestFullscreen ? document.body.requestFullscreen() : null">
+          Full-screen (for display)
+        </a>
+      </div>
+    </div>`;
+  res.page({ title: `Check-in QR · ${ev.title}`, active: '/events', body });
+});
+
+// ---------- QR check-in (public) ----------
+function findEventByToken(token) {
+  return db.prepare(
+    `SELECT event_id, title, starts_at, location, checkin_token
+       FROM events WHERE checkin_token = ?`
+  ).get(token);
+}
+
+app.get('/checkin/:token', (req, res) => {
+  const ev = findEventByToken(req.params.token);
+  if (!ev) {
+    return res.status(404).send(layout({
+      title: 'Check-in link not recognized', bare: true,
+      body: '<p>This check-in QR is no longer valid. Please ask an usher for help.</p>',
+    }));
+  }
+  const when = new Date(ev.starts_at).toLocaleString('en-GB', {
+    weekday: 'long', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+  res.send(layout({
+    title: `Check in · ${ev.title}`, bare: true,
+    body: `
+      <p class="muted-text">${esc(when)}${ev.location ? ' · ' + esc(ev.location) : ''}</p>
+      <form method="post" action="/checkin/${esc(req.params.token)}" class="form auth-form">
+        <label class="wide">Your name or Member ID
+          <input name="q" required autofocus
+                 placeholder="e.g. John Anderson or DMS-001">
+        </label>
+        <div class="actions"><button type="submit">Find me →</button></div>
+      </form>`,
+  }));
+});
+
+app.post('/checkin/:token', (req, res) => {
+  const ev = findEventByToken(req.params.token);
+  if (!ev) return res.status(404).send(layout({ title: 'Check-in link not recognized', bare: true,
+    body: '<p>This check-in QR is no longer valid.</p>' }));
+
+  // If the form posted a confirmed member_id, record attendance and finish.
+  if (req.body.member_id) {
+    const mid = Number(req.body.member_id);
+    const m = db.prepare(
+      `SELECT member_id, first_name, last_name FROM members WHERE member_id=? AND deleted_at IS NULL`
+    ).get(mid);
+    if (!m) return res.redirect(`/checkin/${req.params.token}`);
+    db.prepare(`INSERT OR IGNORE INTO attendance (event_id, member_id) VALUES (?, ?)`).run(ev.event_id, mid);
+    logActivity('attendance_recorded',
+      `${m.first_name} ${m.last_name} self-checked in to ${ev.title}`,
+      `/events/${ev.event_id}`, null);
+    return res.send(layout({
+      title: `✓ Checked in, ${m.first_name}`, bare: true,
+      body: `
+        <p style="font-size:1.1rem">Welcome, <strong>${esc(m.first_name)} ${esc(m.last_name)}</strong>.</p>
+        <p>You're checked in to <strong>${esc(ev.title)}</strong>. Have a blessed time. 🙏</p>
+        <p style="margin-top:1.25rem"><a href="/checkin/${esc(req.params.token)}">Check in another person</a></p>`,
+    }));
+  }
+
+  // Otherwise, search by name or external_id.
+  const q = (req.body.q || '').trim();
+  if (!q) return res.redirect(`/checkin/${req.params.token}`);
+  const like = `%${q}%`;
+  const matches = db.prepare(`
+    SELECT m.member_id, m.first_name, m.last_name, m.external_id,
+           m.mobile_phone, m.bible_class_id,
+           bc.name AS bible_class,
+           (SELECT 1 FROM attendance a WHERE a.event_id=? AND a.member_id=m.member_id) AS already
+    FROM members m
+    LEFT JOIN ministries bc ON bc.ministry_id = m.bible_class_id
+    WHERE m.deleted_at IS NULL
+      AND (
+        (m.first_name || ' ' || m.last_name) LIKE ?
+        OR m.external_id = ?
+        OR m.first_name LIKE ?
+        OR m.last_name  LIKE ?
+        OR m.mobile_phone LIKE ?
+      )
+    ORDER BY m.last_name LIMIT 12
+  `).all(ev.event_id, like, q.toUpperCase(), like, like, like);
+
+  if (matches.length === 0) {
+    return res.send(layout({
+      title: 'No match found', bare: true,
+      body: `
+        <p>No member found for <strong>"${esc(q)}"</strong>. Please ask an usher for help, or try a different spelling / your Member ID (e.g. DMS-007).</p>
+        <p><a href="/checkin/${esc(req.params.token)}">← Try again</a></p>`,
+    }));
+  }
+
+  if (matches.length === 1 && !matches[0].already) {
+    // Auto-confirm the single match.
+    db.prepare(`INSERT OR IGNORE INTO attendance (event_id, member_id) VALUES (?, ?)`).run(ev.event_id, matches[0].member_id);
+    logActivity('attendance_recorded',
+      `${matches[0].first_name} ${matches[0].last_name} self-checked in to ${ev.title}`,
+      `/events/${ev.event_id}`, null);
+    return res.send(layout({
+      title: `✓ Checked in, ${matches[0].first_name}`, bare: true,
+      body: `
+        <p style="font-size:1.1rem">Welcome, <strong>${esc(matches[0].first_name)} ${esc(matches[0].last_name)}</strong>.</p>
+        <p>You're checked in to <strong>${esc(ev.title)}</strong>. Have a blessed time. 🙏</p>
+        <p style="margin-top:1.25rem"><a href="/checkin/${esc(req.params.token)}">Check in another person</a></p>`,
+    }));
+  }
+
+  // Otherwise show a list to pick from.
+  const list = matches.map((m) => `
+    <form method="post" action="/checkin/${esc(req.params.token)}" class="checkin-pick">
+      <input type="hidden" name="member_id" value="${m.member_id}">
+      <button type="submit" ${m.already ? 'disabled' : ''}>
+        <div class="who">
+          <div class="name">${esc(m.first_name)} ${esc(m.last_name)}</div>
+          <div class="meta">${esc(m.external_id) || ''}${m.bible_class ? ' · ' + esc(m.bible_class) : ''}</div>
+        </div>
+        <span class="pick-tag">${m.already ? '✓ already checked in' : 'Tap to check in'}</span>
+      </button>
+    </form>`).join('');
+
+  res.send(layout({
+    title: matches.length === 1 ? 'Already checked in' : 'Pick your name', bare: true,
+    body: `
+      <p class="muted-text">${matches.length} match${matches.length === 1 ? '' : 'es'} for "${esc(q)}":</p>
+      ${list}
+      <p style="margin-top:1rem"><a href="/checkin/${esc(req.params.token)}">← Search again</a></p>`,
+  }));
 });
 
 // Keep old URLs working.
