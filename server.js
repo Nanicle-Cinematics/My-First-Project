@@ -120,7 +120,7 @@ addColumnIfMissing('expenses', 'approved_by',      `approved_by INTEGER REFERENC
 addColumnIfMissing('expenses', 'receipt_attached', `receipt_attached INTEGER NOT NULL DEFAULT 0`);
 addColumnIfMissing('expenses', 'reference_number', `reference_number TEXT`);
 addColumnIfMissing('expenses', 'expense_cat_id',   `expense_cat_id INTEGER REFERENCES expense_categories(expense_cat_id)`);
-addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NULL DEFAULT 'either'`);
+addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NULL DEFAULT 'none'`);
 addColumnIfMissing('members', 'unsubscribe_token',`unsubscribe_token TEXT`);
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_external_id ON members(external_id) WHERE external_id IS NOT NULL`); } catch (_) {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_unsub ON members(unsubscribe_token) WHERE unsubscribe_token IS NOT NULL`); } catch (_) {}
@@ -1028,10 +1028,13 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
       <label>Gender<select name="gender">${genderOpts}</select></label>
       <label>Marital<select name="marital_status">${maritalOpts}</select></label>
       <label>Bible class<select name="bible_class_id">${bibleClassOpts}</select></label>
-      <label>Communication preference<select name="preferred_channel">
-        ${Object.entries(PREF_LABELS).map(([v, l]) =>
-          `<option value="${v}" ${v === (member.preferred_channel || 'either') ? 'selected' : ''}>${esc(l)}</option>`).join('')}
-      </select></label>
+      <label>Communication preference
+        <select name="preferred_channel">
+          ${Object.entries(PREF_LABELS).map(([v, l]) =>
+            `<option value="${v}" ${v === (member.preferred_channel || 'none') ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+        </select>
+        <span class="hint">New members default to <em>Do not contact</em>. Switch once the member consents to SMS / email.</span>
+      </label>
       <label>Join date<input type="date" name="join_date" value="${fmtDate(member.join_date)}"></label>
       <label>Baptism date<input type="date" name="baptism_date" value="${fmtDate(member.baptism_date)}"></label>
       <label>Confirmation date<input type="date" name="confirmation_date" value="${fmtDate(member.confirmation_date)}"></label>
@@ -1087,7 +1090,7 @@ app.post('/members', requireAdmin, (req, res) => {
     date_of_birth: b.date_of_birth || null,
     day_born: DAYS_OF_WEEK.includes(b.day_born) ? b.day_born : null,
     gender: b.gender || null,
-    preferred_channel: PREF_LABELS[b.preferred_channel] ? b.preferred_channel : 'either',
+    preferred_channel: PREF_LABELS[b.preferred_channel] ? b.preferred_channel : 'none',
     marital_status: b.marital_status || null,
     membership_status: b.membership_status || 'visitor',
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
@@ -1213,7 +1216,7 @@ app.post('/members/:id', requireAdmin, (req, res) => {
     date_of_birth: b.date_of_birth || null,
     day_born: DAYS_OF_WEEK.includes(b.day_born) ? b.day_born : null,
     gender: b.gender || null,
-    preferred_channel: PREF_LABELS[b.preferred_channel] ? b.preferred_channel : 'either',
+    preferred_channel: PREF_LABELS[b.preferred_channel] ? b.preferred_channel : 'none',
     marital_status: b.marital_status || null,
     membership_status: b.membership_status || 'visitor',
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
@@ -3235,7 +3238,7 @@ function resolveAudience(orgIds) {
 
 // Decide whether a member can receive a given channel, respecting their preferred_channel.
 function canReceive(member, channel) {
-  const pref = (member.preferred_channel || 'either');
+  const pref = (member.preferred_channel || 'none');
   if (pref === 'none') return false;
   if (channel === 'sms')   return pref !== 'email_only';
   if (channel === 'email') return pref !== 'sms_only';
@@ -3273,7 +3276,7 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
   // Channel breakdown — already respects preferred_channel.
   let bothCount = 0, smsOnlyCount = 0, emailOnlyCount = 0, noneCount = 0, excludedPref = 0;
   for (const r of recipients) {
-    if ((r.preferred_channel || 'either') === 'none') { excludedPref++; continue; }
+    if ((r.preferred_channel || 'none') === 'none') { excludedPref++; continue; }
     const hasPhone = !!normalizePhoneGH(r.mobile_phone) && canReceive(r, 'sms');
     const hasEmail = !!r.email && canReceive(r, 'email');
     if (hasPhone && hasEmail) bothCount++;
@@ -3336,7 +3339,7 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
         recipients.map((r) => [esc(r.name),
           normalizePhoneGH(r.mobile_phone) || `<span class="muted-text">${esc(r.mobile_phone) || '—'}</span>`,
           esc(r.email) || '<span class="muted-text">—</span>',
-          esc(PREF_LABELS[r.preferred_channel || 'either'] || 'Both')]))}
+          esc(PREF_LABELS[r.preferred_channel || 'none'] || 'Do not contact')]))}
     </details>` : ''}
   ` : '';
 

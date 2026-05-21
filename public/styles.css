@@ -548,6 +548,10 @@ details.form-toggle summary {
 }
 .form label.wide { grid-column: 1 / -1; }
 .form .actions { grid-column: 1 / -1; }
+.form label .hint {
+  display: block; font-size: 0.75rem; color: var(--muted);
+  margin-top: 0.25rem; font-weight: normal;
+}
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
 @media (max-width: 900px) { .two-col, .form { grid-template-columns: 1fr; } }

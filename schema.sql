@@ -40,7 +40,7 @@ CREATE TABLE members (
     baptism_location  TEXT,
     confirmation_date TEXT,
     notes            TEXT,
-    preferred_channel TEXT   NOT NULL DEFAULT 'either'
+    preferred_channel TEXT   NOT NULL DEFAULT 'none'
                           CHECK (preferred_channel IN ('either','sms_only','email_only','none')),
     unsubscribe_token TEXT  UNIQUE,
     created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
