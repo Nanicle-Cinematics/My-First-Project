@@ -123,6 +123,30 @@ addColumnIfMissing('expenses', 'expense_cat_id',   `expense_cat_id INTEGER REFER
 addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NULL DEFAULT 'none'`);
 addColumnIfMissing('members', 'unsubscribe_token',`unsubscribe_token TEXT`);
 addColumnIfMissing('events',  'checkin_token',    `checkin_token TEXT`);
+addColumnIfMissing('members', 'photo_filename',   `photo_filename TEXT`);
+
+// Persistent app state for scheduled jobs (last birthday run, etc.).
+db.exec(`CREATE TABLE IF NOT EXISTS app_state (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);`);
+
+// Per-member tithes — distinct from general offerings (services) and
+// special offerings, lets us track an individual's giving over time.
+db.exec(`CREATE TABLE IF NOT EXISTS tithes (
+  tithe_id     INTEGER PRIMARY KEY,
+  member_id    INTEGER NOT NULL REFERENCES members(member_id) ON DELETE CASCADE,
+  amount       REAL NOT NULL CHECK (amount > 0),
+  tithe_date   TEXT NOT NULL,
+  method       TEXT,
+  reference    TEXT,
+  notes        TEXT,
+  recorded_by  INTEGER REFERENCES users(user_id),
+  deleted_at   TEXT,
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tithes_member ON tithes(member_id);
+CREATE INDEX IF NOT EXISTS idx_tithes_date   ON tithes(tithe_date);`);
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_external_id ON members(external_id) WHERE external_id IS NOT NULL`); } catch (_) {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_unsub ON members(unsubscribe_token) WHERE unsubscribe_token IS NOT NULL`); } catch (_) {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_checkin ON events(checkin_token) WHERE checkin_token IS NOT NULL`); } catch (_) {}
@@ -406,6 +430,23 @@ const NAV = [
 
 const DAYS_OF_WEEK = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
+// ---------- Photo storage (member photos saved next to the DB) ----------
+const PHOTO_DIR = process.env.PHOTO_DIR || path.join(path.dirname(DB_PATH), 'photos');
+try { fs.mkdirSync(PHOTO_DIR, { recursive: true }); } catch (_) {}
+const multer = require('multer');
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB
+  fileFilter: (req, file, cb) => {
+    const ok = /^image\/(jpe?g|png|webp|gif)$/i.test(file.mimetype);
+    cb(ok ? null : new Error('Only JPG / PNG / WebP / GIF images are allowed'), ok);
+  },
+});
+const EXT_FROM_MIME = {
+  'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+  'image/png':  'png', 'image/webp': 'webp', 'image/gif': 'gif',
+};
+
 // ---------- SMS (Arkesel) + Email (SMTP) helpers ----------
 const ARKESEL_API_KEY = process.env.ARKESEL_API_KEY || '';
 const ARKESEL_SENDER  = process.env.ARKESEL_SENDER  || 'DUNWELL';
@@ -457,6 +498,106 @@ async function sendSmsBatch(recipients, message) {
   return { ok: res.ok && data && data.code === 'ok',
            status: res.status, response: data, sent: recipients.length };
 }
+
+// ---------- Birthday automation ----------
+const BIRTHDAY_HOUR = Number(process.env.BIRTHDAY_HOUR || 7); // 24h, Ghana time = UTC
+const BIRTHDAY_TEMPLATE = process.env.BIRTHDAY_TEMPLATE ||
+  'Happy birthday, {first_name}! May God bless your year ahead. — {church_name}';
+
+function getState(key) {
+  const row = db.prepare(`SELECT value FROM app_state WHERE key=?`).get(key);
+  return row ? row.value : null;
+}
+function setState(key, value) {
+  db.prepare(`INSERT INTO app_state (key, value) VALUES (?, ?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, String(value));
+}
+
+function todaysBirthdayMembers() {
+  // Members whose date_of_birth has today's month-day, active, contactable by SMS.
+  return db.prepare(`
+    SELECT member_id, first_name, last_name, mobile_phone, preferred_channel
+    FROM members
+    WHERE deleted_at IS NULL
+      AND date_of_birth IS NOT NULL
+      AND strftime('%m-%d', date_of_birth) = strftime('%m-%d', 'now')
+      AND mobile_phone IS NOT NULL
+      AND preferred_channel IN ('either', 'sms_only')
+    ORDER BY last_name
+  `).all();
+}
+
+function renderBirthdayMessage(m) {
+  return BIRTHDAY_TEMPLATE
+    .replace(/\{first_name\}/g, m.first_name || '')
+    .replace(/\{last_name\}/g,  m.last_name  || '')
+    .replace(/\{church_name\}/g, CHURCH_NAME);
+}
+
+async function sendBirthdayBatch({ manual = false, userId = null } = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!manual && getState('last_birthday_send') === today) return { ok: true, skipped: 'already_ran_today' };
+
+  const recipients = todaysBirthdayMembers();
+  if (!recipients.length) {
+    setState('last_birthday_send', today);
+    return { ok: true, sent: 0, message: 'No birthdays today.' };
+  }
+
+  // Use the broadcast tables so it shows up in history alongside manual sends.
+  const bres = db.prepare(`
+    INSERT INTO broadcasts (channel, audience_label, subject, body, total_recipients, status, sent_by)
+    VALUES ('sms', ?, NULL, ?, ?, 'sending', ?)`)
+    .run(`Birthdays ${today}`, `[per-recipient template: "${BIRTHDAY_TEMPLATE}"]`, recipients.length, userId);
+  const broadcastId = bres.lastInsertRowid;
+
+  const insRecip = db.prepare(
+    `INSERT INTO broadcast_recipients (broadcast_id, member_id, channel, destination, status, error, sent_at)
+     VALUES (?, ?, 'sms', ?, ?, ?, ?)`
+  );
+  let sent = 0, failed = 0, skipped = 0;
+  for (const m of recipients) {
+    const phone = normalizePhoneGH(m.mobile_phone);
+    if (!phone) { skipped++; insRecip.run(broadcastId, m.member_id, m.mobile_phone || '', 'skipped', 'invalid phone', null); continue; }
+    const msg = renderBirthdayMessage(m);
+    try {
+      const r = await sendSmsBatch([phone], msg);
+      if (r.dryRun) {
+        insRecip.run(broadcastId, m.member_id, phone, 'pending', 'dry run', null);
+      } else if (r.ok) {
+        sent++;
+        insRecip.run(broadcastId, m.member_id, phone, 'sent', null, new Date().toISOString());
+      } else {
+        failed++;
+        insRecip.run(broadcastId, m.member_id, phone, 'failed', JSON.stringify(r.response || r), null);
+      }
+    } catch (e) {
+      failed++;
+      insRecip.run(broadcastId, m.member_id, phone, 'failed', e.message, null);
+    }
+  }
+  const dryRun = !ARKESEL_API_KEY;
+  const finalStatus = dryRun ? 'dry_run' : (sent === 0 && failed > 0 ? 'failed' : 'sent');
+  db.prepare(`UPDATE broadcasts SET successful_sends=?, failed_sends=?, status=? WHERE broadcast_id=?`)
+    .run(sent, failed, finalStatus, broadcastId);
+  setState('last_birthday_send', today);
+  logActivity('announcement',
+    `Sent ${sent} birthday message(s) (${recipients.length} eligible)`,
+    `/communications/broadcasts/${broadcastId}`, userId);
+  return { ok: true, sent, failed, skipped, recipients: recipients.length, broadcastId };
+}
+
+// Schedule: check every 15 minutes; fire after BIRTHDAY_HOUR if not yet run today.
+function tickBirthdayScheduler() {
+  const now = new Date();
+  if (now.getUTCHours() < BIRTHDAY_HOUR) return;
+  const today = now.toISOString().slice(0, 10);
+  if (getState('last_birthday_send') === today) return;
+  sendBirthdayBatch({ manual: false }).catch((e) => console.error('birthday job failed:', e.message));
+}
+setInterval(tickBirthdayScheduler, 15 * 60 * 1000);
+// Also run once at startup so the first deploy of the day doesn't miss it.
+setTimeout(tickBirthdayScheduler, 30 * 1000);
 
 // Send one personalized email per recipient. Each gets its own unsubscribe link.
 async function sendEmailEach(recipients, subject, body, opts = {}) {
@@ -1131,6 +1272,14 @@ app.get('/members/:id', (req, res) => {
     JOIN special_categories sc USING(special_cat_id)
     WHERE sp.donor_id = ? AND sp.deleted_at IS NULL
     ORDER BY sp.offering_date DESC LIMIT 20`).all(id);
+  const memberTithes = db.prepare(`
+    SELECT tithe_date, amount, method, reference
+    FROM tithes WHERE member_id = ? AND deleted_at IS NULL
+    ORDER BY tithe_date DESC LIMIT 20`).all(id);
+  const tithesYtdMember = db.prepare(`
+    SELECT COALESCE(SUM(amount),0) total FROM tithes
+    WHERE member_id = ? AND deleted_at IS NULL
+      AND substr(tithe_date,1,4) = strftime('%Y','now')`).get(id).total;
   const ytd = db.prepare(`
     SELECT COALESCE(SUM(amount),0) total FROM special_offerings
     WHERE donor_id = ? AND deleted_at IS NULL
@@ -1143,13 +1292,31 @@ app.get('/members/:id', (req, res) => {
     JOIN events e USING(event_id) WHERE a.member_id = ?
     ORDER BY e.starts_at DESC LIMIT 10`).all(id);
 
+  const photoBlock = `
+    <div class="member-photo">
+      ${m.photo_filename
+        ? `<img src="/photos/${esc(m.photo_filename)}" alt="Photo of ${esc(m.first_name)} ${esc(m.last_name)}">`
+        : `<div class="avatar-lg">${esc(initials(m.first_name + ' ' + m.last_name))}</div>`}
+      ${res.locals.isAdmin ? `
+        <form method="post" action="/members/${id}/photo" enctype="multipart/form-data" class="photo-form">
+          <input type="file" name="photo" accept="image/jpeg,image/png,image/webp,image/gif" required>
+          <button type="submit">Upload</button>
+          ${m.photo_filename ? `
+            <form method="post" action="/members/${id}/photo/delete" style="display:inline"
+                  onsubmit="return confirm('Remove this photo?')">
+              <button class="link" type="submit">Remove photo</button>
+            </form>` : ''}
+        </form>` : ''}
+    </div>`;
   const editPanel = res.locals.isAdmin
-    ? `<h2>Edit</h2>
+    ? `${photoBlock}
+       <h2>Edit</h2>
        ${memberForm(m, loadBibleClasses(), loadOrganizations(), memberOrgs, `/members/${id}`)}
        <form method="post" action="/members/${id}/delete" onsubmit="return confirm('Archive this member? They will be hidden but not permanently deleted.')">
          <button class="danger" type="submit">Archive member</button>
        </form>`
-    : `<h2>Profile</h2>
+    : `${photoBlock}
+       <h2>Profile</h2>
        <dl class="stats">
          <dt>Member ID</dt><dd>${esc(m.external_id) || '—'}</dd>
          <dt>Name</dt><dd>${esc(m.first_name)} ${esc(m.last_name)}</dd>
@@ -1171,8 +1338,9 @@ app.get('/members/:id', (req, res) => {
       <section>
         <h2>At a glance</h2>
         <dl class="stats">
-          <dt>Household</dt><dd>${esc(m.family_name) || '—'}</dd>
-          <dt>YTD giving</dt><dd>${fmtMoney(ytd)}</dd>
+          <dt>YTD tithes</dt><dd>${fmtMoney(tithesYtdMember)} <a href="/finance/tithes?member_id=${id}" style="font-size:0.8rem">view all →</a></dd>
+          <dt>YTD special giving</dt><dd>${fmtMoney(ytd)}</dd>
+          <dt>YTD total</dt><dd><strong>${fmtMoney(tithesYtdMember + ytd)}</strong></dd>
         </dl>
 
         <h3>Ministries</h3>
@@ -1185,10 +1353,15 @@ app.get('/members/:id', (req, res) => {
           sacraments.map((r) => [esc(r.sacrament_type), esc(r.occurred_on), esc(r.location)]))
           : '<p>None recorded.</p>'}
 
-        <h3>Recent giving</h3>
-        ${contribs.length ? table(['Date', 'Fund', 'Amount', 'Method'],
+        <h3>Recent tithes</h3>
+        ${memberTithes.length ? table(['Date', 'Amount', 'Method', 'Reference'],
+          memberTithes.map((r) => [esc(r.tithe_date), fmtMoney(r.amount), esc(r.method), esc(r.reference)]))
+          : '<p>No tithes recorded.</p>'}
+
+        <h3>Recent special offerings</h3>
+        ${contribs.length ? table(['Date', 'Category', 'Amount', 'Method'],
           contribs.map((r) => [esc(r.contributed_on), esc(r.fund), fmtMoney(r.amount), esc(r.method)]))
-          : '<p>No contributions on record.</p>'}
+          : '<p>No special offerings on record.</p>'}
 
         <h3>Recent attendance</h3>
         ${attendance.length ? table(['Event', 'When'],
@@ -1229,6 +1402,44 @@ app.post('/members/:id', requireAdmin, (req, res) => {
   });
   saveMemberOrgs(id, parseOrgIds(b));
   res.redirect(`/members/${id}`);
+});
+
+app.post('/members/:id/photo', requireAdmin, photoUpload.single('photo'), (req, res) => {
+  const id = Number(req.params.id);
+  if (!req.file) return res.redirect(`/members/${id}`);
+  const ext = EXT_FROM_MIME[req.file.mimetype.toLowerCase()] || 'jpg';
+  const filename = `${id}.${ext}`;
+  try {
+    fs.writeFileSync(path.join(PHOTO_DIR, filename), req.file.buffer);
+    // Remove any stale photos with other extensions.
+    for (const otherExt of Object.values(EXT_FROM_MIME)) {
+      if (otherExt !== ext) {
+        try { fs.unlinkSync(path.join(PHOTO_DIR, `${id}.${otherExt}`)); } catch (_) {}
+      }
+    }
+    db.prepare(`UPDATE members SET photo_filename = ? WHERE member_id = ?`).run(filename, id);
+  } catch (e) {
+    console.error('photo upload failed:', e.message);
+  }
+  res.redirect(`/members/${id}`);
+});
+
+app.post('/members/:id/photo/delete', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const m = db.prepare(`SELECT photo_filename FROM members WHERE member_id=?`).get(id);
+  if (m && m.photo_filename) {
+    try { fs.unlinkSync(path.join(PHOTO_DIR, m.photo_filename)); } catch (_) {}
+    db.prepare(`UPDATE members SET photo_filename = NULL WHERE member_id = ?`).run(id);
+  }
+  res.redirect(`/members/${id}`);
+});
+
+// Serve member photos. Auth-gated (the middleware above already required login).
+app.get('/photos/:filename', (req, res) => {
+  const safe = req.params.filename.replace(/[^a-zA-Z0-9._-]/g, '');
+  const full = path.join(PHOTO_DIR, safe);
+  if (!fs.existsSync(full)) return res.status(404).send('Not found');
+  res.sendFile(full);
 });
 
 app.post('/members/:id/delete', requireAdmin, (req, res) => {
@@ -1618,6 +1829,7 @@ app.get('/contributions', (_, res) => res.redirect('/finance'));
 const FINANCE_TABS = [
   ['/finance',          'Overview'],
   ['/finance/services', 'Services'],
+  ['/finance/tithes',   'Tithes'],
   ['/finance/harvests', 'Harvests'],
   ['/finance/special',  'Special Offerings'],
   ['/finance/pledges',  'Pledges'],
@@ -1666,8 +1878,9 @@ app.get('/finance', (req, res) => {
   const services = sumYTD(`SELECT COALESCE(SUM(total_amount),0) t FROM services WHERE deleted_at IS NULL AND substr(service_date,1,4)=strftime('%Y','now')`);
   const harvests = sumYTD(`SELECT COALESCE(SUM(total_collected),0) t FROM harvests WHERE deleted_at IS NULL AND harvest_year=strftime('%Y','now')`);
   const special = sumYTD(`SELECT COALESCE(SUM(amount),0) t FROM special_offerings WHERE deleted_at IS NULL AND substr(offering_date,1,4)=strftime('%Y','now')`);
+  const tithesYtd = sumYTD(`SELECT COALESCE(SUM(amount),0) t FROM tithes WHERE deleted_at IS NULL AND substr(tithe_date,1,4)=strftime('%Y','now')`);
   const expenses = sumYTD(`SELECT COALESCE(SUM(amount),0) t FROM expenses WHERE substr(spent_on,1,4)=strftime('%Y','now')`);
-  const offerings = services + special;
+  const offerings = services + special + tithesYtd;
   const net = offerings + harvests - expenses;
 
   const recentServices = db.prepare(`
@@ -1697,6 +1910,9 @@ app.get('/finance', (req, res) => {
       <div class="stat"><div class="ico green">↑</div><div>
         <div class="label">Service Offerings YTD</div>
         <div class="value">${fmtMoney(services)}</div></div></div>
+      <div class="stat"><div class="ico purple">₵</div><div>
+        <div class="label">Tithes YTD</div>
+        <div class="value">${fmtMoney(tithesYtd)}</div></div></div>
       <div class="stat"><div class="ico blue">🌾</div><div>
         <div class="label">Harvests YTD</div>
         <div class="value">${fmtMoney(harvests)}</div></div></div>
@@ -2048,6 +2264,139 @@ app.post('/finance/special', requireAdmin, (req, res) => {
     `Special offering of ${fmtMoney(b.amount)} recorded`,
     '/finance/special', res.locals.user.user_id);
   res.redirect('/finance/special');
+});
+
+// ---------- finance: tithes ----------
+app.get('/finance/tithes', (req, res) => {
+  const memberId = req.query.member_id ? Number(req.query.member_id) : null;
+  const members = loadMembersList();
+  const memOpts = '<option value="">— all members —</option>' +
+    members.map((m) => `<option value="${m.member_id}" ${m.member_id === memberId ? 'selected' : ''}>${esc(m.name)}${m.external_id ? ' · ' + esc(m.external_id) : ''}</option>`).join('');
+  const memOptsForm = members.map((m) => `<option value="${m.member_id}">${esc(m.name)}${m.external_id ? ' · ' + esc(m.external_id) : ''}</option>`).join('');
+
+  const where = memberId ? 'AND t.member_id = ?' : '';
+  const params = memberId ? [memberId] : [];
+
+  const rows = db.prepare(`
+    SELECT t.tithe_id, t.member_id, t.tithe_date, t.amount, t.method, t.reference, t.notes,
+           m.first_name || ' ' || m.last_name AS member, m.external_id,
+           COALESCE(u.display_name, u.username) AS recorded_by
+    FROM tithes t
+    JOIN members m USING(member_id)
+    LEFT JOIN users u ON u.user_id = t.recorded_by
+    WHERE t.deleted_at IS NULL ${where}
+    ORDER BY t.tithe_date DESC, t.tithe_id DESC LIMIT 200
+  `).all(...params);
+
+  const ytdTotal = db.prepare(`
+    SELECT COALESCE(SUM(amount),0) t FROM tithes
+    WHERE deleted_at IS NULL ${where ? where.replace('t.member_id', 'member_id') : ''}
+      AND substr(tithe_date,1,4) = strftime('%Y','now')
+  `).get(...params).t;
+  const monthTotal = db.prepare(`
+    SELECT COALESCE(SUM(amount),0) t FROM tithes
+    WHERE deleted_at IS NULL ${where ? where.replace('t.member_id', 'member_id') : ''}
+      AND substr(tithe_date,1,7) = strftime('%Y-%m','now')
+  `).get(...params).t;
+  const tithers = db.prepare(`
+    SELECT COUNT(DISTINCT member_id) c FROM tithes
+    WHERE deleted_at IS NULL
+      AND substr(tithe_date,1,4) = strftime('%Y','now')
+  `).get().c;
+
+  // Top tithers YTD (when not filtered).
+  const topTithers = memberId ? [] : db.prepare(`
+    SELECT m.member_id, m.first_name || ' ' || m.last_name AS name, m.external_id,
+           ROUND(SUM(t.amount), 2) AS total
+    FROM tithes t JOIN members m USING(member_id)
+    WHERE t.deleted_at IS NULL AND m.deleted_at IS NULL
+      AND substr(t.tithe_date,1,4) = strftime('%Y','now')
+    GROUP BY m.member_id ORDER BY total DESC LIMIT 10
+  `).all();
+
+  const addForm = res.locals.isAdmin
+    ? `<details class="form-toggle" style="margin-bottom:1rem" ${memberId ? 'open' : ''}>
+         <summary><strong>+ Record a tithe</strong></summary>
+         <form class="form" method="post" action="/finance/tithes" style="margin-top:0.75rem">
+           <label>Member<select name="member_id" required>
+             ${memberId ? `<option value="${memberId}" selected>${esc((members.find((x) => x.member_id === memberId) || {}).name) || '?'}</option>` : ''}
+             ${memOptsForm}
+           </select></label>
+           <label>Date<input type="date" name="tithe_date" required value="${todayISO()}"></label>
+           <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required></label>
+           <label>Method<select name="method">
+             ${['cash','check','card','online','mobile_money','transfer','other'].map((m) => `<option>${m}</option>`).join('')}
+           </select></label>
+           <label>Reference<input name="reference" placeholder="e.g. MoMo ID"></label>
+           <label class="wide">Notes<input name="notes"></label>
+           <div class="actions"><button type="submit">Save</button></div>
+         </form>
+       </details>` : '';
+
+  const memberFilter = `
+    <form class="filters" method="get" action="/finance/tithes">
+      <label>Filter by member <select name="member_id" onchange="this.form.submit()">${memOpts}</select></label>
+      <noscript><button type="submit">Apply</button></noscript>
+      ${memberId ? `<a class="btn ghost" href="/finance/tithes">Clear filter</a>` : ''}
+    </form>`;
+
+  const stats = `
+    <div class="stat-grid">
+      <div class="stat"><div class="ico green">₵</div><div>
+        <div class="label">${memberId ? "Member's YTD" : 'YTD Tithes'}</div>
+        <div class="value">${fmtMoney(ytdTotal)}</div></div></div>
+      <div class="stat"><div class="ico blue">📅</div><div>
+        <div class="label">${memberId ? "Member's this month" : 'This month'}</div>
+        <div class="value">${fmtMoney(monthTotal)}</div></div></div>
+      ${memberId ? '' : `
+        <div class="stat"><div class="ico purple">👥</div><div>
+          <div class="label">Distinct tithers YTD</div>
+          <div class="value">${tithers}</div></div></div>`}
+    </div>`;
+
+  const tithesTable = rows.length
+    ? table(['Date', 'Member', 'ID', 'Amount', 'Method', 'Reference', 'By'],
+        rows.map((r) => [esc(r.tithe_date),
+          `<a href="/members/${r.member_id}">${esc(r.member)}</a>`,
+          esc(r.external_id) || '—',
+          fmtMoney(r.amount), esc(r.method), esc(r.reference),
+          esc(r.recorded_by)]))
+    : '<p class="muted-text">No tithes recorded for this filter.</p>';
+
+  const topTable = topTithers.length
+    ? `<h2>Top tithers · this year</h2>
+       ${table(['Member', 'Member ID', 'YTD total'],
+         topTithers.map((r) => [`<a href="/members/${r.member_id}">${esc(r.name)}</a>`,
+           esc(r.external_id) || '—', fmtMoney(r.total)]))}`
+    : '';
+
+  res.page({
+    title: 'Finance · Tithes', active: '/finance',
+    body: `${financeTabs('/finance/tithes')}
+      ${memberFilter}
+      ${stats}
+      ${addForm}
+      ${memberId ? '<h2>Tithe history</h2>' : '<h2>Recent tithes</h2>'}
+      ${tithesTable}
+      ${topTable}`,
+  });
+});
+
+app.post('/finance/tithes', requireAdmin, (req, res) => {
+  const b = req.body;
+  if (!b.member_id || !b.amount || !b.tithe_date) return res.redirect('/finance/tithes');
+  const info = db.prepare(`
+    INSERT INTO tithes (member_id, amount, tithe_date, method, reference, notes, recorded_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    Number(b.member_id), Number(b.amount), b.tithe_date,
+    b.method || null, b.reference || null, b.notes || null,
+    res.locals.user.user_id
+  );
+  const m = db.prepare(`SELECT first_name, last_name FROM members WHERE member_id=?`).get(Number(b.member_id));
+  logActivity('contribution_recorded',
+    `Tithe of ${fmtMoney(b.amount)} from ${m ? m.first_name + ' ' + m.last_name : 'a member'}`,
+    `/finance/tithes?member_id=${b.member_id}`, res.locals.user.user_id);
+  res.redirect(`/finance/tithes?member_id=${b.member_id}`);
 });
 
 // ---------- finance: pledges ----------
@@ -3877,6 +4226,14 @@ app.get('/sacraments', (req, res) => {
 });
 
 // ---------- settings ----------
+app.post('/settings/birthdays/run', requireAdmin, async (req, res) => {
+  try {
+    const result = await sendBirthdayBatch({ manual: true, userId: res.locals.user.user_id });
+    if (result.broadcastId) return res.redirect(`/communications/broadcasts/${result.broadcastId}`);
+  } catch (e) { console.error('birthday manual run failed:', e.message); }
+  res.redirect('/settings');
+});
+
 app.get('/settings', requireAdmin, (req, res) => {
   const body = `
     <div class="card">
@@ -3909,6 +4266,19 @@ app.get('/settings', requireAdmin, (req, res) => {
   SMTP_PASS="your-16-char-app-password" \\
   SMTP_FROM="Dunwell Methodist &lt;your.address@gmail.com&gt;"</pre>
       <p class="muted-text">For Gmail, generate an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> — your normal password will not work.</p>
+    </div>
+    <div class="card">
+      <h2>Birthday automation</h2>
+      <dl class="stats">
+        <dt>Daily run time</dt><dd>${BIRTHDAY_HOUR}:00 (server time)</dd>
+        <dt>Last run</dt><dd>${esc(getState('last_birthday_send') || '—')}</dd>
+        <dt>Today's eligible</dt><dd>${todaysBirthdayMembers().length} member(s)</dd>
+        <dt>Template</dt><dd><code>${esc(BIRTHDAY_TEMPLATE)}</code></dd>
+      </dl>
+      <p>The system sends a personalized SMS to every member whose birthday matches today's date, has a phone, and hasn't opted out. To customize the message, set the <code>BIRTHDAY_TEMPLATE</code> env var. Tokens: <code>{first_name}</code>, <code>{last_name}</code>, <code>{church_name}</code>.</p>
+      <form method="post" action="/settings/birthdays/run">
+        <button type="submit">🎂 Send today's birthday messages now</button>
+      </form>
     </div>
     <div class="card">
       <h2>Backup</h2>

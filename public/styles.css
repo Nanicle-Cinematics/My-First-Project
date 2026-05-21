@@ -248,6 +248,29 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
 }
 .bar-value { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 
+/* Member photo block */
+.member-photo {
+  display: flex; flex-direction: column; align-items: center; gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+.member-photo img {
+  width: 160px; height: 160px; border-radius: 50%;
+  object-fit: cover; border: 3px solid var(--accent);
+  background: var(--soft);
+}
+.member-photo .avatar-lg {
+  width: 160px; height: 160px; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent-dark);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 2.5rem;
+  border: 3px solid var(--accent);
+}
+.member-photo .photo-form {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+.member-photo .photo-form input[type=file] { font-size: 0.8rem; }
+
 /* QR display page */
 .qr-page {
   display: flex; flex-direction: column; align-items: center; gap: 1rem;
