@@ -271,14 +271,29 @@ h3 { font-size: 1.15rem; font-weight: 600; }
   letter-spacing: 0.04em;
 }
 .plan h3 { font-size: 1.3rem; margin-bottom: 0.25rem; }
-.plan-tag { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.25rem; }
+.plan-tag { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.25rem; min-height: 2.5em; }
+.plan-setup {
+  background: var(--soft);
+  border-radius: 8px;
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 0.75rem;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.plan-setup .setup-label {
+  font-size: 0.78rem; color: var(--muted); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.plan-setup .setup-amount { display: flex; align-items: baseline; gap: 0.15rem; }
+.plan-setup .setup-amount .currency { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+.plan-setup .setup-amount .amount { font-size: 1.25rem; font-weight: 700; color: var(--ink); }
 .plan-price {
   display: flex; align-items: baseline; gap: 0.3rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 0.5rem;
 }
 .plan-price .currency { font-size: 1rem; color: var(--muted); font-weight: 600; }
 .plan-price .amount { font-size: 2.5rem; font-weight: 700; color: var(--blue-dark); }
 .plan-price .per { color: var(--muted); font-size: 0.9rem; }
+.plan-price + ul { margin-top: 0.75rem; }
 .plan ul {
   list-style: none; padding: 0; margin: 0 0 1.5rem;
   flex-grow: 1;
