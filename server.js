@@ -13,11 +13,30 @@ const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
 const PUBLIC_URL  = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 
 // Auto-create the DB from schema.sql on first boot (so deployments work without shell access).
+// SAFETY: in production, refuse to silently create an empty DB unless ALLOW_DB_INIT=1 is set.
+// This prevents a missing/unmounted volume from being papered over with a fresh empty schema,
+// which would look like total data loss to the user.
 if (!fs.existsSync(DB_PATH)) {
   const schemaPath = path.join(__dirname, 'schema.sql');
   if (!fs.existsSync(schemaPath)) {
     console.error(`Database not found at ${DB_PATH} and schema.sql is missing.`);
     process.exit(1);
+  }
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DB_INIT !== '1') {
+    console.error(
+      `\nREFUSING TO START: no database at ${DB_PATH}.\n` +
+      `\nThis is production (NODE_ENV=production) and a missing DB usually means\n` +
+      `the volume isn't mounted — not that you actually want a fresh empty schema.\n` +
+      `\nIf you really do want to initialize a brand-new database here, set the\n` +
+      `secret ALLOW_DB_INIT=1, redeploy, then unset it once the DB exists:\n` +
+      `\n  flyctl secrets set ALLOW_DB_INIT=1 -a <app>\n` +
+      `  flyctl deploy -a <app>\n` +
+      `  flyctl secrets unset ALLOW_DB_INIT -a <app>\n`
+    );
+    process.exit(1);
+  }
+  if (process.env.NODE_ENV === 'production') {
+    console.warn(`ALLOW_DB_INIT=1 is set — creating a fresh DB at ${DB_PATH}. Unset this secret after first boot.`);
   }
   console.log(`No database at ${DB_PATH}; creating from schema.sql...`);
   const fresh = new Database(DB_PATH);
