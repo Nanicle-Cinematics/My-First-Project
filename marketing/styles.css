@@ -112,7 +112,67 @@ h3 { font-size: 1.15rem; font-weight: 600; }
   .hero-art { display: none; }
 }
 
-/* ---------- Hero screenshot mockup ---------- */
+/* ---------- Hero screenshot (real PNG) ---------- */
+.hero-screenshot {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border);
+  display: block;
+}
+
+/* ---------- Gallery: real screenshots grid ---------- */
+.gallery {
+  padding: 5rem 0;
+  background: linear-gradient(180deg, #fff 0%, var(--soft) 100%);
+}
+.gallery h2 { text-align: center; }
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+.gallery-card {
+  margin: 0;
+  background: #fff;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  transition: transform 0.15s, box-shadow 0.15s;
+  display: flex;
+  flex-direction: column;
+}
+.gallery-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg);
+}
+.gallery-card.wide { grid-column: span 2; }
+@media (max-width: 720px) {
+  .gallery-card.wide { grid-column: span 1; }
+}
+.gallery-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-bottom: 1px solid var(--border);
+  background: var(--soft);
+}
+.gallery-card figcaption {
+  padding: 1rem 1.25rem 1.25rem;
+}
+.gallery-card figcaption h3 {
+  margin: 0 0 0.3rem;
+  font-size: 1.05rem;
+}
+.gallery-card figcaption p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* ---------- Legacy mockup (kept in case images aren't loaded) ---------- */
 .screenshot-frame {
   background: #fff;
   border-radius: 16px;
