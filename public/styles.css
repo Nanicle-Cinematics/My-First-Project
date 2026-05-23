@@ -358,6 +358,9 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
 .stat .trend { font-size: 0.75rem; color: var(--pos); }
 .stat .trend.down { color: var(--danger); }
 
+/* Inline negative-money styling — used for outstanding pledges (> 0). */
+.negative { color: var(--danger); font-weight: 600; }
+
 /* ---------- Quick actions (button-dropdown) ---------- */
 .quick-drop {
   margin-bottom: 1.25rem;

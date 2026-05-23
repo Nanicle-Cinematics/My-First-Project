@@ -427,6 +427,7 @@ const fmtMoney = (n) => {
   const v = Number(n);
   return 'GH₵ ' + v.toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+const fmtOutstanding = (n) => Number(n) > 0 ? `<span class="negative">${fmtMoney(n)}</span>` : fmtMoney(n);
 const fmtDate = (s) => (s ? String(s).slice(0, 10) : '');
 const initials = (name) => {
   if (!name) return '?';
@@ -1172,7 +1173,7 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
     bibleClasses.map((b) =>
       `<option value="${b.ministry_id}" ${b.ministry_id === member.bible_class_id ? 'selected' : ''}>${esc(b.name)}</option>`
     ).join('');
-  const statusOpts = ['visitor', 'regular', 'member', 'inactive', 'transferred', 'deceased', 'other']
+  const statusOpts = ['visitor', 'member']
     .map((s) => `<option value="${s}" ${s === member.membership_status ? 'selected' : ''}>${s}</option>`).join('');
   const maritalOpts = ['', 'single', 'married', 'divorced', 'widowed', 'separated', 'other']
     .map((s) => `<option value="${s}" ${s === (member.marital_status || '') ? 'selected' : ''}>${s || '—'}</option>`).join('');
@@ -1294,24 +1295,6 @@ app.get('/members/:id', (req, res) => {
     SELECT mn.name, mm.role, mm.joined_date FROM ministry_memberships mm
     JOIN ministries mn USING(ministry_id) WHERE mm.member_id = ? AND mm.left_date IS NULL
     ORDER BY mn.name`).all(id);
-  const contribs = db.prepare(`
-    SELECT sp.offering_date AS contributed_on, sc.category_name AS fund, sp.amount, NULL AS method
-    FROM special_offerings sp
-    JOIN special_categories sc USING(special_cat_id)
-    WHERE sp.donor_id = ? AND sp.deleted_at IS NULL
-    ORDER BY sp.offering_date DESC LIMIT 20`).all(id);
-  const memberTithes = db.prepare(`
-    SELECT tithe_date, amount, method, reference
-    FROM tithes WHERE member_id = ? AND deleted_at IS NULL
-    ORDER BY tithe_date DESC LIMIT 20`).all(id);
-  const tithesYtdMember = db.prepare(`
-    SELECT COALESCE(SUM(amount),0) total FROM tithes
-    WHERE member_id = ? AND deleted_at IS NULL
-      AND substr(tithe_date,1,4) = strftime('%Y','now')`).get(id).total;
-  const ytd = db.prepare(`
-    SELECT COALESCE(SUM(amount),0) total FROM special_offerings
-    WHERE donor_id = ? AND deleted_at IS NULL
-      AND substr(offering_date,1,4) = strftime('%Y','now')`).get(id).total;
   const sacraments = db.prepare(`
     SELECT sacrament_type, occurred_on, location FROM sacraments
     WHERE member_id = ? OR spouse_id = ? ORDER BY occurred_on DESC`).all(id, id);
@@ -1365,11 +1348,6 @@ app.get('/members/:id', (req, res) => {
       </section>
       <section>
         <h2>At a glance</h2>
-        <dl class="stats">
-          <dt>YTD tithes</dt><dd>${fmtMoney(tithesYtdMember)} <a href="/finance/tithes?member_id=${id}" style="font-size:0.8rem">view all →</a></dd>
-          <dt>YTD special giving</dt><dd>${fmtMoney(ytd)}</dd>
-          <dt>YTD total</dt><dd><strong>${fmtMoney(tithesYtdMember + ytd)}</strong></dd>
-        </dl>
 
         <h3>Ministries</h3>
         ${ministries.length ? table(['Ministry', 'Role', 'Joined'],
@@ -1380,16 +1358,6 @@ app.get('/members/:id', (req, res) => {
         ${sacraments.length ? table(['Type', 'Date', 'Location'],
           sacraments.map((r) => [esc(r.sacrament_type), esc(r.occurred_on), esc(r.location)]))
           : '<p>None recorded.</p>'}
-
-        <h3>Recent tithes</h3>
-        ${memberTithes.length ? table(['Date', 'Amount', 'Method', 'Reference'],
-          memberTithes.map((r) => [esc(r.tithe_date), fmtMoney(r.amount), esc(r.method), esc(r.reference)]))
-          : '<p>No tithes recorded.</p>'}
-
-        <h3>Recent special offerings</h3>
-        ${contribs.length ? table(['Date', 'Category', 'Amount', 'Method'],
-          contribs.map((r) => [esc(r.contributed_on), esc(r.fund), fmtMoney(r.amount), esc(r.method)]))
-          : '<p>No special offerings on record.</p>'}
 
         <h3>Recent attendance</h3>
         ${attendance.length ? table(['Event', 'When'],
@@ -2209,7 +2177,7 @@ app.get('/finance/harvests/:id', (req, res) => {
           pledges.map((p) => [esc(p.pledge_date),
             `<a href="/members/${p.member_id}">${esc(p.member)}</a>`,
             fmtMoney(p.pledged_amount), fmtMoney(p.paid_amount),
-            fmtMoney(p.pledged_amount - p.paid_amount),
+            fmtOutstanding(p.pledged_amount - p.paid_amount),
             esc(p.status)]))
       : '<p class="muted-text">No pledges yet. Add them from the <a href="/finance/pledges">Pledges</a> tab.</p>'}
     ${res.locals.isAdmin ? `<form method="post" action="/finance/harvests/${id}/delete"
@@ -2465,7 +2433,7 @@ app.get('/finance/pledges', (req, res) => {
           `<a href="/members/${p.member_id}">${esc(p.member)}</a>`,
           esc(p.harvest_name),
           fmtMoney(p.pledged_amount), fmtMoney(p.paid_amount),
-          fmtMoney(p.pledged_amount - p.paid_amount),
+          fmtOutstanding(p.pledged_amount - p.paid_amount),
           `<span class="pill pill-${esc(p.status.toLowerCase())}">${esc(p.status)}</span>`,
           res.locals.isAdmin
             ? `<form method="post" action="/finance/pledges/${p.pledge_id}/pay" class="inline">
@@ -2509,7 +2477,7 @@ app.post('/finance/pledges/:id/pay', requireAdmin, (req, res) => {
 // ---------- finance: expenses ----------
 app.get('/finance/expenses', (req, res) => {
   const cats = loadExpenseCategories();
-  const users = db.prepare(`SELECT user_id, COALESCE(display_name, username) AS name FROM users WHERE deleted_at IS NULL ORDER BY name`).all();
+  const currentUser = res.locals.user;
   const rows = db.prepare(`
     SELECT e.expense_id, e.spent_on, e.amount, e.description, e.paid_to,
            e.payment_method, e.reference_number, e.receipt_attached,
@@ -2520,8 +2488,8 @@ app.get('/finance/expenses', (req, res) => {
     LEFT JOIN users u ON u.user_id = e.approved_by
     ORDER BY e.spent_on DESC, e.expense_id DESC LIMIT 100`).all();
   const catOpts = cats.map((c) => `<option value="${c.expense_cat_id}">${esc(c.category_name)}</option>`).join('');
-  const userOpts = '<option value="">(unapproved)</option>' +
-    users.map((u) => `<option value="${u.user_id}">${esc(u.name)}</option>`).join('');
+  const approverName = esc(currentUser.display_name || currentUser.username);
+  const userOpts = `<option value="${currentUser.user_id}">${approverName}</option>`;
   const addForm = res.locals.isAdmin
     ? `<details class="form-toggle" style="margin-bottom:1rem">
          <summary><strong>+ Record an expense</strong></summary>
@@ -3239,7 +3207,7 @@ app.get('/reports/harvests', (req, res) => {
           `<a href="/members/${p.member_id}">${esc(p.member)}</a>`,
           esc(p.day_born) || '—', esc(p.org_name) || '—',
           fmtMoney(p.pledged_amount), fmtMoney(p.paid_amount),
-          fmtMoney(p.outstanding),
+          fmtOutstanding(p.outstanding),
           (p.pct_paid == null ? '—' : p.pct_paid + '%'),
           `<span class="pill pill-${esc((p.status || '').toLowerCase())}">${esc(p.status)}</span>`]))
         : '<p class="muted-text">No pledges for this harvest.</p>'}
