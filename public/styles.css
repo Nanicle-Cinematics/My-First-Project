@@ -358,27 +358,88 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
 .stat .trend { font-size: 0.75rem; color: var(--pos); }
 .stat .trend.down { color: var(--danger); }
 
-/* ---------- Quick actions ---------- */
-.quick {
-  background: var(--panel);
-  border-radius: 12px;
-  padding: 1rem 1.25rem;
-  box-shadow: var(--shadow);
-  display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
+/* ---------- Quick actions (button-dropdown) ---------- */
+.quick-drop {
   margin-bottom: 1.25rem;
+  display: inline-block;
+  position: relative;
 }
-.quick > .label { font-weight: 600; margin-right: 0.5rem; }
-.quick a.qa {
-  background: var(--soft);
+.quick-drop > summary {
+  background: var(--panel);
   border-radius: 10px;
-  padding: 0.6rem 0.9rem;
+  padding: 0.6rem 1rem;
+  box-shadow: var(--shadow);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  user-select: none;
+}
+.quick-drop > summary::-webkit-details-marker { display: none; }
+.quick-drop > summary:hover { background: var(--accent-soft); }
+.quick-drop .caret { font-size: 0.8rem; transition: transform 0.15s; opacity: 0.7; }
+.quick-drop[open] > summary .caret { transform: rotate(180deg); }
+.quick-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 10;
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg, var(--shadow));
+  padding: 0.5rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  min-width: 360px;
+}
+.quick-menu a.qa {
+  background: var(--soft);
+  border-radius: 8px;
+  padding: 0.55rem 0.8rem;
   display: flex; align-items: center; gap: 0.5rem;
   color: var(--ink); font-size: 0.85rem;
   border: 1px solid transparent;
+  white-space: nowrap;
 }
-.quick a.qa:hover {
+.quick-menu a.qa:hover {
   background: var(--accent-soft); border-color: var(--accent);
   text-decoration: none;
+}
+.quick-menu a.qa .ico { font-size: 1rem; }
+@media (max-width: 520px) {
+  .quick-menu { grid-template-columns: 1fr; min-width: 240px; }
+}
+
+/* ---------- Collapsible card (used by Recent Activities) ---------- */
+.collapse-card > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.collapse-card > summary::-webkit-details-marker { display: none; }
+.collapse-card > summary .caret {
+  font-size: 0.85rem;
+  transition: transform 0.15s;
+  opacity: 0.6;
+  margin-left: 0.4rem;
+}
+.collapse-card[open] > summary .caret { transform: rotate(180deg); }
+.collapse-card .card-count {
+  display: inline-block;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.collapse-card a.view-all {
+  display: inline-block;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
 }
 
 /* ---------- Cards / dashboard grid ---------- */

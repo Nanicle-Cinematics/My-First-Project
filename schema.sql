@@ -30,11 +30,11 @@ CREATE TABLE members (
     email            TEXT,
     mobile_phone     TEXT,
     marital_status   TEXT    CHECK (marital_status IN
-                          ('single','married','divorced','widowed','separated')
+                          ('single','married','divorced','widowed','separated','other')
                           OR marital_status IS NULL),
     membership_status TEXT   NOT NULL DEFAULT 'visitor'
                           CHECK (membership_status IN
-                          ('visitor','regular','member','inactive','transferred','deceased')),
+                          ('visitor','regular','member','inactive','transferred','deceased','other')),
     join_date         TEXT,
     baptism_date      TEXT,
     baptism_location  TEXT,
@@ -253,7 +253,7 @@ CREATE TABLE services (
 
 CREATE TABLE harvests (
     harvest_id      INTEGER PRIMARY KEY,
-    harvest_type    TEXT NOT NULL CHECK (harvest_type IN ('Organizational','End-of-Year')),
+    harvest_type    TEXT NOT NULL CHECK (harvest_type IN ('Organizational','End-of-Year','Other')),
     harvest_name    TEXT NOT NULL,
     harvest_year    INTEGER NOT NULL,
     harvest_date    TEXT,

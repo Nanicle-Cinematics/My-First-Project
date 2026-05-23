@@ -861,7 +861,7 @@ app.get('/', (req, res) => {
 
   const recentActivity = db.prepare(`
     SELECT kind, description, link, occurred_at FROM activity_log
-    ORDER BY occurred_at DESC LIMIT 6
+    ORDER BY occurred_at DESC LIMIT 5
   `).all();
 
   const upcoming = db.prepare(`
@@ -966,15 +966,17 @@ app.get('/', (req, res) => {
   const qaLink = (href, icon, label) =>
     `<a class="qa" href="${href}"><span class="ico">${icon}</span> ${label}</a>`;
   const quick = isAdmin ? `
-    <div class="quick">
-      <div class="label">Quick Actions</div>
-      ${qaLink('/members/new',       '👤+', 'Add Member')}
-      ${qaLink('/events',            '✓',   'Record Attendance')}
-      ${qaLink('/finance/new',       '₵',   'Record Offering')}
-      ${qaLink('/communications/new','✉',   'Post Announcement')}
-      ${qaLink('/events/new',        '📅',  'Add Event')}
-      ${qaLink('/reports',           '📊',  'Generate Report')}
-    </div>` : '';
+    <details class="quick-drop">
+      <summary>⚡ Quick Actions <span class="caret">▾</span></summary>
+      <div class="quick-menu">
+        ${qaLink('/members/new',       '👤+', 'Add Member')}
+        ${qaLink('/events',            '✓',   'Record Attendance')}
+        ${qaLink('/finance/new',       '₵',   'Record Offering')}
+        ${qaLink('/communications/new','✉',   'Post Announcement')}
+        ${qaLink('/events/new',        '📅',  'Add Event')}
+        ${qaLink('/reports',           '📊',  'Generate Report')}
+      </div>
+    </details>` : '';
 
   const activityIcons = {
     member_added: '👤', attendance_recorded: '✓', contribution_recorded: '₵',
@@ -983,13 +985,19 @@ app.get('/', (req, res) => {
   };
   const activityCard = `
     <div class="card">
-      <div class="card-head"><h2>Recent Activities</h2><a href="/reports">View all</a></div>
-      ${recentActivity.length ? `<ul class="list">${recentActivity.map((a) => `
-        <li>
-          <span class="ico">${activityIcons[a.kind] || '•'}</span>
-          <span>${a.link ? `<a href="${esc(a.link)}">${esc(a.description)}</a>` : esc(a.description)}</span>
-          <span class="when">${esc(a.occurred_at.slice(5, 16).replace('T', ' '))}</span>
-        </li>`).join('')}</ul>` : '<p class="muted-text">No recent activity yet.</p>'}
+      <details class="collapse-card" open>
+        <summary class="card-head">
+          <h2>Recent Activities <span class="card-count">${recentActivity.length}</span></h2>
+          <span class="caret">▾</span>
+        </summary>
+        ${recentActivity.length ? `<ul class="list">${recentActivity.map((a) => `
+          <li>
+            <span class="ico">${activityIcons[a.kind] || '•'}</span>
+            <span>${a.link ? `<a href="${esc(a.link)}">${esc(a.description)}</a>` : esc(a.description)}</span>
+            <span class="when">${esc(a.occurred_at.slice(5, 16).replace('T', ' '))}</span>
+          </li>`).join('')}</ul>
+        <a class="view-all" href="/reports">View all →</a>` : '<p class="muted-text">No recent activity yet.</p>'}
+      </details>
     </div>`;
 
   const chartCard = `
@@ -1145,12 +1153,13 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
     bibleClasses.map((b) =>
       `<option value="${b.ministry_id}" ${b.ministry_id === member.bible_class_id ? 'selected' : ''}>${esc(b.name)}</option>`
     ).join('');
-  const statusOpts = ['visitor', 'regular', 'member', 'inactive', 'transferred', 'deceased']
+  const statusOpts = ['visitor', 'regular', 'member', 'inactive', 'transferred', 'deceased', 'other']
     .map((s) => `<option value="${s}" ${s === member.membership_status ? 'selected' : ''}>${s}</option>`).join('');
-  const maritalOpts = ['', 'single', 'married', 'divorced', 'widowed', 'separated']
+  const maritalOpts = ['', 'single', 'married', 'divorced', 'widowed', 'separated', 'other']
     .map((s) => `<option value="${s}" ${s === (member.marital_status || '') ? 'selected' : ''}>${s || '—'}</option>`).join('');
+  const genderLabels = { '': '—', M: 'M', F: 'F', O: 'Other' };
   const genderOpts = ['', 'M', 'F', 'O']
-    .map((s) => `<option value="${s}" ${s === (member.gender || '') ? 'selected' : ''}>${s || '—'}</option>`).join('');
+    .map((s) => `<option value="${s}" ${s === (member.gender || '') ? 'selected' : ''}>${genderLabels[s]}</option>`).join('');
   const orgChecks = organizations.map((o) => `
       <label class="check"><input type="checkbox" name="org_ids" value="${o.org_id}"
         ${memberOrgIds.includes(o.org_id) ? 'checked' : ''}> ${esc(o.name)}</label>`).join('');
@@ -2090,6 +2099,7 @@ app.get('/finance/harvests', (req, res) => {
            <label>Type<select name="harvest_type" required>
              <option value="End-of-Year">End-of-Year</option>
              <option value="Organizational">Organizational</option>
+             <option value="Other">Other</option>
            </select></label>
            <label>Year<input type="number" name="harvest_year" required value="${new Date().getFullYear()}"></label>
            <label class="wide">Name<input name="harvest_name" required placeholder="e.g. 2026 End-of-Year Harvest"></label>
@@ -2501,7 +2511,7 @@ app.get('/finance/expenses', (req, res) => {
            <label>Category<select name="expense_cat_id" required>${catOpts}</select></label>
            <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required></label>
            <label>Payment method<select name="payment_method">
-             ${['Cash','Bank Transfer','Cheque','Mobile Money'].map((m) => `<option>${m}</option>`).join('')}
+             ${['Cash','Bank Transfer','Cheque','Mobile Money','Other'].map((m) => `<option>${m}</option>`).join('')}
            </select></label>
            <label class="wide">Description<input name="description" required></label>
            <label>Paid to<input name="paid_to"></label>
