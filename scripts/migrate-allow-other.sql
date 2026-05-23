@@ -3,7 +3,9 @@
 --
 -- SQLite can't ALTER a CHECK in place — we rebuild the table.
 -- Run with:  sqlite3 church.db < scripts/migrate-allow-other.sql
--- Safe to re-run.
+-- Safe to re-run. Aborts on the first error (no half-applied state).
+
+.bail on
 
 PRAGMA foreign_keys = OFF;
 BEGIN TRANSACTION;
