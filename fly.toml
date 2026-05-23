@@ -6,7 +6,7 @@
 # 5. flyctl secrets set SESSION_SECRET=$(openssl rand -hex 32)
 # 6. flyctl deploy
 
-app = "church-manager"
+app = "church-management-system"
 primary_region = "iad"
 
 [build]
