@@ -1,0 +1,15 @@
+church.db
+demo.db
+*.db-journal
+node_modules/
+package-lock.json
+# macOS Finder metadata — never commit
+.DS_Store
+**/.DS_Store
+# Per-church deployment configs are operator-specific (contain app names + region).
+# Optionally commit these if you want to track them.
+deploys/
+# DB backups should never be committed — push to S3/Backblaze instead.
+backups/
+photos/
+photos/
