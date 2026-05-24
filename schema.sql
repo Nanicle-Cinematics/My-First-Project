@@ -43,6 +43,9 @@ CREATE TABLE members (
     preferred_channel TEXT   NOT NULL DEFAULT 'none'
                           CHECK (preferred_channel IN ('either','sms_only','email_only','none')),
     unsubscribe_token TEXT  UNIQUE,
+    emergency_contact_name     TEXT,
+    emergency_contact_phone    TEXT,
+    emergency_contact_relation TEXT,
     created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at       TEXT
 );

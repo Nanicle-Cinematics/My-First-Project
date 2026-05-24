@@ -144,6 +144,9 @@ addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NU
 addColumnIfMissing('members', 'unsubscribe_token',`unsubscribe_token TEXT`);
 addColumnIfMissing('events',  'checkin_token',    `checkin_token TEXT`);
 addColumnIfMissing('members', 'photo_filename',   `photo_filename TEXT`);
+addColumnIfMissing('members', 'emergency_contact_name',     `emergency_contact_name TEXT`);
+addColumnIfMissing('members', 'emergency_contact_phone',    `emergency_contact_phone TEXT`);
+addColumnIfMissing('members', 'emergency_contact_relation', `emergency_contact_relation TEXT`);
 
 // Persistent app state for scheduled jobs (last birthday run, etc.).
 db.exec(`CREATE TABLE IF NOT EXISTS app_state (
@@ -455,6 +458,9 @@ app.use((req, res, next) => {
   ).get(req.session.userId);
   if (!res.locals.user) { req.session.destroy(() => {}); return res.redirect('/login'); }
   res.locals.isAdmin = res.locals.user.role === 'admin';
+  // Adding and deleting user accounts is reserved for the main administrator.
+  res.locals.isUserManager = res.locals.isAdmin
+    && String(res.locals.user.username || '').toLowerCase() === 'dunwell';
   next();
 });
 
@@ -464,6 +470,15 @@ function requireAdmin(req, res, next) {
     title: 'Read-only access', user: res.locals.user, active: null,
     body: '<p>Your account has read-only access. Ask an admin to make this change.</p>'
          + '<p><a href="/">Back to dashboard</a></p>',
+  }));
+}
+
+function requireUserManager(req, res, next) {
+  if (res.locals.isUserManager) return next();
+  res.status(403).send(layout({
+    title: 'Not allowed', user: res.locals.user, active: null,
+    body: '<p>Only the main administrator (<strong>dunwell</strong>) can add or delete user accounts.</p>'
+         + '<p><a href="/users">Back to users</a></p>',
   }));
 }
 
@@ -1395,6 +1410,10 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
           <div class="check-grid" style="margin-top:0.5rem">${orgChecks || '<span class="muted-text">No organizations yet.</span>'}</div>
         </details>
       </div>
+      <div class="wide-cell"><h3 class="form-section">Emergency contact</h3></div>
+      <label>Contact name<input name="emergency_contact_name" value="${esc(member.emergency_contact_name)}"></label>
+      <label>Contact phone<input name="emergency_contact_phone" value="${esc(member.emergency_contact_phone)}"></label>
+      <label>Relationship<input name="emergency_contact_relation" placeholder="e.g. spouse, parent, sibling" value="${esc(member.emergency_contact_relation)}"></label>
       <label class="wide">Notes<textarea name="notes" rows="3">${esc(member.notes)}</textarea></label>
       <div class="actions"><button type="submit">Save</button></div>
     </form>`;
@@ -1433,10 +1452,12 @@ app.post('/members', requireAdmin, (req, res) => {
     INSERT INTO members (external_id, bible_class_id, first_name, last_name, email, mobile_phone,
       date_of_birth, day_born, gender, marital_status, membership_status,
       join_date, baptism_date, confirmation_date, notes,
+      emergency_contact_name, emergency_contact_phone, emergency_contact_relation,
       preferred_channel, unsubscribe_token)
     VALUES (@external_id, @bible_class_id, @first_name, @last_name, @email, @mobile_phone,
       @date_of_birth, @day_born, @gender, @marital_status, @membership_status,
       @join_date, @baptism_date, @confirmation_date, @notes,
+      @emergency_contact_name, @emergency_contact_phone, @emergency_contact_relation,
       @preferred_channel, lower(hex(randomblob(16))))
   `).run({
     external_id: externalId,
@@ -1452,6 +1473,9 @@ app.post('/members', requireAdmin, (req, res) => {
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
     confirmation_date: b.confirmation_date || null,
     notes: b.notes || null,
+    emergency_contact_name: b.emergency_contact_name || null,
+    emergency_contact_phone: b.emergency_contact_phone || null,
+    emergency_contact_relation: b.emergency_contact_relation || null,
   });
   saveMemberOrgs(info.lastInsertRowid, parseOrgIds(b));
   logActivity('member_added',
@@ -1531,6 +1555,16 @@ app.get('/members/:id', (req, res) => {
       <section>
         <h2>At a glance</h2>
 
+        <h3>🚨 Emergency contact</h3>
+        ${(m.emergency_contact_name || m.emergency_contact_phone || m.emergency_contact_relation)
+          ? `<dl class="stats emergency-box">
+               <dt>Name</dt><dd>${esc(m.emergency_contact_name) || '—'}</dd>
+               <dt>Phone</dt><dd>${m.emergency_contact_phone
+                 ? `<a href="tel:${esc(m.emergency_contact_phone)}">${esc(m.emergency_contact_phone)}</a>` : '—'}</dd>
+               <dt>Relationship</dt><dd>${esc(m.emergency_contact_relation) || '—'}</dd>
+             </dl>`
+          : '<p class="muted-text">No emergency contact on file.</p>'}
+
         <h3>Ministries</h3>
         ${ministries.length ? table(['Ministry', 'Role', 'Joined'],
           ministries.map((r) => [esc(r.name), esc(r.role), esc(r.joined_date)]))
@@ -1562,6 +1596,9 @@ app.post('/members/:id', requireAdmin, (req, res) => {
       marital_status=@marital_status, membership_status=@membership_status,
       join_date=@join_date, baptism_date=@baptism_date,
       confirmation_date=@confirmation_date, notes=@notes,
+      emergency_contact_name=@emergency_contact_name,
+      emergency_contact_phone=@emergency_contact_phone,
+      emergency_contact_relation=@emergency_contact_relation,
       preferred_channel=@preferred_channel
     WHERE member_id=@id`).run({
     id,
@@ -1577,6 +1614,9 @@ app.post('/members/:id', requireAdmin, (req, res) => {
     join_date: b.join_date || null, baptism_date: b.baptism_date || null,
     confirmation_date: b.confirmation_date || null,
     notes: b.notes || null,
+    emergency_contact_name: b.emergency_contact_name || null,
+    emergency_contact_phone: b.emergency_contact_phone || null,
+    emergency_contact_relation: b.emergency_contact_relation || null,
   });
   saveMemberOrgs(id, parseOrgIds(b));
   res.redirect(`/members/${id}`);
@@ -5234,22 +5274,23 @@ app.get('/users', requireAdmin, (req, res) => {
        <input type="password" name="password" placeholder="new password" minlength="8" required>
        <button type="submit">Reset</button>
      </form>
-     ${u.user_id === res.locals.user.user_id
-       ? ''
-       : `<form method="post" action="/users/${u.user_id}/delete" class="inline"
+     ${(res.locals.isUserManager && u.user_id !== res.locals.user.user_id)
+       ? `<form method="post" action="/users/${u.user_id}/delete" class="inline"
             onsubmit="return confirm('Delete ${esc(u.username)}?')">
             <button class="danger" type="submit">Delete</button>
-          </form>`}`,
+          </form>`
+       : ''}`,
   ]);
   const body = `
-    <p class="muted-text">Only administrators can add users and set each user's access level (read/write jurisdiction).
-      <strong>Admin</strong> = full read &amp; write; <strong>Viewer</strong> = read-only.</p>
-    <p><a class="btn" href="/users/new">+ New user</a></p>
+    <p class="muted-text">Any administrator can reset passwords and set a user's access level (read/write jurisdiction):
+      <strong>Admin</strong> = full read &amp; write; <strong>Viewer</strong> = read-only.
+      Only the main administrator (<strong>dunwell</strong>) can add or delete user accounts.</p>
+    ${res.locals.isUserManager ? '<p><a class="btn" href="/users/new">+ New user</a></p>' : ''}
     ${table(['Username', 'Display name', 'Role', 'Created', 'Actions'], rows)}`;
   res.page({ title: 'Users', body });
 });
 
-app.get('/users/new', requireAdmin, (req, res) => {
+app.get('/users/new', requireUserManager, (req, res) => {
   const body = `
     <form class="form" method="post" action="/users">
       <label>Username<input name="username" required></label>
@@ -5265,7 +5306,7 @@ app.get('/users/new', requireAdmin, (req, res) => {
   res.page({ title: 'New user', body });
 });
 
-app.post('/users', requireAdmin, (req, res) => {
+app.post('/users', requireUserManager, (req, res) => {
   const { username, display_name, password, role } = req.body;
   if (!username || !password || password.length < 8) return res.redirect('/users/new');
   const r = role === 'viewer' ? 'viewer' : 'admin';
@@ -5309,7 +5350,7 @@ app.post('/users/:id/reset', requireAdmin, (req, res) => {
   res.redirect('/users');
 });
 
-app.post('/users/:id/delete', requireAdmin, (req, res) => {
+app.post('/users/:id/delete', requireUserManager, (req, res) => {
   const id = Number(req.params.id);
   if (id === res.locals.user.user_id) return res.redirect('/users');
   const admins = db.prepare(`SELECT COUNT(*) c FROM users WHERE role='admin'`).get().c;

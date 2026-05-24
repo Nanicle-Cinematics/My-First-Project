@@ -317,6 +317,16 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
   .qr-card .qr-art { max-width: none; }
 }
 
+/* Member form section heading + emergency contact highlight */
+.form .form-section {
+  margin: 0.75rem 0 0; font-size: 0.95rem; font-weight: 700; color: var(--accent-dark);
+  border-top: 1px solid var(--border); padding-top: 0.75rem;
+}
+.emergency-box {
+  background: var(--danger-soft); border-left: 3px solid var(--danger);
+  border-radius: 8px; padding: 0.6rem 0.85rem;
+}
+
 /* Pledge receipt / outstanding statement */
 .receipt-actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
 .receipt-actions form { margin: 0; }
