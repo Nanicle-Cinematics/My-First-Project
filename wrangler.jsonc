@@ -1,0 +1,11 @@
+// Cloudflare Workers config for the marketing landing page.
+// The Express server (server.js) is NOT deployed here — that lives on Fly.io.
+// This config tells Cloudflare to serve the static files in ./marketing as a
+// plain website. No Worker code, no build step.
+{
+  "name": "mychurchmanager",
+  "compatibility_date": "2025-01-01",
+  "assets": {
+    "directory": "./marketing"
+  }
+}
