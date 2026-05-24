@@ -317,6 +317,26 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
   .qr-card .qr-art { max-width: none; }
 }
 
+/* Pledge receipt / outstanding statement */
+.receipt-actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+.receipt-actions form { margin: 0; }
+.receipt-doc { max-width: 640px; }
+.receipt-doc .rc-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 1rem; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 2px solid var(--text);
+}
+.receipt-doc .rc-church { font-size: 1.15rem; font-weight: 700; }
+.receipt-doc .rc-no { text-align: right; }
+.receipt-doc .rc-line {
+  display: flex; justify-content: space-between; gap: 1rem;
+  padding: 0.4rem 0; border-bottom: 1px dashed var(--border);
+}
+.receipt-doc .rc-total {
+  border-bottom: none; border-top: 2px solid var(--text);
+  margin-top: 0.25rem; font-size: 1.1rem; font-weight: 700;
+}
+.receipt-doc .rc-foot { margin-top: 1.25rem; color: var(--muted); }
+
 .print-doc .print-section { margin-bottom: 2rem; page-break-inside: avoid; }
 .print-doc .print-meta {
   color: var(--muted); border-bottom: 1px solid var(--border);

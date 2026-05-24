@@ -295,6 +295,20 @@ db.exec(`
     created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS pledge_payments (
+    payment_id     INTEGER PRIMARY KEY,
+    pledge_id      INTEGER NOT NULL REFERENCES pledges(pledge_id) ON DELETE CASCADE,
+    amount         REAL NOT NULL CHECK (amount > 0),
+    paid_on        TEXT NOT NULL,
+    receipt_number TEXT NOT NULL UNIQUE,
+    recorded_by    INTEGER REFERENCES users(user_id),
+    sent_at        TEXT,
+    sent_channel   TEXT,
+    notes          TEXT,
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_pledge_payments_pledge ON pledge_payments(pledge_id);
+
   CREATE TABLE IF NOT EXISTS expense_categories (
     expense_cat_id INTEGER PRIMARY KEY,
     category_name  TEXT NOT NULL UNIQUE,
@@ -1997,6 +2011,7 @@ const FINANCE_TABS = [
   ['/finance/harvests', 'Harvests'],
   ['/finance/special',  'Special Offerings'],
   ['/finance/pledges',  'Pledges'],
+  ['/finance/receipts', 'Receipts'],
   ['/finance/expenses', 'Expenses'],
 ];
 function financeTabs(activePath) {
@@ -2635,12 +2650,12 @@ app.post('/finance/pledges/:id/pay', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const add = Number(req.body.add || 0);
   if (add <= 0) return res.redirect('/finance/pledges');
-  const p = db.prepare(`SELECT pledged_amount, paid_amount FROM pledges WHERE pledge_id=?`).get(id);
-  if (!p) return res.redirect('/finance/pledges');
-  const newPaid = p.paid_amount + add;
-  const status = newPaid >= p.pledged_amount ? 'Fulfilled' : 'Partial';
-  db.prepare(`UPDATE pledges SET paid_amount=?, status=? WHERE pledge_id=?`).run(newPaid, status, id);
-  res.redirect('/finance/pledges');
+  const receipt = recordPledgePayment(id, add, todayISO(), res.locals.user.user_id, null);
+  if (!receipt) return res.redirect('/finance/pledges');
+  logActivity('pledge_payment',
+    `Recorded ${fmtMoney(add)} pledge payment · receipt ${receipt.receipt_number}`,
+    `/finance/pledges/payments/${receipt.payment_id}/receipt`, res.locals.user.user_id);
+  res.redirect(`/finance/pledges/payments/${receipt.payment_id}/receipt?new=1`);
 });
 
 app.get('/finance/pledges/:id/edit', requireAdmin, (req, res) => {
@@ -2682,6 +2697,292 @@ app.post('/finance/pledges/:id/edit', requireAdmin, (req, res) => {
   );
   logActivity('pledge_edited', `Pledge #${id} edited`, '/finance/pledges', res.locals.user.user_id);
   res.redirect('/finance/pledges');
+});
+
+// ---------- finance: pledge receipts & outstanding statements ----------
+
+// Record a payment toward a pledge: append a payment row with its own sequential
+// receipt number (RCT-#####), bump the pledge's paid amount + status, all atomically.
+const recordPledgePayment = db.transaction((pledgeId, amount, paidOn, userId, notes) => {
+  const p = db.prepare(`SELECT pledged_amount, paid_amount FROM pledges WHERE pledge_id=?`).get(pledgeId);
+  if (!p) return null;
+  const info = db.prepare(
+    `INSERT INTO pledge_payments (pledge_id, amount, paid_on, receipt_number, recorded_by, notes)
+     VALUES (?, ?, ?, '', ?, ?)`
+  ).run(pledgeId, amount, paidOn, userId, notes || null);
+  const receiptNumber = 'RCT-' + String(info.lastInsertRowid).padStart(5, '0');
+  db.prepare(`UPDATE pledge_payments SET receipt_number=? WHERE payment_id=?`)
+    .run(receiptNumber, info.lastInsertRowid);
+  const newPaid = p.paid_amount + amount;
+  const status = newPaid >= p.pledged_amount ? 'Fulfilled' : 'Partial';
+  db.prepare(`UPDATE pledges SET paid_amount=?, status=? WHERE pledge_id=?`).run(newPaid, status, pledgeId);
+  return { payment_id: info.lastInsertRowid, receipt_number: receiptNumber };
+});
+
+// One payment receipt, with the running balance as of that payment so reprints are stable.
+function loadPaymentReceipt(paymentId) {
+  return db.prepare(`
+    SELECT pay.*, p.pledged_amount, p.member_id, p.harvest_id,
+           m.first_name, m.last_name, m.mobile_phone, m.email,
+           m.preferred_channel, m.unsubscribe_token,
+           h.harvest_name, h.harvest_year,
+           u.display_name AS recorded_by_name, u.username AS recorded_by_user,
+           (SELECT COALESCE(SUM(x.amount), 0) FROM pledge_payments x
+             WHERE x.pledge_id = pay.pledge_id AND x.payment_id <= pay.payment_id) AS paid_to_date
+    FROM pledge_payments pay
+    JOIN pledges  p ON p.pledge_id  = pay.pledge_id
+    JOIN members  m ON m.member_id  = p.member_id
+    JOIN harvests h ON h.harvest_id = p.harvest_id
+    LEFT JOIN users u ON u.user_id = pay.recorded_by
+    WHERE pay.payment_id = ?`).get(paymentId);
+}
+
+// Members who still owe on at least one (non-cancelled) pledge.
+function membersWithOutstanding() {
+  return db.prepare(`
+    SELECT m.member_id, m.first_name || ' ' || m.last_name AS name,
+           SUM(p.pledged_amount) AS pledged, SUM(p.paid_amount) AS paid,
+           SUM(p.pledged_amount - p.paid_amount) AS outstanding,
+           COUNT(*) AS pledge_count
+    FROM pledges p JOIN members m USING(member_id)
+    WHERE m.deleted_at IS NULL AND p.status != 'Cancelled'
+      AND p.pledged_amount - p.paid_amount > 0.005
+    GROUP BY m.member_id
+    ORDER BY outstanding DESC`).all();
+}
+
+// A member's still-outstanding pledges, for the statement.
+function memberOutstandingDetail(memberId) {
+  const member = db.prepare(
+    `SELECT member_id, first_name, last_name, mobile_phone, email, preferred_channel, unsubscribe_token
+       FROM members WHERE member_id=? AND deleted_at IS NULL`
+  ).get(memberId);
+  if (!member) return null;
+  const pledges = db.prepare(`
+    SELECT p.*, h.harvest_name, h.harvest_year
+    FROM pledges p JOIN harvests h USING(harvest_id)
+    WHERE p.member_id=? AND p.status != 'Cancelled'
+      AND p.pledged_amount - p.paid_amount > 0.005
+    ORDER BY p.pledge_date`).all(memberId);
+  return { member, pledges };
+}
+
+// Send a message to a member over the channel(s) their preference allows.
+async function sendMemberMessage(member, smsText, emailSubject, emailText) {
+  const pref = member.preferred_channel || 'none';
+  if (pref === 'none') return { ok: false, reason: 'do_not_contact' };
+  const phone = (pref === 'either' || pref === 'sms_only') ? normalizePhoneGH(member.mobile_phone) : null;
+  const email = (pref === 'either' || pref === 'email_only') ? (member.email || null) : null;
+  if (!phone && !email) return { ok: false, reason: 'no_contact' };
+  let sms = null, mail = null;
+  if (phone) { try { sms = await sendSmsBatch([phone], smsText); } catch (e) { sms = { ok: false, error: e.message }; } }
+  if (email) {
+    try { mail = await sendEmailEach([{ addr: email, token: member.unsubscribe_token }], emailSubject, emailText); }
+    catch (e) { mail = { ok: false, error: e.message }; }
+  }
+  const channels = [];
+  if (phone) channels.push('SMS');
+  if (email) channels.push('email');
+  return {
+    ok: true, dryRun: (sms && sms.dryRun) || (mail && mail.dryRun),
+    channels: channels.join(' + '),
+    smsOk: sms ? (sms.ok || sms.dryRun) : null,
+    emailOk: mail ? (mail.ok || mail.dryRun) : null,
+  };
+}
+
+const RECEIPT_FLASH = {
+  new: 'Payment recorded. Here is the receipt — print it or send it to the member.',
+  sent: 'Receipt sent to the member.',
+  dry: 'Receipt logged as a dry run — SMS/email are not configured, so nothing was actually delivered.',
+  nocontact: 'Could not send: the member has no phone or email matching their contact preference.',
+  donotcontact: 'Could not send: this member is set to "Do not contact". Update their preference first.',
+};
+
+app.get('/finance/pledges/payments/:id/receipt', (req, res) => {
+  const r = loadPaymentReceipt(Number(req.params.id));
+  if (!r) return res.status(404).send('Receipt not found');
+  const memberName = `${r.first_name} ${r.last_name}`.trim();
+  const outstanding = r.pledged_amount - r.paid_to_date;
+  const recordedBy = r.recorded_by_name || r.recorded_by_user || '—';
+  const sendForm = res.locals.isAdmin
+    ? `<form method="post" action="/finance/pledges/payments/${r.payment_id}/send"
+            onsubmit="return confirm('Send this receipt to ${esc(memberName)} via their preferred channel?')">
+         <button type="submit">📤 Send receipt to ${esc(r.first_name)}</button>
+       </form>` : '';
+  const body = `
+    <div class="screen-only receipt-actions">
+      <a class="btn" href="javascript:window.print()">🖨 Print / save as PDF</a>
+      ${sendForm}
+      <a class="btn-link" href="/finance/receipts">← Back to receipts</a>
+    </div>
+    <div class="print-doc receipt-doc">
+      <div class="rc-head">
+        <div><div class="rc-church">⛪ ${esc(CHURCH_NAME)}</div>
+          <div class="muted-text">Pledge Payment Receipt</div></div>
+        <div class="rc-no"><strong>${esc(r.receipt_number)}</strong><br>
+          <span class="muted-text">${esc(r.paid_on)}</span></div>
+      </div>
+      <div class="rc-line"><span>Received from</span><strong>${esc(memberName)}</strong></div>
+      <div class="rc-line"><span>For</span><span>${esc(r.harvest_name)}${r.harvest_year ? ' ' + esc(String(r.harvest_year)) : ''} pledge</span></div>
+      <div class="rc-line"><span>Amount received</span><strong>${fmtMoney(r.amount)}</strong></div>
+      <div class="rc-line"><span>Total pledged</span><span>${fmtMoney(r.pledged_amount)}</span></div>
+      <div class="rc-line"><span>Paid to date</span><span>${fmtMoney(r.paid_to_date)}</span></div>
+      <div class="rc-line rc-total"><span>Outstanding balance</span><span>${fmtMoney(outstanding)}</span></div>
+      <div class="rc-line"><span>Recorded by</span><span>${esc(recordedBy)}</span></div>
+      ${r.sent_at ? `<p class="muted-text" style="margin-top:1rem">Sent to member on ${esc(String(r.sent_at).slice(0, 16))}${r.sent_channel ? ` via ${esc(r.sent_channel)}` : ''}.</p>` : ''}
+      <p class="rc-foot">${outstanding > 0.005
+        ? `Thank you. A balance of <strong>${fmtMoney(outstanding)}</strong> remains on this pledge.`
+        : 'This pledge is now fully paid. Thank you!'}</p>
+    </div>`;
+  res.page({
+    title: `Receipt ${r.receipt_number}`, active: '/finance',
+    flash: RECEIPT_FLASH[req.query.sent] || RECEIPT_FLASH[req.query.new ? 'new' : ''],
+    body,
+  });
+});
+
+app.post('/finance/pledges/payments/:id/send', requireAdmin, async (req, res) => {
+  const r = loadPaymentReceipt(Number(req.params.id));
+  if (!r) return res.redirect('/finance/receipts');
+  const memberName = `${r.first_name} ${r.last_name}`.trim();
+  const outstanding = r.pledged_amount - r.paid_to_date;
+  const balanceLine = outstanding > 0.005
+    ? `Outstanding balance: ${fmtMoney(outstanding)}.`
+    : 'This pledge is now fully paid.';
+  const sms = `Receipt ${r.receipt_number}: Dear ${r.first_name}, we received ${fmtMoney(r.amount)} toward your ${r.harvest_name} pledge on ${r.paid_on}. ${balanceLine} Thank you. — ${CHURCH_NAME}`;
+  const emailBody =
+    `Dear ${memberName},\n\nThank you for your payment. This is your official receipt.\n\n` +
+    `Receipt no:   ${r.receipt_number}\n` +
+    `Date:         ${r.paid_on}\n` +
+    `Pledge:       ${r.harvest_name}${r.harvest_year ? ' ' + r.harvest_year : ''}\n` +
+    `Amount paid:  ${fmtMoney(r.amount)}\n` +
+    `Total pledged:${fmtMoney(r.pledged_amount)}\n` +
+    `Paid to date: ${fmtMoney(r.paid_to_date)}\n` +
+    `${balanceLine}\n\nGod bless you.\n${CHURCH_NAME}`;
+  const result = await sendMemberMessage(r, sms, `Payment receipt ${r.receipt_number} — ${CHURCH_NAME}`, emailBody);
+  if (!result.ok) {
+    return res.redirect(`/finance/pledges/payments/${r.payment_id}/receipt?sent=${result.reason === 'do_not_contact' ? 'donotcontact' : 'nocontact'}`);
+  }
+  db.prepare(`UPDATE pledge_payments SET sent_at=CURRENT_TIMESTAMP, sent_channel=? WHERE payment_id=?`)
+    .run(result.channels, r.payment_id);
+  logActivity('receipt_sent', `Sent receipt ${r.receipt_number} to ${memberName}`,
+    `/finance/pledges/payments/${r.payment_id}/receipt`, res.locals.user.user_id);
+  res.redirect(`/finance/pledges/payments/${r.payment_id}/receipt?sent=${result.dryRun ? 'dry' : 'sent'}`);
+});
+
+app.get('/finance/pledges/statement/:memberId', (req, res) => {
+  const data = memberOutstandingDetail(Number(req.params.memberId));
+  if (!data) return res.status(404).send('Member not found');
+  const { member, pledges } = data;
+  const memberName = `${member.first_name} ${member.last_name}`.trim();
+  const totalOutstanding = pledges.reduce((a, p) => a + (p.pledged_amount - p.paid_amount), 0);
+  const sendForm = res.locals.isAdmin && pledges.length
+    ? `<form method="post" action="/finance/pledges/statement/${member.member_id}/send"
+            onsubmit="return confirm('Send this outstanding-balance statement to ${esc(memberName)}?')">
+         <button type="submit">📤 Send statement to ${esc(member.first_name)}</button>
+       </form>` : '';
+  const rowsHtml = pledges.length
+    ? table(['Date', 'Harvest', 'Pledged', 'Paid', 'Outstanding'],
+        pledges.map((p) => [
+          esc(p.pledge_date), esc(p.harvest_name),
+          fmtMoney(p.pledged_amount), fmtMoney(p.paid_amount),
+          fmtOutstanding(p.pledged_amount - p.paid_amount),
+        ]))
+    : '<p class="muted-text">This member has no outstanding pledges. 🎉</p>';
+  const body = `
+    <div class="screen-only receipt-actions">
+      <a class="btn" href="javascript:window.print()">🖨 Print / save as PDF</a>
+      ${sendForm}
+      <a class="btn-link" href="/finance/receipts">← Back to receipts</a>
+    </div>
+    <div class="print-doc receipt-doc">
+      <div class="rc-head">
+        <div><div class="rc-church">⛪ ${esc(CHURCH_NAME)}</div>
+          <div class="muted-text">Outstanding Pledge Statement</div></div>
+        <div class="rc-no"><strong>${esc(memberName)}</strong><br>
+          <span class="muted-text">As of ${todayISO()}</span></div>
+      </div>
+      ${rowsHtml}
+      ${pledges.length ? `<div class="rc-line rc-total" style="margin-top:0.75rem">
+        <span>Total outstanding</span><span>${fmtMoney(totalOutstanding)}</span></div>
+        <p class="rc-foot">Kindly redeem your outstanding pledge${pledges.length > 1 ? 's' : ''} at your earliest convenience. Thank you.</p>` : ''}
+    </div>`;
+  res.page({
+    title: `Statement — ${memberName}`, active: '/finance',
+    flash: RECEIPT_FLASH[req.query.sent],
+    body,
+  });
+});
+
+app.post('/finance/pledges/statement/:memberId/send', requireAdmin, async (req, res) => {
+  const data = memberOutstandingDetail(Number(req.params.memberId));
+  if (!data) return res.redirect('/finance/receipts');
+  const { member, pledges } = data;
+  if (!pledges.length) return res.redirect(`/finance/pledges/statement/${member.member_id}`);
+  const memberName = `${member.first_name} ${member.last_name}`.trim();
+  const total = pledges.reduce((a, p) => a + (p.pledged_amount - p.paid_amount), 0);
+  const lines = pledges.map((p) =>
+    `  • ${p.harvest_name}: ${fmtMoney(p.pledged_amount - p.paid_amount)} outstanding`).join('\n');
+  const sms = `Dear ${member.first_name}, our records show a total outstanding pledge balance of ${fmtMoney(total)} across ${pledges.length} pledge(s). Kindly redeem it when you can. Thank you. — ${CHURCH_NAME}`;
+  const emailBody =
+    `Dear ${memberName},\n\nThis is a friendly statement of your outstanding pledge balance.\n\n${lines}\n\n` +
+    `Total outstanding: ${fmtMoney(total)}\n\nKindly redeem your pledge(s) at your earliest convenience.\n\nGod bless you.\n${CHURCH_NAME}`;
+  const result = await sendMemberMessage(member, sms, `Your pledge statement — ${CHURCH_NAME}`, emailBody);
+  if (!result.ok) {
+    return res.redirect(`/finance/pledges/statement/${member.member_id}?sent=${result.reason === 'do_not_contact' ? 'donotcontact' : 'nocontact'}`);
+  }
+  logActivity('statement_sent', `Sent outstanding-pledge statement to ${memberName}`,
+    `/finance/pledges/statement/${member.member_id}`, res.locals.user.user_id);
+  res.redirect(`/finance/pledges/statement/${member.member_id}?sent=${result.dryRun ? 'dry' : 'sent'}`);
+});
+
+app.get('/finance/receipts', (req, res) => {
+  const outstanding = membersWithOutstanding();
+  const recent = db.prepare(`
+    SELECT pay.payment_id, pay.receipt_number, pay.amount, pay.paid_on, pay.sent_at, pay.sent_channel,
+           m.member_id, m.first_name || ' ' || m.last_name AS member, h.harvest_name
+    FROM pledge_payments pay
+    JOIN pledges  p ON p.pledge_id  = pay.pledge_id
+    JOIN members  m ON m.member_id  = p.member_id
+    JOIN harvests h ON h.harvest_id = p.harvest_id
+    WHERE m.deleted_at IS NULL
+    ORDER BY pay.payment_id DESC LIMIT 50`).all();
+
+  const totalOutstanding = outstanding.reduce((a, r) => a + r.outstanding, 0);
+  const outstandingTbl = outstanding.length
+    ? table(['Member', 'Pledges', 'Pledged', 'Paid', 'Outstanding', ''],
+        outstanding.map((r) => [
+          `<a href="/members/${r.member_id}">${esc(r.name)}</a>`,
+          r.pledge_count, fmtMoney(r.pledged), fmtMoney(r.paid),
+          fmtOutstanding(r.outstanding),
+          `<a class="btn-link" href="/finance/pledges/statement/${r.member_id}">Statement</a>`,
+        ]))
+    : '<p class="muted-text">No members have outstanding pledges. 🎉</p>';
+
+  const recentTbl = recent.length
+    ? table(['Receipt', 'Date', 'Member', 'Harvest', 'Amount', 'Delivered', ''],
+        recent.map((r) => [
+          esc(r.receipt_number), esc(r.paid_on),
+          `<a href="/members/${r.member_id}">${esc(r.member)}</a>`,
+          esc(r.harvest_name), fmtMoney(r.amount),
+          r.sent_at ? `<span class="pill pill-fulfilled">${esc(r.sent_channel || 'sent')}</span>` : '<span class="muted-text">not sent</span>',
+          `<a class="btn-link" href="/finance/pledges/payments/${r.payment_id}/receipt">View</a>`,
+        ]))
+    : '<p class="muted-text">No payment receipts yet. Record a payment on the Pledges tab to issue one.</p>';
+
+  const body = `
+    ${financeTabs('/finance/receipts')}
+    <section class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Members with outstanding pledges</h2>
+        <span class="meta">Total outstanding: <strong>${fmtMoney(totalOutstanding)}</strong></span></div>
+      ${outstandingTbl}
+    </section>
+    <section class="card">
+      <h2>Recent payment receipts</h2>
+      ${recentTbl}
+    </section>`;
+  res.page({ title: 'Finance · Receipts', active: '/finance', body });
 });
 
 // ---------- finance: expenses ----------
@@ -4924,8 +5225,8 @@ app.get('/users', requireAdmin, (req, res) => {
     esc(u.created_at).slice(0, 10),
     `<form method="post" action="/users/${u.user_id}/role" class="inline">
        <select name="role">
-         <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
-         <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer</option>
+         <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin (read &amp; write)</option>
+         <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer (read-only)</option>
        </select>
        <button type="submit">Save</button>
      </form>
@@ -4941,6 +5242,8 @@ app.get('/users', requireAdmin, (req, res) => {
           </form>`}`,
   ]);
   const body = `
+    <p class="muted-text">Only administrators can add users and set each user's access level (read/write jurisdiction).
+      <strong>Admin</strong> = full read &amp; write; <strong>Viewer</strong> = read-only.</p>
     <p><a class="btn" href="/users/new">+ New user</a></p>
     ${table(['Username', 'Display name', 'Role', 'Created', 'Actions'], rows)}`;
   res.page({ title: 'Users', body });
@@ -4953,9 +5256,10 @@ app.get('/users/new', requireAdmin, (req, res) => {
       <label>Display name<input name="display_name"></label>
       <label>Password<input type="password" name="password" required minlength="8"></label>
       <label>Role<select name="role">
-        <option value="admin">admin</option>
-        <option value="viewer" selected>viewer</option>
-      </select></label>
+        <option value="admin">admin (read &amp; write)</option>
+        <option value="viewer" selected>viewer (read-only)</option>
+      </select>
+      <span class="hint">Admins can read and write everything and manage users. Viewers can only read.</span></label>
       <div class="actions"><button type="submit">Create user</button></div>
     </form>`;
   res.page({ title: 'New user', body });

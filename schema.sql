@@ -314,6 +314,20 @@ CREATE TABLE pledges (
     created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE pledge_payments (
+    payment_id     INTEGER PRIMARY KEY,
+    pledge_id      INTEGER NOT NULL REFERENCES pledges(pledge_id) ON DELETE CASCADE,
+    amount         REAL NOT NULL CHECK (amount > 0),
+    paid_on        TEXT NOT NULL,
+    receipt_number TEXT NOT NULL UNIQUE,
+    recorded_by    INTEGER REFERENCES users(user_id),
+    sent_at        TEXT,
+    sent_channel   TEXT,
+    notes          TEXT,
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_pledge_payments_pledge ON pledge_payments(pledge_id);
+
 CREATE TABLE expense_categories (
     expense_cat_id INTEGER PRIMARY KEY,
     category_name  TEXT NOT NULL UNIQUE,
