@@ -531,10 +531,12 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
 .event-row .date .m { font-size: 0.65rem; color: var(--accent); text-transform: uppercase; font-weight: 600; }
 .event-row .date .d { font-size: 1rem; font-weight: 700; }
 .event-row .meta { font-size: 0.78rem; color: var(--muted); }
-.event-row .tag {
-  margin-left: auto; font-size: 0.72rem;
+/* Event type pill — shown above the event title on the dashboard and events list. */
+.evt-type {
+  display: inline-block; font-size: 0.7rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.03em;
   background: var(--accent-soft); color: var(--accent-dark);
-  padding: 0.15rem 0.55rem; border-radius: 999px;
+  padding: 0.1rem 0.55rem; border-radius: 999px; margin-bottom: 0.2rem;
 }
 
 .bd-row {

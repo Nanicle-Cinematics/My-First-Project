@@ -333,6 +333,24 @@ CREATE TABLE inventory_items (
 );
 CREATE INDEX idx_inventory_active ON inventory_items(deleted_at);
 
+CREATE TABLE preaching_plan (
+    plan_id          INTEGER PRIMARY KEY,
+    preach_date      TEXT NOT NULL,
+    service_label    TEXT,
+    member_id        INTEGER REFERENCES members(member_id),
+    preacher_name    TEXT,
+    preacher_phone   TEXT,
+    preacher_email   TEXT,
+    topic            TEXT,
+    scripture        TEXT,
+    notes            TEXT,
+    reminder_sent_at TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TEXT,
+    deleted_at       TEXT
+);
+CREATE INDEX idx_preaching_date ON preaching_plan(preach_date);
+
 INSERT INTO service_types (type_name, description) VALUES
  ('Sunday Service',    'Regular Sunday worship service'),
  ('Wednesday Service', 'Midweek service'),
