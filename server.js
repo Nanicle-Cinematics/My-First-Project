@@ -139,6 +139,7 @@ addColumnIfMissing('expenses', 'approved_by',      `approved_by INTEGER REFERENC
 addColumnIfMissing('expenses', 'receipt_attached', `receipt_attached INTEGER NOT NULL DEFAULT 0`);
 addColumnIfMissing('expenses', 'reference_number', `reference_number TEXT`);
 addColumnIfMissing('expenses', 'expense_cat_id',   `expense_cat_id INTEGER REFERENCES expense_categories(expense_cat_id)`);
+addColumnIfMissing('expenses', 'notes',            `notes TEXT`);
 addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NULL DEFAULT 'none'`);
 addColumnIfMissing('members', 'unsubscribe_token',`unsubscribe_token TEXT`);
 addColumnIfMissing('events',  'checkin_token',    `checkin_token TEXT`);
@@ -778,6 +779,17 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
       <h1>${esc(title)}</h1>
       ${subtitle ? `<p class="subtitle">${esc(subtitle)}</p>` : ''}
       ${body}
+      <div class="print-footer">
+        Printed by <strong>${esc(userName)}</strong>
+        · <span id="print-ts">${new Date().toLocaleString('en-GB')}</span>
+        · ${esc(CHURCH_NAME)}
+      </div>
+      <script>
+        window.addEventListener('beforeprint', function () {
+          var el = document.getElementById('print-ts');
+          if (el) el.textContent = new Date().toLocaleString('en-GB');
+        });
+      </script>
     </main>
     <footer class="footer">
       <div>© ${new Date().getFullYear()} ${esc(CHURCH_NAME)}. All rights reserved.</div>
@@ -1183,6 +1195,8 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
   const orgChecks = organizations.map((o) => `
       <label class="check"><input type="checkbox" name="org_ids" value="${o.org_id}"
         ${memberOrgIds.includes(o.org_id) ? 'checked' : ''}> ${esc(o.name)}</label>`).join('');
+  const orgsOpen = memberOrgIds.length > 0;
+  const orgsCount = memberOrgIds.length;
   const memberIdField = member.member_id
     ? `<label>Member ID<input name="external_id" value="${esc(member.external_id || '')}" readonly></label>`
     : `<label>Member ID<input name="external_id" value="(auto-generated on save)" readonly></label>`;
@@ -1212,7 +1226,14 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
       <label>Join date<input type="date" name="join_date" value="${fmtDate(member.join_date)}"></label>
       <label>Baptism date<input type="date" name="baptism_date" value="${fmtDate(member.baptism_date)}"></label>
       <label>Confirmation date<input type="date" name="confirmation_date" value="${fmtDate(member.confirmation_date)}"></label>
-      <label class="wide">Organizations<div class="check-grid">${orgChecks || '<span class="muted-text">No organizations yet.</span>'}</div></label>
+      <div class="wide-cell">
+        <details class="form-toggle" ${orgsOpen ? 'open' : ''}>
+          <summary><strong>Choose organizations</strong>
+            <span class="muted-text">${orgsCount > 0 ? `(${orgsCount} selected)` : '(optional — click to expand)'}</span>
+          </summary>
+          <div class="check-grid" style="margin-top:0.5rem">${orgChecks || '<span class="muted-text">No organizations yet.</span>'}</div>
+        </details>
+      </div>
       <label class="wide">Notes<textarea name="notes" rows="3">${esc(member.notes)}</textarea></label>
       <div class="actions"><button type="submit">Save</button></div>
     </form>`;
@@ -2439,7 +2460,8 @@ app.get('/finance/pledges', (req, res) => {
             ? `<form method="post" action="/finance/pledges/${p.pledge_id}/pay" class="inline">
                  <input type="number" step="0.01" min="0" name="add" placeholder="add">
                  <button type="submit">Record</button>
-               </form>` : '']))
+               </form>
+               <a class="btn-link" href="/finance/pledges/${p.pledge_id}/edit" style="margin-left:0.5rem">Edit</a>` : '']))
     : '<p class="muted-text">No pledges recorded yet.</p>';
   const body = `
     ${financeTabs('/finance/pledges')}
@@ -2471,6 +2493,47 @@ app.post('/finance/pledges/:id/pay', requireAdmin, (req, res) => {
   const newPaid = p.paid_amount + add;
   const status = newPaid >= p.pledged_amount ? 'Fulfilled' : 'Partial';
   db.prepare(`UPDATE pledges SET paid_amount=?, status=? WHERE pledge_id=?`).run(newPaid, status, id);
+  res.redirect('/finance/pledges');
+});
+
+app.get('/finance/pledges/:id/edit', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const p = db.prepare(`SELECT * FROM pledges WHERE pledge_id=?`).get(id);
+  if (!p) return res.redirect('/finance/pledges');
+  const harvests = db.prepare(
+    `SELECT harvest_id, harvest_name FROM harvests WHERE deleted_at IS NULL ORDER BY harvest_year DESC`
+  ).all();
+  const members = loadMembersList();
+  const harvestOpts = harvests.map((h) =>
+    `<option value="${h.harvest_id}" ${h.harvest_id === p.harvest_id ? 'selected' : ''}>${esc(h.harvest_name)}</option>`).join('');
+  const memOpts = members.map((m) =>
+    `<option value="${m.member_id}" ${m.member_id === p.member_id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  const body = `
+    <p><a href="/finance/pledges">← Back to pledges</a></p>
+    <form class="form" method="post" action="/finance/pledges/${id}/edit">
+      <label>Member<select name="member_id" required>${memOpts}</select></label>
+      <label>Harvest<select name="harvest_id" required>${harvestOpts}</select></label>
+      <label>Pledged amount<input type="number" step="0.01" min="0.01" name="pledged_amount" required value="${p.pledged_amount}"></label>
+      <label>Paid amount<input type="number" step="0.01" min="0" name="paid_amount" value="${p.paid_amount}"></label>
+      <label>Pledge date<input type="date" name="pledge_date" required value="${fmtDate(p.pledge_date)}"></label>
+      <label class="wide">Notes<input name="notes" value="${esc(p.notes || '')}"></label>
+      <div class="actions"><button type="submit">Save changes</button></div>
+    </form>`;
+  res.page({ title: 'Edit pledge', active: '/finance', body });
+});
+
+app.post('/finance/pledges/:id/edit', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const b = req.body;
+  const pledged = Number(b.pledged_amount);
+  const paid = Number(b.paid_amount || 0);
+  const status = paid <= 0 ? 'Pending' : paid >= pledged ? 'Fulfilled' : 'Partial';
+  db.prepare(`UPDATE pledges SET member_id=?, harvest_id=?, pledged_amount=?, paid_amount=?,
+                                  pledge_date=?, status=?, notes=? WHERE pledge_id=?`).run(
+    Number(b.member_id), Number(b.harvest_id), pledged, paid,
+    b.pledge_date, status, b.notes || null, id
+  );
+  logActivity('pledge_edited', `Pledge #${id} edited`, '/finance/pledges', res.locals.user.user_id);
   res.redirect('/finance/pledges');
 });
 
@@ -2513,11 +2576,12 @@ app.get('/finance/expenses', (req, res) => {
   const body = `
     ${financeTabs('/finance/expenses')}
     ${addForm}
-    ${rows.length ? table(['Date', 'Category', 'Description', 'Paid to', 'Method', 'Amount', 'Receipt'],
+    ${rows.length ? table(['Date', 'Category', 'Description', 'Paid to', 'Method', 'Amount', 'Receipt', ''],
       rows.map((e) => [esc(e.spent_on), esc(e.cat_name || e.legacy_cat),
         esc(e.description), esc(e.paid_to), esc(e.payment_method),
         fmtMoney(e.amount),
-        e.receipt_attached ? '✓' : '—']))
+        e.receipt_attached ? '✓' : '—',
+        res.locals.isAdmin ? `<a class="btn-link" href="/finance/expenses/${e.expense_id}/edit">Edit</a>` : '']))
       : '<p class="muted-text">No expenses recorded yet.</p>'}`;
   res.page({ title: 'Finance · Expenses', active: '/finance', body });
 });
@@ -2527,17 +2591,68 @@ app.post('/finance/expenses', requireAdmin, (req, res) => {
   const cat = db.prepare(`SELECT category_name FROM expense_categories WHERE expense_cat_id=?`).get(Number(b.expense_cat_id));
   db.prepare(`
     INSERT INTO expenses (expense_cat_id, category, amount, spent_on, description, paid_to,
-                          payment_method, reference_number, approved_by, receipt_attached)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+                          payment_method, reference_number, approved_by, receipt_attached, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     Number(b.expense_cat_id), cat ? cat.category_name : 'other',
     Number(b.amount), b.spent_on, b.description, b.paid_to || null,
     b.payment_method || null, b.reference_number || null,
     b.approved_by ? Number(b.approved_by) : null,
-    b.receipt_attached ? 1 : 0
+    b.receipt_attached ? 1 : 0,
+    b.notes || null
   );
   logActivity('expense_recorded',
     `Expense ${fmtMoney(b.amount)} (${cat ? cat.category_name : ''}) recorded`,
     '/finance/expenses', res.locals.user.user_id);
+  res.redirect('/finance/expenses');
+});
+
+app.get('/finance/expenses/:id/edit', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const e = db.prepare(`SELECT * FROM expenses WHERE expense_id=?`).get(id);
+  if (!e) return res.redirect('/finance/expenses');
+  const cats = loadExpenseCategories();
+  const currentUser = res.locals.user;
+  const catOpts = cats.map((c) =>
+    `<option value="${c.expense_cat_id}" ${c.expense_cat_id === e.expense_cat_id ? 'selected' : ''}>${esc(c.category_name)}</option>`).join('');
+  const methods = ['Cash', 'Bank Transfer', 'Cheque', 'Mobile Money', 'Other'];
+  const methodOpts = methods.map((m) =>
+    `<option ${m === e.payment_method ? 'selected' : ''}>${m}</option>`).join('');
+  const approverName = esc(currentUser.display_name || currentUser.username);
+  const body = `
+    <p><a href="/finance/expenses">← Back to expenses</a></p>
+    <form class="form" method="post" action="/finance/expenses/${id}/edit">
+      <label>Date<input type="date" name="spent_on" required value="${fmtDate(e.spent_on)}"></label>
+      <label>Category<select name="expense_cat_id" required>${catOpts}</select></label>
+      <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required value="${e.amount}"></label>
+      <label>Payment method<select name="payment_method">${methodOpts}</select></label>
+      <label class="wide">Description<input name="description" required value="${esc(e.description || '')}"></label>
+      <label>Paid to<input name="paid_to" value="${esc(e.paid_to || '')}"></label>
+      <label>Reference #<input name="reference_number" value="${esc(e.reference_number || '')}"></label>
+      <label>Approved by<select name="approved_by"><option value="${currentUser.user_id}">${approverName}</option></select></label>
+      <label><span>&nbsp;</span><label class="check" style="background:none;padding:0">
+        <input type="checkbox" name="receipt_attached" value="1" ${e.receipt_attached ? 'checked' : ''}> Receipt attached</label></label>
+      <label class="wide">Notes<input name="notes" value="${esc(e.notes || '')}"></label>
+      <div class="actions"><button type="submit">Save changes</button></div>
+    </form>`;
+  res.page({ title: 'Edit expense', active: '/finance', body });
+});
+
+app.post('/finance/expenses/:id/edit', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const b = req.body;
+  const cat = db.prepare(`SELECT category_name FROM expense_categories WHERE expense_cat_id=?`).get(Number(b.expense_cat_id));
+  db.prepare(`UPDATE expenses SET expense_cat_id=?, category=?, amount=?, spent_on=?, description=?,
+                                   paid_to=?, payment_method=?, reference_number=?,
+                                   approved_by=?, receipt_attached=?, notes=?
+              WHERE expense_id=?`).run(
+    Number(b.expense_cat_id), cat ? cat.category_name : 'other',
+    Number(b.amount), b.spent_on, b.description, b.paid_to || null,
+    b.payment_method || null, b.reference_number || null,
+    b.approved_by ? Number(b.approved_by) : null,
+    b.receipt_attached ? 1 : 0, b.notes || null, id
+  );
+  logActivity('expense_edited',
+    `Expense #${id} edited`, '/finance/expenses', res.locals.user.user_id);
   res.redirect('/finance/expenses');
 });
 
@@ -3198,7 +3313,7 @@ app.get('/reports/harvests', (req, res) => {
         <div class="stat"><div class="ico green">✓</div><div>
           <div class="label">Paid</div><div class="value">${fmtMoney(pledgeSummary.total_paid)}</div></div></div>
         <div class="stat"><div class="ico orange">!</div><div>
-          <div class="label">Outstanding</div><div class="value">${fmtMoney(pledgeSummary.total_outstanding)}</div></div></div>
+          <div class="label">Outstanding</div><div class="value">${fmtOutstanding(pledgeSummary.total_outstanding)}</div></div></div>
       </div>
       <p class="muted-text">Status counts: ${pledgeSummary.fulfilled} fulfilled · ${pledgeSummary.partial} partial · ${pledgeSummary.pending} pending</p>
       <h3>Pledgers</h3>

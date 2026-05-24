@@ -361,6 +361,20 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
 /* Inline negative-money styling — used for outstanding pledges (> 0). */
 .negative { color: var(--danger); font-weight: 600; }
 
+/* Small inline "Edit" / action links in tables (e.g. pledges, expenses). */
+.btn-link { display: inline-block; padding: 0.25rem 0.6rem; border: 1px solid var(--border);
+            border-radius: 6px; background: var(--soft); color: var(--ink);
+            text-decoration: none; font-size: 0.85rem; }
+.btn-link:hover { background: var(--accent-soft); }
+
+/* Print-only footer (e.g. "Printed by …") — hidden on screen. */
+.print-footer { display: none; }
+@media print {
+  .print-footer { display: block; margin-top: 2rem; padding-top: 0.5rem;
+                  border-top: 1px solid #999; font-size: 0.8rem; color: #555;
+                  text-align: center; }
+}
+
 /* ---------- Quick actions (button-dropdown) ---------- */
 .quick-drop {
   margin-bottom: 1.25rem;
@@ -680,6 +694,7 @@ details.form-toggle summary {
   margin-top: 0.25rem; font-size: 0.92rem; color: var(--ink);
 }
 .form label.wide { grid-column: 1 / -1; }
+.form .wide-cell { grid-column: 1 / -1; }
 .form .actions { grid-column: 1 / -1; }
 .form label .hint {
   display: block; font-size: 0.75rem; color: var(--muted);
