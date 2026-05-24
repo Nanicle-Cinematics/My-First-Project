@@ -321,6 +321,18 @@ CREATE TABLE expense_categories (
     is_active      INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE inventory_items (
+    item_id     INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    quantity    INTEGER NOT NULL DEFAULT 0,
+    category    TEXT,
+    notes       TEXT,
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TEXT,
+    deleted_at  TEXT
+);
+CREATE INDEX idx_inventory_active ON inventory_items(deleted_at);
+
 INSERT INTO service_types (type_name, description) VALUES
  ('Sunday Service',    'Regular Sunday worship service'),
  ('Wednesday Service', 'Midweek service'),

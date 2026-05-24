@@ -174,6 +174,19 @@ try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_checkin ON events(ch
 db.prepare(`UPDATE members SET unsubscribe_token = lower(hex(randomblob(16))) WHERE unsubscribe_token IS NULL`).run();
 db.prepare(`UPDATE events  SET checkin_token     = lower(hex(randomblob(16))) WHERE checkin_token     IS NULL`).run();
 
+// Inventory: simple register of physical items the church owns/tracks.
+db.exec(`CREATE TABLE IF NOT EXISTS inventory_items (
+  item_id     INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL,
+  quantity    INTEGER NOT NULL DEFAULT 0,
+  category    TEXT,
+  notes       TEXT,
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TEXT,
+  deleted_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_active ON inventory_items(deleted_at);`);
+
 // Finance schema (services, harvests, day-born splits, special offerings, pledges, lookups).
 db.exec(`
   CREATE TABLE IF NOT EXISTS service_types (
@@ -442,6 +455,7 @@ const NAV = [
   ['/finance',         'Finance',        '₵'],
   ['/bible-classes',   'Bible Classes',  '📖'],
   ['/organizations',   'Organizations',  '♫'],
+  ['/inventory',       'Inventory',      '📦'],
   ['/events',          'Events',         '📅'],
   ['/communications',  'Communications', '✉'],
   ['/reports',         'Reports',        '📊'],
@@ -450,6 +464,22 @@ const NAV = [
 ];
 
 const DAYS_OF_WEEK = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+// DOB is stored as YYYY-MM-DD; the year is sentinel 1900 for entries collected
+// via the day+month picker. Existing rows may carry a real birth year — we
+// surface only the month+day from them too, so the year is never displayed.
+const dobMonth = (s) => (s ? Number(String(s).slice(5, 7)) : 0);
+const dobDay   = (s) => (s ? Number(String(s).slice(8, 10)) : 0);
+const fmtDobShort = (s) => {
+  const m = dobMonth(s), d = dobDay(s);
+  return (m && d) ? `${MONTHS[m - 1]} ${d}` : '';
+};
+function parseDob(m, d) {
+  const mm = Number(m), dd = Number(d);
+  if (!mm || !dd || mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+  return `1900-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+}
 
 // ---------- Photo storage (member photos saved next to the DB) ----------
 const PHOTO_DIR = process.env.PHOTO_DIR || path.join(path.dirname(DB_PATH), 'photos');
@@ -788,6 +818,24 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
         window.addEventListener('beforeprint', function () {
           var el = document.getElementById('print-ts');
           if (el) el.textContent = new Date().toLocaleString('en-GB');
+        });
+        // Mark every required field with a red asterisk inside its label.
+        document.querySelectorAll('[required]').forEach(function (r) {
+          var lbl = r.closest('label');
+          if (!lbl || lbl.querySelector('.req-star')) return;
+          var star = document.createElement('span');
+          star.className = 'req-star';
+          star.textContent = ' *';
+          r.parentNode.insertBefore(star, r);
+        });
+        // Confirm before saving on every create/edit form (class="form").
+        // Forms that already have an onsubmit confirm (e.g. archive) opt out.
+        document.querySelectorAll('form.form').forEach(function (f) {
+          if (f.getAttribute('onsubmit')) return;
+          if (f.dataset.noConfirm === '1') return;
+          f.addEventListener('submit', function (e) {
+            if (!window.confirm('Save these changes?')) e.preventDefault();
+          });
         });
       </script>
     </main>
@@ -1208,7 +1256,18 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
       <label>Last name<input name="last_name" required value="${esc(member.last_name)}"></label>
       <label>Email<input type="email" name="email" value="${esc(member.email)}"></label>
       <label>Mobile<input name="mobile_phone" value="${esc(member.mobile_phone)}"></label>
-      <label>Date of birth<input type="date" name="date_of_birth" value="${fmtDate(member.date_of_birth)}"></label>
+      <label>Date of birth (day &amp; month)
+        <div class="dob-row">
+          <select name="dob_month" aria-label="Month">
+            <option value="">— month —</option>
+            ${MONTHS.map((mn, i) => `<option value="${i + 1}" ${(i + 1) === dobMonth(member.date_of_birth) ? 'selected' : ''}>${mn}</option>`).join('')}
+          </select>
+          <select name="dob_day" aria-label="Day">
+            <option value="">— day —</option>
+            ${Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}" ${(i + 1) === dobDay(member.date_of_birth) ? 'selected' : ''}>${i + 1}</option>`).join('')}
+          </select>
+        </div>
+      </label>
       <label>Day born<select name="day_born">
         <option value="">—</option>
         ${DAYS_OF_WEEK.map((d) => `<option value="${d}" ${d === (member.day_born || '') ? 'selected' : ''}>${d}</option>`).join('')}
@@ -1282,7 +1341,7 @@ app.post('/members', requireAdmin, (req, res) => {
     bible_class_id: b.bible_class_id ? Number(b.bible_class_id) : null,
     first_name: b.first_name, last_name: b.last_name,
     email: b.email || null, mobile_phone: b.mobile_phone || null,
-    date_of_birth: b.date_of_birth || null,
+    date_of_birth: parseDob(b.dob_month, b.dob_day),
     day_born: DAYS_OF_WEEK.includes(b.day_born) ? b.day_born : null,
     gender: b.gender || null,
     preferred_channel: PREF_LABELS[b.preferred_channel] ? b.preferred_channel : 'none',
@@ -1407,7 +1466,7 @@ app.post('/members/:id', requireAdmin, (req, res) => {
     bible_class_id: b.bible_class_id ? Number(b.bible_class_id) : null,
     first_name: b.first_name, last_name: b.last_name,
     email: b.email || null, mobile_phone: b.mobile_phone || null,
-    date_of_birth: b.date_of_birth || null,
+    date_of_birth: parseDob(b.dob_month, b.dob_day),
     day_born: DAYS_OF_WEEK.includes(b.day_born) ? b.day_born : null,
     gender: b.gender || null,
     preferred_channel: PREF_LABELS[b.preferred_channel] ? b.preferred_channel : 'none',
@@ -3000,8 +3059,8 @@ app.get('/reports/print', (req, res) => {
           topGivers.map((r) => [esc(r.name), fmtMoney(r.total)]))
           : '<p class="muted-text">No giving recorded for this period.</p>'}
         <h3>Birthdays this month</h3>
-        ${birthdays.length ? table(['Name', 'Date of birth'],
-          birthdays.map((r) => [esc(r.name), esc(r.date_of_birth)]))
+        ${birthdays.length ? table(['Name', 'Birthday'],
+          birthdays.map((r) => [esc(r.name), esc(fmtDobShort(r.date_of_birth))]))
           : '<p class="muted-text">None.</p>'}
       </section>
     </div>`;
@@ -3627,8 +3686,8 @@ app.get('/reports/members', (req, res) => {
       : '<p class="muted-text">No giving recorded yet this year.</p>'}
 
     <h2>Birthdays this month</h2>
-    ${birthdays.length ? table(['Name', 'DOB'],
-      birthdays.map((r) => [`<a href="/members/${r.member_id}">${esc(r.name)}</a>`, esc(r.date_of_birth)]))
+    ${birthdays.length ? table(['Name', 'Birthday'],
+      birthdays.map((r) => [`<a href="/members/${r.member_id}">${esc(r.name)}</a>`, esc(fmtDobShort(r.date_of_birth))]))
       : '<p class="muted-text">None.</p>'}
 
     <h2>Missed the last 3 Sundays</h2>
@@ -3795,6 +3854,140 @@ app.post('/organizations/:id/leader', requireAdmin, (req, res) => {
   const lid = req.body.leader_id ? Number(req.body.leader_id) : null;
   db.prepare(`UPDATE organizations SET leader_id=? WHERE org_id=?`).run(lid, oid);
   res.redirect('/organizations');
+});
+
+// ---------- inventory (register of physical items the church owns) ----------
+app.get('/inventory', (req, res) => {
+  const items = db.prepare(`
+    SELECT item_id, name, quantity, category, notes
+    FROM inventory_items
+    WHERE deleted_at IS NULL
+    ORDER BY COALESCE(category, 'zzz'), name`).all();
+
+  const grouped = {};
+  for (const it of items) {
+    const k = it.category && it.category.trim() ? it.category : 'Uncategorized';
+    (grouped[k] = grouped[k] || []).push(it);
+  }
+  const cats = Object.keys(grouped).sort((a, b) => {
+    if (a === 'Uncategorized') return 1;
+    if (b === 'Uncategorized') return -1;
+    return a.localeCompare(b);
+  });
+
+  const newForm = res.locals.isAdmin
+    ? `<details class="form-toggle" style="margin-bottom:1rem">
+         <summary><strong>+ Add an item</strong></summary>
+         <form class="form" method="post" action="/inventory" style="margin-top:0.75rem">
+           <label class="wide">Name<input name="name" required></label>
+           <label>Quantity<input type="number" name="quantity" min="0" value="0" required></label>
+           <label>Category<input name="category" placeholder="e.g. Instruments, Kitchen, Maintenance"></label>
+           <label class="wide-cell">Notes<textarea name="notes" rows="2"></textarea></label>
+           <div class="actions"><button type="submit">Add item</button></div>
+         </form>
+       </details>`
+    : '';
+
+  const sections = items.length
+    ? cats.map((c) => {
+        const rows = grouped[c].map((it) => `
+          <tr>
+            <td>${esc(it.name)}</td>
+            <td>${esc(String(it.quantity))}</td>
+            <td>${it.notes ? esc(it.notes) : '—'}</td>
+            ${res.locals.isAdmin ? `<td style="white-space:nowrap">
+              <a href="/inventory/${it.item_id}/edit" class="link">Edit</a>
+              <form method="post" action="/inventory/${it.item_id}/delete" class="inline"
+                    onsubmit="return confirm('Archive this item? It will be hidden but not permanently deleted.')">
+                <button type="submit" class="link">Archive</button>
+              </form>
+            </td>` : ''}
+          </tr>`).join('');
+        return `<section class="card" style="margin-bottom:1rem">
+          <div class="card-head"><h2>${esc(c)}</h2>
+            <span class="meta">${grouped[c].length} item${grouped[c].length === 1 ? '' : 's'}</span></div>
+          <table>
+            <thead><tr><th>Name</th><th>Qty</th><th>Notes</th>${res.locals.isAdmin ? '<th></th>' : ''}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </section>`;
+      }).join('')
+    : '<p class="muted-text">No inventory items yet.</p>';
+
+  res.page({
+    title: 'Inventory',
+    subtitle: 'Register of physical items the church owns.',
+    active: '/inventory',
+    body: `${newForm}${sections}`,
+  });
+});
+
+app.post('/inventory', requireAdmin, (req, res) => {
+  const b = req.body;
+  const name = (b.name || '').trim();
+  if (!name) return res.redirect('/inventory');
+  const qty = Math.max(0, Number(b.quantity) || 0);
+  const category = (b.category || '').trim() || null;
+  const notes = (b.notes || '').trim() || null;
+  db.prepare(`
+    INSERT INTO inventory_items (name, quantity, category, notes)
+    VALUES (?, ?, ?, ?)`).run(name, qty, category, notes);
+  logActivity('inventory_added',
+    `Added inventory item: ${name} (qty ${qty})`,
+    '/inventory', res.locals.user.user_id);
+  res.redirect('/inventory');
+});
+
+app.get('/inventory/:id/edit', requireAdmin, (req, res) => {
+  const it = db.prepare(
+    `SELECT * FROM inventory_items WHERE item_id=? AND deleted_at IS NULL`
+  ).get(Number(req.params.id));
+  if (!it) return res.status(404).send('Item not found');
+  res.page({
+    title: 'Edit Item', active: '/inventory',
+    body: `
+      <form class="form" method="post" action="/inventory/${it.item_id}">
+        <label class="wide">Name<input name="name" required value="${esc(it.name)}"></label>
+        <label>Quantity<input type="number" name="quantity" min="0" required value="${esc(String(it.quantity))}"></label>
+        <label>Category<input name="category" value="${esc(it.category || '')}"></label>
+        <label class="wide-cell">Notes<textarea name="notes" rows="3">${esc(it.notes || '')}</textarea></label>
+        <div class="actions">
+          <button type="submit">Save changes</button>
+          <a href="/inventory" class="link">Cancel</a>
+        </div>
+      </form>`,
+  });
+});
+
+app.post('/inventory/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const b = req.body;
+  const name = (b.name || '').trim();
+  if (!name) return res.redirect(`/inventory/${id}/edit`);
+  const qty = Math.max(0, Number(b.quantity) || 0);
+  const category = (b.category || '').trim() || null;
+  const notes = (b.notes || '').trim() || null;
+  db.prepare(`
+    UPDATE inventory_items
+       SET name=?, quantity=?, category=?, notes=?, updated_at=CURRENT_TIMESTAMP
+     WHERE item_id=? AND deleted_at IS NULL`)
+    .run(name, qty, category, notes, id);
+  logActivity('inventory_updated',
+    `Updated inventory item: ${name} (qty ${qty})`,
+    '/inventory', res.locals.user.user_id);
+  res.redirect('/inventory');
+});
+
+app.post('/inventory/:id/delete', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const it = db.prepare(`SELECT name FROM inventory_items WHERE item_id=?`).get(id);
+  db.prepare(`UPDATE inventory_items SET deleted_at=CURRENT_TIMESTAMP WHERE item_id=?`).run(id);
+  if (it) {
+    logActivity('inventory_archived',
+      `Archived inventory item: ${it.name}`,
+      '/inventory', res.locals.user.user_id);
+  }
+  res.redirect('/inventory');
 });
 
 // ---------- communications (announcements) ----------
