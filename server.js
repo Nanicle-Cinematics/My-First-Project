@@ -842,6 +842,7 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · ${esc(CHURCH_NAME)}</title>
+<script>(function(){try{var t=localStorage.getItem('theme')||(window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -878,6 +879,7 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · ${esc(CHURCH_NAME)}</title>
+<script>(function(){try{var t=localStorage.getItem('theme')||(window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -911,6 +913,7 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
         <input type="search" name="q" placeholder="Search members, phone, email…">
       </form>
       <div class="right">
+        <button class="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
         <a class="bell" href="/communications" title="Notifications">🔔</a>
         <a class="who" href="/profile">
           <div class="avatar">${esc(userInitials)}</div>
@@ -961,6 +964,20 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
             if (!window.confirm('Save these changes?')) e.preventDefault();
           });
         });
+
+        // Dark-mode toggle (persisted in localStorage).
+        (function () {
+          var root = document.documentElement;
+          var btn = document.querySelector('.theme-toggle');
+          function paint(t) { if (btn) btn.textContent = t === 'dark' ? '☀️' : '🌙'; }
+          paint(root.getAttribute('data-theme') || 'light');
+          if (btn) btn.addEventListener('click', function () {
+            var t = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+            root.setAttribute('data-theme', t);
+            try { localStorage.setItem('theme', t); } catch (e) {}
+            paint(t);
+          });
+        })();
 
         // Mobile slide-in navigation drawer.
         (function () {

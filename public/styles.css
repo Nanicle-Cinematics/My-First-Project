@@ -1,8 +1,10 @@
 :root {
-  /* Light/white sidebar */
-  --sidebar-bg: #ffffff;
-  --sidebar-ink: #1f2433;
-  --sidebar-muted: #7c8398;
+  /* Blue menu bar (Trypan Blue) — kept across light & dark themes */
+  --sidebar-bg: #1d4e89;
+  --sidebar-bg-2: #103060;
+  --sidebar-ink: #ffffff;
+  --sidebar-muted: rgba(255, 255, 255, 0.7);
+  --sidebar-active: rgba(212, 160, 23, 0.2);
 
   --bg: #f6f7fb;                /* cool light app background */
   --panel: #ffffff;
@@ -10,6 +12,10 @@
   --muted: #7c8398;
   --soft: #f1f2f7;              /* neutral chip / hover */
   --border: #ececf1;
+  --field: #ffffff;            /* form input background */
+  --topbar-bg: rgba(255, 255, 255, 0.82);
+  --flash-bg: #fff8d6;
+  --flash-border: #e7d27a;
 
   /* PRIMARY — Harvest Gold */
   --gold: #d4a017;
@@ -48,6 +54,36 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ---------- Dark mode ---------- */
+:root[data-theme="dark"] {
+  --bg: #0f1420;
+  --panel: #171d2b;
+  --ink: #e7e9f0;
+  --muted: #98a0b3;
+  --soft: #212838;
+  --border: #2a3142;
+  --field: #1c2333;
+  --topbar-bg: rgba(18, 23, 34, 0.85);
+  --flash-bg: rgba(212, 160, 23, 0.16);
+  --flash-border: rgba(212, 160, 23, 0.4);
+
+  /* Pastel chip tints become translucent so they read well on dark cards */
+  --gold-soft: rgba(212, 160, 23, 0.2);
+  --purple-soft: rgba(124, 92, 252, 0.22);
+  --green-soft: rgba(22, 163, 74, 0.2);
+  --blue-soft: rgba(59, 130, 246, 0.22);
+  --orange-soft: rgba(224, 138, 30, 0.2);
+  --danger-soft: rgba(220, 38, 38, 0.2);
+  --gold-deep: #f0c552;        /* readable gold text on dark */
+  --purple-dark: #a98bff;      /* lighter purple for links on dark */
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --row-hover: rgba(124, 92, 252, 0.12);
+  color-scheme: dark;
+}
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 html { scroll-behavior: smooth; }
@@ -77,9 +113,8 @@ a:hover { text-decoration: underline; }
 }
 
 .sidebar {
-  background: var(--sidebar-bg);
+  background: linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-2) 100%);
   color: var(--sidebar-ink);
-  border-right: 1px solid var(--border);
   padding: 1.25rem 0.85rem 1rem;
   display: flex; flex-direction: column; gap: 0.85rem;
   position: sticky; top: 0; height: 100vh; overflow-y: auto;
@@ -87,7 +122,7 @@ a:hover { text-decoration: underline; }
 .sidebar .brand {
   display: flex; gap: 0.7rem; align-items: center;
   padding: 0.25rem 0.5rem 0.85rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 .sidebar .brand .logo {
   background: linear-gradient(145deg, #e8b923 0%, var(--gold) 100%);
@@ -98,43 +133,44 @@ a:hover { text-decoration: underline; }
   font-size: 1.35rem;
   box-shadow: 0 6px 16px rgba(212, 160, 23, 0.4);
 }
-.sidebar .brand .name { font-weight: 800; font-size: 1.02rem; line-height: 1.2; color: var(--ink); }
+.sidebar .brand .name { font-weight: 800; font-size: 1.02rem; line-height: 1.2; color: #fff; }
 .sidebar .brand .tag {
-  font-size: 0.7rem; color: var(--muted);
+  font-size: 0.7rem; color: var(--sidebar-muted);
   letter-spacing: 0.04em; text-transform: uppercase;
   margin-top: 0.15rem;
 }
 .sidebar nav { display: flex; flex-direction: column; gap: 0.2rem; }
 .sidebar nav a {
-  color: var(--muted);
+  color: var(--sidebar-muted);
   padding: 0.62rem 0.8rem;
   border-radius: 10px;
   display: flex; align-items: center; gap: 0.8rem;
   font-size: 0.9rem; font-weight: 500;
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
-.sidebar nav a:hover { background: var(--soft); color: var(--ink); text-decoration: none; }
+.sidebar nav a:hover { background: rgba(255, 255, 255, 0.08); color: #fff; text-decoration: none; }
 .sidebar nav a.active {
-  background: linear-gradient(135deg, #e8b923 0%, var(--gold) 100%);
-  color: var(--gold-ink); font-weight: 700;
-  box-shadow: 0 8px 18px rgba(212, 160, 23, 0.38);
+  background: var(--sidebar-active);
+  color: #fff; font-weight: 700;
+  border-left: 3px solid var(--gold);
+  padding-left: calc(0.8rem - 3px);
 }
 .sidebar nav a.active .ico { opacity: 1; }
 .sidebar nav a .ico {
-  width: 20px; display: inline-flex; justify-content: center; opacity: 0.8;
+  width: 20px; display: inline-flex; justify-content: center; opacity: 0.85;
 }
 
-/* Scripture rendered as a purple (secondary-accent) promo card */
+/* Scripture — subtle translucent card on the blue bar */
 .scripture {
   margin-top: auto;
-  background: linear-gradient(160deg, var(--purple) 0%, var(--purple-dark) 100%);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: #fff;
   padding: 1rem;
   border-radius: 14px;
-  box-shadow: 0 10px 24px rgba(124, 92, 252, 0.32);
 }
 .scripture .title {
-  font-size: 0.7rem; color: rgba(255, 255, 255, 0.85);
+  font-size: 0.7rem; color: var(--sidebar-muted);
   letter-spacing: 0.05em; text-transform: uppercase;
   margin-bottom: 0.45rem;
   display: flex; gap: 0.4rem; align-items: center;
@@ -143,7 +179,7 @@ a:hover { text-decoration: underline; }
   margin: 0; font-style: italic; color: #fff;
   font-size: 0.86rem; line-height: 1.45;
 }
-.scripture cite { color: rgba(255, 255, 255, 0.85); font-size: 0.8rem; font-style: normal; }
+.scripture cite { color: var(--sidebar-muted); font-size: 0.8rem; font-style: normal; }
 
 /* ---------- Main area ---------- */
 .main { display: flex; flex-direction: column; min-width: 0; }
@@ -151,7 +187,7 @@ a:hover { text-decoration: underline; }
 .topbar {
   display: flex; align-items: center; gap: 1rem;
   padding: 0.9rem 1.5rem;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--topbar-bg);
   backdrop-filter: saturate(1.6) blur(12px);
   -webkit-backdrop-filter: saturate(1.6) blur(12px);
   border-bottom: 1px solid var(--border);
@@ -183,6 +219,14 @@ a:hover { text-decoration: underline; }
   background: var(--danger); color: white; font-size: 0.65rem;
   padding: 0.05rem 0.35rem; border-radius: 999px;
 }
+.topbar .theme-toggle {
+  background: var(--soft); color: var(--ink); border: 1px solid var(--border);
+  width: 36px; height: 36px; padding: 0; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1rem; cursor: pointer; box-shadow: none;
+  transition: background 0.15s var(--ease), transform 0.15s var(--ease);
+}
+.topbar .theme-toggle:hover { background: var(--border); filter: none; transform: none; color: var(--ink); }
 .topbar .who {
   display: flex; align-items: center; gap: 0.6rem;
 }
@@ -207,7 +251,7 @@ a:hover { text-decoration: underline; }
 .page > .subtitle { color: var(--muted); margin: 0 0 1.5rem; }
 
 .flash {
-  background: #fff8d6; border: 1px solid #e7d27a;
+  background: var(--flash-bg); border: 1px solid var(--flash-border);
   padding: 0.5rem 1rem; border-radius: 8px; margin-bottom: 1rem;
 }
 .error { color: var(--danger); margin: 0; }
@@ -463,7 +507,7 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
 
 .m-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.9rem; }
 .m-tile {
-  background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+  background: var(--soft); border: 1px solid var(--border); border-radius: 14px;
   padding: 1rem 0.75rem; text-align: center;
 }
 .m-tile .ico {
@@ -749,7 +793,7 @@ tbody tr:hover td { background: var(--row-hover); }
 /* ---------- Forms / inputs / buttons ---------- */
 input, select, textarea {
   font: inherit; padding: 0.5rem 0.7rem;
-  border: 1px solid var(--border); border-radius: 8px; background: white;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--field); color: var(--ink);
   outline: none;
 }
 input, select, textarea { transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease); }
@@ -814,8 +858,12 @@ details.form-toggle summary {
   background: var(--soft); border-radius: 8px; display: inline-block;
 }
 
-/* Print styles: hide chrome, expand content for paper */
+/* Print styles: hide chrome, expand content for paper (force light tokens) */
 @media print {
+  :root, :root[data-theme="dark"] {
+    --bg: #fff; --panel: #fff; --ink: #000; --muted: #444;
+    --soft: #f3f3f3; --border: #ccc; --field: #fff;
+  }
   .sidebar, .topbar, .footer, .filters, .actions, details, button, .quick, .qa,
   form[method="post"], .scripture {
     display: none !important;
