@@ -382,7 +382,11 @@ const insertExpenseCat = db.prepare(`INSERT OR IGNORE INTO expense_categories (c
 // Seed the default organizations (idempotent).
 const DEFAULT_ORGS = [
   "Church Choir",
+  "Singing Band",
   "Gospel Band",
+  "Guild",
+  "Boy's Brigade",
+  "Girl's Brigade",
   "Men's Fellowship",
   "Women's Fellowship",
   "Sunday School",
@@ -4493,92 +4497,219 @@ app.get('/attendance', (req, res) => {
 });
 
 // ---------- organizations ----------
-app.get('/organizations', (req, res) => {
-  const orgs = db.prepare(`
-    SELECT o.org_id, o.name, o.description, o.meets_on,
-           ml.member_id AS leader_id,
+function selectOrganizations({ q, sort }) {
+  const where = ['o.active=1'];
+  const params = {};
+  if (q) { where.push(`o.name LIKE @q`); params.q = `%${q}%`; }
+  const order = sort === 'members' ? 'member_count DESC, o.name' : 'o.name';
+  return db.prepare(`
+    SELECT o.org_id, o.name, o.description, o.meets_on, o.leader_id,
            ml.first_name || ' ' || ml.last_name AS leader_name,
            (SELECT COUNT(*) FROM organization_memberships om WHERE om.org_id=o.org_id) AS member_count
     FROM organizations o
     LEFT JOIN members ml ON ml.member_id = o.leader_id
-    WHERE o.active=1
-    ORDER BY o.name`).all();
-  const rosters = db.prepare(`
-    SELECT om.org_id, m.member_id, m.external_id,
-           m.first_name || ' ' || m.last_name AS member, om.role
-    FROM organization_memberships om
-    JOIN members m USING(member_id)
-    WHERE m.deleted_at IS NULL
-    ORDER BY m.last_name`).all();
-  const allMembers = db.prepare(
-    `SELECT member_id, first_name || ' ' || last_name AS name FROM members
-       WHERE deleted_at IS NULL ORDER BY last_name`
-  ).all();
-  const memberOpts = (sel) => '<option value="">— none —</option>' +
-    allMembers.map((m) => `<option value="${m.member_id}" ${m.member_id === sel ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+    WHERE ${where.join(' AND ')}
+    ORDER BY ${order}`).all(params);
+}
 
-  const sections = orgs.map((o) => {
-    const members = rosters.filter((r) => r.org_id === o.org_id);
-    const list = members.length
-      ? `<table style="margin-top:0.5rem">
-           <thead><tr><th>Member ID</th><th>Name</th><th>Role</th>${res.locals.isAdmin ? '<th></th>' : ''}</tr></thead>
-           <tbody>${members.map((m) => `
-             <tr>
-               <td>${esc(m.external_id) || '—'}</td>
-               <td><a href="/members/${m.member_id}">${esc(m.member)}</a></td>
-               <td>${esc(m.role)}</td>
-               ${res.locals.isAdmin ? `<td>
-                 <form method="post" action="/organizations/${o.org_id}/remove" class="inline">
-                   <input type="hidden" name="member_id" value="${m.member_id}">
-                   <button class="link" type="submit">remove</button>
-                 </form></td>` : ''}
-             </tr>`).join('')}</tbody>
-         </table>`
-      : '<p class="muted-text">No members assigned yet.</p>';
-    const addForm = res.locals.isAdmin
-      ? `<form method="post" action="/organizations/${o.org_id}/add" class="inline" style="margin-top:0.5rem">
-           <select name="member_id" required>${memberOpts()}</select>
-           <select name="role">
-             <option value="member">member</option>
-             <option value="leader">leader</option>
-           </select>
-           <button type="submit">Add member</button>
-         </form>
-         <form method="post" action="/organizations/${o.org_id}/leader" class="inline">
-           <select name="leader_id">${memberOpts(o.leader_id)}</select>
-           <button type="submit">Set leader</button>
-         </form>`
-      : '';
-    return `<section class="card" style="margin-bottom:1rem">
-      <div class="card-head">
-        <h2>${esc(o.name)}</h2>
-        <span class="meta">${o.member_count} member${o.member_count === 1 ? '' : 's'}</span>
+function orgMemberOptions(selected) {
+  const all = db.prepare(
+    `SELECT member_id, first_name || ' ' || last_name AS name FROM members
+       WHERE deleted_at IS NULL ORDER BY last_name`).all();
+  return '<option value="">— none —</option>' +
+    all.map((m) => `<option value="${m.member_id}" ${m.member_id === selected ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+}
+
+app.get('/organizations', (req, res) => {
+  const q = (req.query.q || '').trim();
+  const sort = (req.query.sort || '').trim();
+  const orgs = selectOrganizations({ q, sort });
+  const isAdmin = res.locals.isAdmin;
+
+  const orgCount = db.prepare(`SELECT COUNT(*) c FROM organizations WHERE active=1`).get().c;
+  const enrolled = db.prepare(
+    `SELECT COUNT(DISTINCT om.member_id) c FROM organization_memberships om
+       JOIN organizations o USING(org_id) WHERE o.active=1`).get().c;
+  const leaders = db.prepare(
+    `SELECT COUNT(*) c FROM organizations WHERE active=1 AND leader_id IS NOT NULL`).get().c;
+
+  const hero = `
+    <div class="page-hero">
+      <div class="hero-text">
+        <h1>Organizations</h1>
+        <p>Choirs, bands, fellowships and brigades. Browse every group, see its leader and membership, and manage rosters.</p>
       </div>
-      ${o.description ? `<p>${esc(o.description)}</p>` : ''}
-      <p><strong>Leader:</strong> ${o.leader_id
-        ? `<a href="/members/${o.leader_id}">${esc(o.leader_name)}</a>` : '—'}
-        ${o.meets_on ? ` · <strong>Meets:</strong> ${esc(o.meets_on)}` : ''}</p>
-      ${list}
-      ${addForm}
-    </section>`;
+    </div>`;
+
+  const statCard = (cls, icon, value, label) => `
+    <div class="hero-stat ${cls}">
+      <div class="hs-ico">${icon}</div>
+      <div><div class="hs-value">${value}</div><div class="hs-label">${label}</div></div>
+    </div>`;
+  const statsRow = `
+    <div class="members-stats">
+      <div class="hero-stat-group">
+        ${statCard('gold', '♫', orgCount.toLocaleString(), 'Organizations')}
+        ${statCard('green', '👥', enrolled.toLocaleString(), 'Members Enrolled')}
+        ${statCard('blue', '★', leaders.toLocaleString(), 'Groups with a Leader')}
+      </div>
+      <div class="hero-actions">
+        ${isAdmin ? `<a class="btn" href="/organizations/new">＋ Add Organization</a>` : ''}
+        <a class="btn ghost" href="/members">👥 View Members</a>
+      </div>
+    </div>`;
+
+  const sortOpts = [['', 'Sort: A–Z'], ['members', 'Sort: Most members']]
+    .map(([v, l]) => `<option value="${v}" ${v === sort ? 'selected' : ''}>${l}</option>`).join('');
+  const filters = `
+    <div class="card filters-card">
+      <div class="card-head"><h2>🔎 Search &amp; Filters</h2></div>
+      <form class="filter-bar" method="get">
+        <div class="search-field">
+          <span>🔍</span>
+          <input type="search" name="q" placeholder="Search organizations by name…" value="${esc(q)}">
+        </div>
+        <select name="sort" aria-label="Sort organizations">${sortOpts}</select>
+        <button type="submit">Filter</button>
+      </form>
+    </div>`;
+
+  const rowHtml = orgs.map((o) => {
+    const sub = o.meets_on ? `Meets ${esc(o.meets_on)}` : (o.description ? esc(o.description) : '—');
+    const actions = `
+      <div class="row-actions">
+        <a class="icon-btn view" href="/organizations/${o.org_id}" title="Manage" aria-label="Manage">${ICON_EYE}</a>
+        ${isAdmin ? `<form method="post" action="/organizations/${o.org_id}/archive" onsubmit="return confirm('Archive this organization? It will be hidden from the list.')">
+          <button class="icon-btn del" type="submit" title="Archive" aria-label="Archive">${ICON_TRASH}</button>
+        </form>` : ''}
+      </div>`;
+    return `<tr>
+      <td data-label="Organization">
+        <div class="m-name-cell">
+          <span class="org-badge">${esc(initials(o.name))}</span>
+          <div>
+            <a class="m-name" href="/organizations/${o.org_id}">${esc(o.name)}</a>
+            <div class="m-sub">${sub}</div>
+          </div>
+        </div>
+      </td>
+      <td data-label="Leader">${o.leader_id ? `<a href="/members/${o.leader_id}">${esc(o.leader_name)}</a>` : '<span class="muted-text">—</span>'}</td>
+      <td data-label="Members"><span class="count-badge">${o.member_count}</span></td>
+      <td data-label="Actions">${actions}</td>
+    </tr>`;
   }).join('');
 
-  const newForm = res.locals.isAdmin
-    ? `<details class="form-toggle" style="margin-bottom:1rem">
-         <summary><strong>+ Add an organization</strong></summary>
-         <form class="form" method="post" action="/organizations" style="margin-top:0.75rem">
-           <label class="wide">Name<input name="name" required></label>
-           <label>Meets<input name="meets_on" placeholder="e.g. Saturday 5pm"></label>
-           <label>Leader<select name="leader_id">${memberOpts()}</select></label>
-           <label class="wide">Description<input name="description"></label>
-           <div class="actions"><button type="submit">Add organization</button></div>
-         </form>
-       </details>` : '';
+  const list = `
+    <div class="card list-card">
+      <div class="card-head list-head">
+        <h2>♫ Organizations List</h2>
+        <div class="list-head-right">
+          <span class="count-badge">${orgs.length} groups</span>
+          <span class="list-note">Results update as you search and filter</span>
+        </div>
+      </div>
+      ${orgs.length ? `<table class="data-table members-table">
+        <thead><tr><th>Organization</th><th>Leader</th><th>Members</th><th>Actions</th></tr></thead>
+        <tbody>${rowHtml}</tbody>
+      </table>` : `<div class="empty-state">
+        <div class="empty-ico">♫</div>
+        <p>No organizations match your search.</p>
+        ${isAdmin ? '<a class="btn" href="/organizations/new">＋ Add Organization</a>' : ''}
+      </div>`}
+    </div>`;
 
   res.page({
-    title: 'Organizations', active: '/organizations',
-    body: `${newForm}${sections}`,
+    title: 'Organizations', active: '/organizations', noHeader: true,
+    body: `${hero}${statsRow}${filters}${list}`,
   });
+});
+
+app.get('/organizations/new', requireAdmin, (req, res) => {
+  const body = `
+    <p><a href="/organizations">← Back to organizations</a></p>
+    <form class="form" method="post" action="/organizations">
+      <label class="wide">Name<input name="name" required></label>
+      <label>Meets<input name="meets_on" placeholder="e.g. Saturday 5pm"></label>
+      <label>Leader<select name="leader_id">${orgMemberOptions()}</select></label>
+      <label class="wide">Description<input name="description"></label>
+      <div class="actions"><button type="submit">Add organization</button></div>
+    </form>`;
+  res.page({ title: 'New organization', active: '/organizations', body });
+});
+
+app.get('/organizations/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const o = db.prepare(`
+    SELECT o.*, ml.first_name || ' ' || ml.last_name AS leader_name
+    FROM organizations o LEFT JOIN members ml ON ml.member_id = o.leader_id
+    WHERE o.org_id = ? AND o.active = 1`).get(id);
+  if (!o) return res.status(404).send('Not found');
+  const isAdmin = res.locals.isAdmin;
+  const members = db.prepare(`
+    SELECT m.member_id, m.external_id, m.first_name, m.last_name, m.photo_filename, om.role
+    FROM organization_memberships om JOIN members m USING(member_id)
+    WHERE om.org_id = ? AND m.deleted_at IS NULL
+    ORDER BY (om.role='leader') DESC, m.last_name, m.first_name`).all(id);
+
+  const roster = members.length
+    ? `<table class="data-table members-table">
+         <thead><tr><th>Member</th><th>Role</th>${isAdmin ? '<th>Actions</th>' : ''}</tr></thead>
+         <tbody>${members.map((m) => `<tr>
+           <td data-label="Member">
+             <div class="m-name-cell">
+               ${memberAvatar(m)}
+               <div>
+                 <a class="m-name" href="/members/${m.member_id}">${esc(m.first_name)} ${esc(m.last_name)}</a>
+                 <div class="m-sub">${esc(m.external_id) || '—'}</div>
+               </div>
+             </div>
+           </td>
+           <td data-label="Role"><span class="pill ${m.role === 'leader' ? 'pill-member' : 'pill-regular'}">${esc(m.role)}</span></td>
+           ${isAdmin ? `<td data-label="Actions">
+             <form method="post" action="/organizations/${id}/remove" onsubmit="return confirm('Remove this member from ${esc(o.name).replace(/'/g, "\\'")}?')">
+               <input type="hidden" name="member_id" value="${m.member_id}">
+               <button class="icon-btn del" type="submit" title="Remove" aria-label="Remove">${ICON_TRASH}</button>
+             </form></td>` : ''}
+         </tr>`).join('')}</tbody>
+       </table>`
+    : '<div class="empty-state"><div class="empty-ico">👥</div><p>No members assigned yet.</p></div>';
+
+  const manage = isAdmin
+    ? `<div class="card" style="margin-top:1rem">
+         <div class="card-head"><h2>Manage</h2></div>
+         <form method="post" action="/organizations/${id}/add" class="filter-bar" style="margin-bottom:0.8rem">
+           <select name="member_id" required style="flex:1;min-width:200px">${orgMemberOptions()}</select>
+           <select name="role"><option value="member">member</option><option value="leader">leader</option></select>
+           <button type="submit">＋ Add member</button>
+         </form>
+         <form method="post" action="/organizations/${id}/leader" class="filter-bar">
+           <select name="leader_id" style="flex:1;min-width:200px">${orgMemberOptions(o.leader_id)}</select>
+           <button type="submit">Set leader</button>
+         </form>
+       </div>`
+    : '';
+
+  const body = `
+    <p><a href="/organizations">← Back to organizations</a></p>
+    <div class="page-hero">
+      <div class="hero-text">
+        <h1>${esc(o.name)}</h1>
+        <p>${o.description ? esc(o.description) : 'Group roster and membership.'}</p>
+      </div>
+    </div>
+    <div class="members-stats">
+      <div class="hero-stat-group">
+        <div class="hero-stat gold"><div class="hs-ico">👥</div><div><div class="hs-value">${members.length}</div><div class="hs-label">Members</div></div></div>
+        <div class="hero-stat green"><div class="hs-ico">★</div><div><div class="hs-value">${o.leader_id ? esc(o.leader_name) : '—'}</div><div class="hs-label">Leader</div></div></div>
+        <div class="hero-stat blue"><div class="hs-ico">📅</div><div><div class="hs-value">${o.meets_on ? esc(o.meets_on) : '—'}</div><div class="hs-label">Meets</div></div></div>
+      </div>
+    </div>
+    <div class="card list-card">
+      <div class="card-head list-head"><h2>👥 Roster</h2><span class="count-badge">${members.length} members</span></div>
+      ${roster}
+    </div>
+    ${manage}`;
+  res.page({ title: o.name, active: '/organizations', noHeader: true, body });
 });
 
 app.post('/organizations', requireAdmin, (req, res) => {
@@ -4595,25 +4726,30 @@ app.post('/organizations', requireAdmin, (req, res) => {
 app.post('/organizations/:id/add', requireAdmin, (req, res) => {
   const oid = Number(req.params.id);
   const mid = Number(req.body.member_id);
-  if (!mid) return res.redirect('/organizations');
+  if (!mid) return res.redirect(`/organizations/${oid}`);
   try {
     db.prepare(`INSERT INTO organization_memberships (org_id, member_id, role) VALUES (?, ?, ?)`)
       .run(oid, mid, req.body.role === 'leader' ? 'leader' : 'member');
   } catch (_) { /* already a member */ }
-  res.redirect('/organizations');
+  res.redirect(`/organizations/${oid}`);
 });
 
 app.post('/organizations/:id/remove', requireAdmin, (req, res) => {
   const oid = Number(req.params.id);
   const mid = Number(req.body.member_id);
   db.prepare(`DELETE FROM organization_memberships WHERE org_id=? AND member_id=?`).run(oid, mid);
-  res.redirect('/organizations');
+  res.redirect(`/organizations/${oid}`);
 });
 
 app.post('/organizations/:id/leader', requireAdmin, (req, res) => {
   const oid = Number(req.params.id);
   const lid = req.body.leader_id ? Number(req.body.leader_id) : null;
   db.prepare(`UPDATE organizations SET leader_id=? WHERE org_id=?`).run(lid, oid);
+  res.redirect(`/organizations/${oid}`);
+});
+
+app.post('/organizations/:id/archive', requireAdmin, (req, res) => {
+  db.prepare(`UPDATE organizations SET active=0 WHERE org_id=?`).run(Number(req.params.id));
   res.redirect('/organizations');
 });
 
