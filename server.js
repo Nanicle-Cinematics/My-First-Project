@@ -354,6 +354,7 @@ const insertServiceType = db.prepare(`INSERT OR IGNORE INTO service_types (type_
   ['Wednesday Service', 'Midweek service'],
   ['Wedding Service',   'Wedding ceremony offering'],
   ['Funeral Service',   'Funeral / memorial service offering'],
+  ['Other',             'Other service offering'],
 ].forEach(([n, d]) => insertServiceType.run(n, d));
 
 const insertSpecialCat = db.prepare(`INSERT OR IGNORE INTO special_categories (category_name, description) VALUES (?, ?)`);
@@ -1309,11 +1310,13 @@ app.get('/', (req, res) => {
 
   const statCard = (cls, icon, label, value, trend, spark, color) => `
     <div class="stat">
-      <div class="ico ${cls}">${icon}</div>
-      <div class="stat-body">
-        <div class="label">${label}</div>
-        <div class="value">${value}</div>
-        ${trend}
+      <div class="stat-top">
+        <div class="ico ${cls}">${icon}</div>
+        <div class="stat-body">
+          <div class="label">${label}</div>
+          <div class="value">${value}</div>
+          ${trend}
+        </div>
       </div>
       <div class="spark">${miniSpark(spark, color)}</div>
     </div>`;
