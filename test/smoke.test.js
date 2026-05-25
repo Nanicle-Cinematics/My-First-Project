@@ -95,21 +95,6 @@ test('a member can be created and shows in the directory', async () => {
   assert.match(list.body, /Members Directory/);
 });
 
-test('login throttle returns 429 after repeated failures', async () => {
-  // Use a fresh session (drop the authenticated cookie).
-  const saved = cookie; cookie = undefined;
-  const form = await get('/login');
-  const token = tokenFrom(form.body);
-  assert.ok(token, 'login form should contain a CSRF token');
-  let last = 0;
-  for (let i = 0; i < 11; i++) {
-    const r = await post('/login', { username: 'dunwelladmin', password: 'WRONG', _csrf: token });
-    last = r.status;
-  }
-  assert.strictEqual(last, 429);
-  cookie = saved;
-});
-
 test('invalid member submission is rejected with a flash message', async () => {
   const form = await get('/members/new');
   const token = tokenFrom(form.body);
@@ -173,9 +158,54 @@ test('backups page renders and a backup can be created', async () => {
   assert.match(after.body, /church-\d+\.db/);
 });
 
+test('events calendar renders', async () => {
+  const r = await get('/events/calendar');
+  assert.strictEqual(r.status, 200);
+  assert.match(r.body, /Events Calendar/);
+});
+
+test('public RSVP link rejects an unknown token', async () => {
+  const r = await get('/rsvp/deadbeef');
+  assert.strictEqual(r.status, 404);
+});
+
+test('editor role can edit content but is blocked from owner areas', async () => {
+  // As the owner (dunwelladmin from setup), create an editor account.
+  const form = await get('/users/new');
+  const token = tokenFrom(form.body);
+  const made = await post('/users', { username: 'editor1', display_name: 'Ed', password: 'editorpass1', role: 'editor', _csrf: token });
+  assert.strictEqual(made.status, 302);
+  const owner = cookie;
+  // Log in as the editor (fresh session).
+  cookie = undefined;
+  const lp = await get('/login');
+  const li = await post('/login', { username: 'editor1', password: 'editorpass1', _csrf: tokenFrom(lp.body) });
+  assert.strictEqual(li.status, 302);
+  const newMember = await get('/members/new');
+  assert.strictEqual(newMember.status, 200);           // editor can edit content
+  const backups = await get('/backups');
+  assert.strictEqual(backups.status, 403);             // but not owner-only areas
+  cookie = owner;
+});
+
 test('security headers are present', async () => {
   const res = await fetch(base + '/login', { redirect: 'manual' });
   assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');
   assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
   assert.match(res.headers.get('content-security-policy') || '', /default-src 'self'/);
+});
+
+// Runs LAST: tripping the throttle blocks this IP, so no login may follow it.
+test('login throttle returns 429 after repeated failures', async () => {
+  const saved = cookie; cookie = undefined;
+  const form = await get('/login');
+  const token = tokenFrom(form.body);
+  assert.ok(token, 'login form should contain a CSRF token');
+  let last = 0;
+  for (let i = 0; i < 11; i++) {
+    const r = await post('/login', { username: 'dunwelladmin', password: 'WRONG', _csrf: token });
+    last = r.status;
+  }
+  assert.strictEqual(last, 429);
+  cookie = saved;
 });

@@ -108,7 +108,7 @@ db.exec(`
     password_hash TEXT    NOT NULL,
     display_name  TEXT,
     role          TEXT    NOT NULL DEFAULT 'admin'
-                  CHECK (role IN ('admin','viewer')),
+                  CHECK (role IN ('admin','editor','viewer')),
     created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 `);
@@ -223,6 +223,16 @@ db.exec(`CREATE TABLE IF NOT EXISTS tithes (
 );
 CREATE INDEX IF NOT EXISTS idx_tithes_member ON tithes(member_id);
 CREATE INDEX IF NOT EXISTS idx_tithes_date   ON tithes(tithe_date);`);
+
+// Event RSVPs — a member's intended response to an event (going / maybe / no).
+db.exec(`CREATE TABLE IF NOT EXISTS event_rsvps (
+  event_id     INTEGER NOT NULL REFERENCES events(event_id)   ON DELETE CASCADE,
+  member_id    INTEGER NOT NULL REFERENCES members(member_id) ON DELETE CASCADE,
+  response     TEXT NOT NULL DEFAULT 'going' CHECK (response IN ('going','maybe','no')),
+  responded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (event_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rsvps_event ON event_rsvps(event_id);`);
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_external_id ON members(external_id) WHERE external_id IS NOT NULL`); } catch (_) {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_members_unsub ON members(unsubscribe_token) WHERE unsubscribe_token IS NOT NULL`); } catch (_) {}
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_checkin ON events(checkin_token) WHERE checkin_token IS NOT NULL`); } catch (_) {}
@@ -464,6 +474,37 @@ runOnce('wipe_old_contributions_v1', () => {
   db.exec(`DELETE FROM contributions`);
 });
 
+// Widen the users.role CHECK to add an 'editor' role (rebuild — SQLite can't ALTER a CHECK).
+runOnce('users_role_add_editor_v1', () => {
+  const allowsEditor = (() => {
+    try { db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`).get(); }
+    catch (_) { return false; }
+    const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`).get();
+    return row && /editor/.test(row.sql);
+  })();
+  if (allowsEditor) return;
+  db.pragma('foreign_keys = OFF');
+  const tx = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE users_new (
+        user_id       INTEGER PRIMARY KEY,
+        username      TEXT    NOT NULL UNIQUE,
+        password_hash TEXT    NOT NULL,
+        display_name  TEXT,
+        role          TEXT    NOT NULL DEFAULT 'admin' CHECK (role IN ('admin','editor','viewer')),
+        created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        deleted_at    TEXT
+      );
+      INSERT INTO users_new (user_id, username, password_hash, display_name, role, created_at, deleted_at)
+        SELECT user_id, username, password_hash, display_name, role, created_at, deleted_at FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+    `);
+  });
+  tx();
+  db.pragma('foreign_keys = ON');
+});
+
 // Households are no longer used — clean them up if anything is left.
 try {
   db.exec(`UPDATE members SET household_id = NULL WHERE household_id IS NOT NULL`);
@@ -538,6 +579,7 @@ app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   if (req.path.startsWith('/webhooks/')) return next();   // external, separately verified
   if (req.path.startsWith('/checkin/')) return next();    // public QR check-in (no session)
+  if (req.path.startsWith('/rsvp/')) return next();       // public RSVP (no session)
   if (req.is('multipart/form-data')) return next();       // body parsed later; checked in-route
   if (csrfValid(req)) return next();
   return res.status(403).send(layout({
@@ -576,6 +618,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/u/')) return next();        // public unsubscribe pages
   if (req.path.startsWith('/webhooks/')) return next(); // inbound webhooks (Arkesel STOP)
   if (req.path.startsWith('/checkin/')) return next();  // public QR check-in
+  if (req.path.startsWith('/rsvp/')) return next();     // public RSVP
   const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
   if (userCount === 0) {
     if (req.path === '/setup') return next();
@@ -587,12 +630,25 @@ app.use((req, res, next) => {
     'SELECT user_id, username, display_name, role FROM users WHERE user_id=? AND deleted_at IS NULL'
   ).get(req.session.userId);
   if (!res.locals.user) { req.session.destroy(() => {}); return res.redirect('/login'); }
-  res.locals.isAdmin = res.locals.user.role === 'admin';
+  res.locals.role = res.locals.user.role;
+  res.locals.isOwner = res.locals.user.role === 'admin';
+  // isAdmin here means "can create/edit content" — admins and editors. Owner-only
+  // areas (users, roles, backups, settings) use requireOwner instead.
+  res.locals.isAdmin = res.locals.user.role === 'admin' || res.locals.user.role === 'editor';
   // Adding/deleting accounts and resetting passwords is reserved for the main administrator.
-  res.locals.isUserManager = res.locals.isAdmin
+  res.locals.isUserManager = res.locals.isOwner
     && String(res.locals.user.username || '').toLowerCase() === 'dunwelladmin';
   next();
 });
+
+function requireOwner(req, res, next) {
+  if (res.locals.isOwner) return next();
+  res.status(403).send(layout({
+    title: 'Administrators only', user: res.locals.user, active: null,
+    body: '<p>This area is reserved for administrators. Editors can manage records but not'
+         + ' users, backups or settings.</p><p><a href="/">Back to dashboard</a></p>',
+  }));
+}
 
 function requireAdmin(req, res, next) {
   if (res.locals.isAdmin) return next();
@@ -1072,7 +1128,7 @@ function layout({ title, subtitle, body, active, flash, flashType, user, bare, n
   const verse = scriptureOfDay();
   const userName = user ? (user.display_name || user.username) : '';
   const userInitials = initials(userName);
-  const roleLabel = user ? (user.role === 'admin' ? 'Administrator' : 'Viewer') : '';
+  const roleLabel = user ? ({ admin: 'Administrator', editor: 'Editor', viewer: 'Viewer' }[user.role] || 'Viewer') : '';
   const backup = (() => {
     try {
       const latest = listBackups()[0];
@@ -2489,7 +2545,8 @@ app.get('/events', (req, res) => {
     { cls: 'gold', icon: '📅', value: totalEvents.toLocaleString(), label: 'Total Events' },
     { cls: 'green', icon: '⏭', value: upcoming.toLocaleString(), label: 'Upcoming' },
     { cls: 'blue', icon: '✓', value: checkins.toLocaleString(), label: 'Check-ins Recorded' },
-  ], isAdmin ? `<a class="btn" href="/events/new">＋ New Event</a>` : '');
+  ], `<a class="btn ghost" href="/events/calendar">🗓 Calendar view</a>
+      ${isAdmin ? `<a class="btn" href="/events/new">＋ New Event</a>` : ''}`);
   const filters = filterCard({ q, placeholder: 'Search events by title…' });
 
   const rowHtml = rows.map((r) => {
@@ -2520,6 +2577,50 @@ app.get('/events', (req, res) => {
   });
 
   res.page({ title: 'Events', active: '/events', noHeader: true, body: `${hero}${stats}${filters}${list}` });
+});
+
+app.get('/events/calendar', (req, res) => {
+  const now = new Date();
+  const month = /^\d{4}-\d{2}$/.test(req.query.month || '')
+    ? req.query.month : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [y, mo] = month.split('-').map(Number);
+  const first = new Date(y, mo - 1, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(y, mo, 0).getDate();
+  const prev = new Date(y, mo - 2, 1);
+  const next = new Date(y, mo, 1);
+  const fmtMonthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  const events = db.prepare(`SELECT event_id, title, event_type, starts_at FROM events
+    WHERE substr(starts_at,1,7)=? ORDER BY starts_at`).all(month);
+  const byDay = {};
+  for (const e of events) { const d = Number(String(e.starts_at).slice(8, 10)); (byDay[d] = byDay[d] || []).push(e); }
+
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push('<div class="cal-cell blank"></div>');
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dayKey = `${month}-${String(d).padStart(2, '0')}`;
+    const evs = (byDay[d] || []).map((e) =>
+      `<a class="cal-ev" href="/events/${e.event_id}" title="${esc(e.title)}">${esc(e.title)}</a>`).join('');
+    cells.push(`<div class="cal-cell${dayKey === todayKey ? ' today' : ''}"><div class="cal-day">${d}</div>${evs}</div>`);
+  }
+  const dows = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="cal-dow">${d}</div>`).join('');
+  const monthLabel = first.toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+
+  const body = `
+    ${pageHero('Events Calendar', 'A month-at-a-glance view of every scheduled event.')}
+    ${statsRow([{ cls: 'gold', icon: '🗓', value: events.length.toLocaleString(), label: `Events in ${monthLabel}` }],
+      `<a class="btn ghost" href="/events">📋 List view</a>`)}
+    <div class="card">
+      <div class="card-head cal-nav">
+        <a class="btn ghost" href="/events/calendar?month=${fmtMonthKey(prev)}">← ${prev.toLocaleString('en-GB', { month: 'short' })}</a>
+        <h2>${esc(monthLabel)}</h2>
+        <a class="btn ghost" href="/events/calendar?month=${fmtMonthKey(next)}">${next.toLocaleString('en-GB', { month: 'short' })} →</a>
+      </div>
+      <div class="calendar">${dows}${cells.join('')}</div>
+    </div>`;
+  res.page({ title: 'Events Calendar', active: '/events', noHeader: true, body });
 });
 
 app.get('/events/new', requireAdmin, (req, res) => {
@@ -2596,9 +2697,45 @@ app.get('/events/:id', (req, res) => {
     ? `<p><a class="btn" href="/events/${id}/qr">📱 QR check-in page</a>
          <a class="btn ghost" href="/checkin/${esc(ev.checkin_token || '')}" target="_blank" rel="noopener">Preview self-check-in</a></p>`
     : '';
+
+  // RSVPs
+  const RSVP_LABELS = { going: 'Going', maybe: 'Maybe', no: "Can't" };
+  const rsvps = db.prepare(`
+    SELECT r.member_id, r.response, m.first_name || ' ' || m.last_name AS name
+    FROM event_rsvps r JOIN members m USING(member_id)
+    WHERE r.event_id=? AND m.deleted_at IS NULL
+    ORDER BY r.response, m.last_name`).all(id);
+  const rsvpCounts = { going: 0, maybe: 0, no: 0 };
+  for (const r of rsvps) rsvpCounts[r.response] = (rsvpCounts[r.response] || 0) + 1;
+  const rsvpPillClass = { going: 'pill-member', maybe: 'pill-visitor', no: 'pill-inactive' };
+  const rsvpList = rsvps.length
+    ? `<ul class="check-list">${rsvps.map((r) => `<li>
+        <a href="/members/${r.member_id}">${esc(r.name)}</a>
+        <span class="pill ${rsvpPillClass[r.response]}">${RSVP_LABELS[r.response]}</span>
+        ${res.locals.isAdmin ? `<form method="post" action="/events/${id}/rsvp/remove">
+          <input type="hidden" name="member_id" value="${r.member_id}">
+          <button class="link" type="submit">remove</button></form>` : ''}
+      </li>`).join('')}</ul>`
+    : '<p class="muted-text">No responses yet.</p>';
+  const rsvpAdmin = res.locals.isAdmin
+    ? `<form method="post" action="/events/${id}/rsvp" class="filter-bar" style="margin-top:0.6rem">
+         <select name="member_id" required style="flex:1;min-width:180px"><option value="">— pick a member —</option>${otherOpts}</select>
+         <select name="response">${Object.entries(RSVP_LABELS).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+         <button type="submit">Save RSVP</button>
+       </form>` : '';
+  const rsvpLink = `<p class="muted-text" style="margin-top:0.4rem">Public RSVP link:
+    <a href="/rsvp/${esc(ev.checkin_token || '')}" target="_blank" rel="noopener">/rsvp/${esc(ev.checkin_token || '')}</a></p>`;
+
   const body = `
     <p><strong>${esc(ev.event_type)}</strong> · ${esc(ev.starts_at)} · ${esc(ev.location) || ''}</p>
     ${qrButton}
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>RSVPs</h2>
+        <span class="meta">✅ ${rsvpCounts.going} going · 🤔 ${rsvpCounts.maybe} maybe · ✖ ${rsvpCounts.no} can't</span></div>
+      ${rsvpList}
+      ${rsvpAdmin}
+      ${res.locals.isAdmin ? rsvpLink : ''}
+    </div>
     <div class="two-col">
       <section>
         <h2>Attendees (${attendees.length})</h2>
@@ -2610,6 +2747,56 @@ app.get('/events/:id', (req, res) => {
       </section>
     </div>`;
   res.page({ title: ev.title, active: '/events', body });
+});
+
+app.post('/events/:id/rsvp', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const memberId = Number(req.body.member_id);
+  const response = ['going', 'maybe', 'no'].includes(req.body.response) ? req.body.response : 'going';
+  if (memberId) {
+    db.prepare(`INSERT INTO event_rsvps (event_id, member_id, response) VALUES (?, ?, ?)
+      ON CONFLICT(event_id, member_id) DO UPDATE SET response=excluded.response, responded_at=CURRENT_TIMESTAMP`)
+      .run(id, memberId, response);
+  }
+  res.redirect(`/events/${id}`);
+});
+app.post('/events/:id/rsvp/remove', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare(`DELETE FROM event_rsvps WHERE event_id=? AND member_id=?`).run(id, Number(req.body.member_id));
+  res.redirect(`/events/${id}`);
+});
+
+// Public self-service RSVP (no login), keyed by the event's token.
+app.get('/rsvp/:token', (req, res) => {
+  const ev = db.prepare(`SELECT * FROM events WHERE checkin_token=?`).get(req.params.token);
+  if (!ev) return res.status(404).send(layout({ title: 'RSVP link not recognized', bare: true, body: '<p>This RSVP link is not valid.</p>' }));
+  const members = db.prepare(`SELECT member_id, first_name || ' ' || last_name AS name FROM members
+    WHERE membership_status IN ('member','regular','visitor') AND deleted_at IS NULL ORDER BY last_name`).all();
+  const opts = members.map((m) => `<option value="${m.member_id}">${esc(m.name)}</option>`).join('');
+  const done = req.query.ok === '1';
+  res.send(layout({
+    title: `RSVP · ${ev.title}`, bare: true,
+    body: `<p class="muted">${esc(ev.event_type)} · ${esc(ev.starts_at)}${ev.location ? ` · ${esc(ev.location)}` : ''}</p>
+      ${done ? '<div class="flash flash-success">Thank you — your response has been recorded.</div>' : ''}
+      <form class="form auth-form" method="post" action="/rsvp/${esc(req.params.token)}">
+        <label class="wide">Your name<select name="member_id" required><option value="">— find your name —</option>${opts}</select></label>
+        <label class="wide">Will you attend?
+          <select name="response"><option value="going">Yes, I'll be there</option><option value="maybe">Maybe</option><option value="no">Can't make it</option></select></label>
+        <div class="actions"><button type="submit">Send RSVP</button></div>
+      </form>`,
+  }));
+});
+app.post('/rsvp/:token', (req, res) => {
+  const ev = db.prepare(`SELECT event_id FROM events WHERE checkin_token=?`).get(req.params.token);
+  if (!ev) return res.status(404).send('Not found');
+  const memberId = Number(req.body.member_id);
+  const response = ['going', 'maybe', 'no'].includes(req.body.response) ? req.body.response : 'going';
+  if (memberId) {
+    db.prepare(`INSERT INTO event_rsvps (event_id, member_id, response) VALUES (?, ?, ?)
+      ON CONFLICT(event_id, member_id) DO UPDATE SET response=excluded.response, responded_at=CURRENT_TIMESTAMP`)
+      .run(ev.event_id, memberId, response);
+  }
+  res.redirect(`/rsvp/${req.params.token}?ok=1`);
 });
 
 app.post('/events/:id/check', requireAdmin, (req, res) => {
@@ -6158,7 +6345,7 @@ app.get('/sacraments', (req, res) => {
 });
 
 // ---------- settings ----------
-app.post('/settings/birthdays/run', requireAdmin, async (req, res) => {
+app.post('/settings/birthdays/run', requireOwner, async (req, res) => {
   try {
     const result = await sendBirthdayBatch({ manual: true, userId: res.locals.user.user_id });
     if (result.broadcastId) return res.redirect(`/communications/broadcasts/${result.broadcastId}`);
@@ -6173,7 +6360,7 @@ function backupName(req) {
   return listBackups().some((b) => b.name === name) ? name : null;
 }
 
-app.get('/backups', requireAdmin, (req, res) => {
+app.get('/backups', requireOwner, (req, res) => {
   const backups = listBackups();
   const totalSize = backups.reduce((s, b) => s + b.size, 0);
   const latest = backups[0] ? backups[0].mtime.toLocaleString('en-GB') : 'never';
@@ -6224,19 +6411,19 @@ app.get('/backups', requireAdmin, (req, res) => {
   });
 });
 
-app.post('/backups/create', requireAdmin, async (req, res) => {
+app.post('/backups/create', requireOwner, async (req, res) => {
   try { const name = await createBackup(); flash(req, `Backup created: ${name}`, 'success'); }
   catch (e) { flash(req, `Backup failed: ${e.message}`); }
   res.redirect('/backups');
 });
 
-app.get('/backups/:name/download', requireAdmin, (req, res) => {
+app.get('/backups/:name/download', requireOwner, (req, res) => {
   const name = backupName(req);
   if (!name) return res.status(404).send('Backup not found');
   res.download(path.join(BACKUP_DIR, name), name);
 });
 
-app.post('/backups/:name/delete', requireAdmin, (req, res) => {
+app.post('/backups/:name/delete', requireOwner, (req, res) => {
   const name = backupName(req);
   if (!name) { flash(req, 'Backup not found.'); return res.redirect('/backups'); }
   try { fs.unlinkSync(path.join(BACKUP_DIR, name)); flash(req, `Deleted ${name}.`, 'success'); }
@@ -6244,7 +6431,7 @@ app.post('/backups/:name/delete', requireAdmin, (req, res) => {
   res.redirect('/backups');
 });
 
-app.post('/backups/:name/restore', requireAdmin, (req, res) => {
+app.post('/backups/:name/restore', requireOwner, (req, res) => {
   const name = backupName(req);
   if (!name) { flash(req, 'Backup not found.'); return res.redirect('/backups'); }
   try {
@@ -6254,7 +6441,7 @@ app.post('/backups/:name/restore', requireAdmin, (req, res) => {
   res.redirect('/backups');
 });
 
-app.post('/backups/restore-upload', requireAdmin, dbUpload.single('backup'), (req, res) => {
+app.post('/backups/restore-upload', requireOwner, dbUpload.single('backup'), (req, res) => {
   if (!csrfValid(req)) return res.status(403).send(layout({ title: 'Security check failed', user: res.locals.user, active: null, body: '<p>Stale form. Go back and try again.</p>' }));
   if (!req.file || !isSqliteBuffer(req.file.buffer)) { flash(req, 'That file is not a valid SQLite database.'); return res.redirect('/backups'); }
   try {
@@ -6264,7 +6451,7 @@ app.post('/backups/restore-upload', requireAdmin, dbUpload.single('backup'), (re
   res.redirect('/backups');
 });
 
-app.get('/settings', requireAdmin, (req, res) => {
+app.get('/settings', requireOwner, (req, res) => {
   const body = `
     <div class="card">
       <h2>Application</h2>
@@ -6352,7 +6539,7 @@ app.post('/profile/password', (req, res) => {
 });
 
 // ---------- users management (admin only) ----------
-app.get('/users', requireAdmin, (req, res) => {
+app.get('/users', requireOwner, (req, res) => {
   const users = db.prepare(
     `SELECT user_id, username, display_name, role, created_at FROM users
      WHERE deleted_at IS NULL ORDER BY username`
@@ -6364,7 +6551,8 @@ app.get('/users', requireAdmin, (req, res) => {
     esc(u.created_at).slice(0, 10),
     `<form method="post" action="/users/${u.user_id}/role" class="inline">
        <select name="role">
-         <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin (read &amp; write)</option>
+         <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin (full access)</option>
+         <option value="editor" ${u.role === 'editor' ? 'selected' : ''}>editor (manage records)</option>
          <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer (read-only)</option>
        </select>
        <button type="submit">Save</button>
@@ -6398,10 +6586,11 @@ app.get('/users/new', requireUserManager, (req, res) => {
       <label>Display name<input name="display_name"></label>
       <label>Password<input type="password" name="password" required minlength="8"></label>
       <label>Role<select name="role">
-        <option value="admin">admin (read &amp; write)</option>
+        <option value="admin">admin (full access)</option>
+        <option value="editor">editor (manage records)</option>
         <option value="viewer" selected>viewer (read-only)</option>
       </select>
-      <span class="hint">Admins can read and write everything and manage users. Viewers can only read.</span></label>
+      <span class="hint">Admins manage everything incl. users, backups &amp; settings. Editors manage records but not those admin areas. Viewers are read-only.</span></label>
       <div class="actions"><button type="submit">Create user</button></div>
     </form>`;
   res.page({ title: 'New user', body });
@@ -6410,7 +6599,7 @@ app.get('/users/new', requireUserManager, (req, res) => {
 app.post('/users', requireUserManager, (req, res) => {
   const { username, display_name, password, role } = req.body;
   if (!username || !password || password.length < 8) return res.redirect('/users/new');
-  const r = role === 'viewer' ? 'viewer' : 'admin';
+  const r = ['admin', 'editor', 'viewer'].includes(role) ? role : 'viewer';
   try {
     db.prepare(
       `INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)`
@@ -6424,9 +6613,9 @@ app.post('/users', requireUserManager, (req, res) => {
   res.redirect('/users');
 });
 
-app.post('/users/:id/role', requireAdmin, (req, res) => {
+app.post('/users/:id/role', requireOwner, (req, res) => {
   const id = Number(req.params.id);
-  const r = req.body.role === 'viewer' ? 'viewer' : 'admin';
+  const r = ['admin', 'editor', 'viewer'].includes(req.body.role) ? req.body.role : 'viewer';
   // Don't allow removing the last admin.
   if (r !== 'admin') {
     const admins = db.prepare(`SELECT COUNT(*) c FROM users WHERE role='admin'`).get().c;

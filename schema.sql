@@ -228,7 +228,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT    NOT NULL,
     display_name  TEXT,
     role          TEXT    NOT NULL DEFAULT 'admin'
-                  CHECK (role IN ('admin','viewer')),
+                  CHECK (role IN ('admin','editor','viewer')),
     created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at    TEXT
 );
