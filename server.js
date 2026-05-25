@@ -1572,7 +1572,7 @@ app.get('/', (req, res) => {
 });
 
 // ---------- members ----------
-function selectMembers({ q, status, classId }) {
+function memberWhere({ q, status, classId }) {
   const where = ['m.deleted_at IS NULL'];
   const params = {};
   if (q) {
@@ -1582,13 +1582,38 @@ function selectMembers({ q, status, classId }) {
   }
   if (status) { where.push(`m.membership_status = @status`); params.status = status; }
   if (classId) { where.push(`m.bible_class_id = @classId`); params.classId = Number(classId); }
-  const sql = `
+  return { clause: where.join(' AND '), params };
+}
+function selectMembers(filters) {
+  const { clause, params } = memberWhere(filters);
+  let sql = `
     SELECT m.member_id, m.external_id, m.first_name, m.last_name, m.email, m.mobile_phone,
            m.membership_status, m.photo_filename, mn.name AS bible_class
     FROM members m LEFT JOIN ministries mn ON mn.ministry_id = m.bible_class_id
-    WHERE ${where.join(' AND ')}
+    WHERE ${clause}
     ORDER BY m.last_name, m.first_name`;
+  if (filters.limit != null) {
+    sql += ` LIMIT @limit OFFSET @offset`;
+    params.limit = filters.limit;
+    params.offset = filters.offset || 0;
+  }
   return db.prepare(sql).all(params);
+}
+function countMembers(filters) {
+  const { clause, params } = memberWhere(filters);
+  return db.prepare(`SELECT COUNT(*) c FROM members m WHERE ${clause}`).get(params).c;
+}
+
+// Build Prev / page-of / Next controls preserving the current query string.
+function pager(basePath, query, page, pages) {
+  if (pages <= 1) return '';
+  const qs = (p) => {
+    const u = new URLSearchParams(query); u.set('page', p);
+    return `${basePath}?${u.toString()}`;
+  };
+  const prev = page > 1 ? `<a class="btn ghost" href="${qs(page - 1)}">← Prev</a>` : `<span class="btn ghost disabled">← Prev</span>`;
+  const next = page < pages ? `<a class="btn ghost" href="${qs(page + 1)}">Next →</a>` : `<span class="btn ghost disabled">Next →</span>`;
+  return `<div class="pager">${prev}<span class="pager-info">Page ${page} of ${pages}</span>${next}</div>`;
 }
 
 const MEMBER_STATUS_LABELS = {
@@ -1605,11 +1630,15 @@ function memberAvatar(m) {
     : `<span class="m-avatar m-avatar-fallback">${esc(initials(m.first_name + ' ' + m.last_name))}</span>`;
 }
 
+const MEMBERS_PER_PAGE = 25;
 app.get('/members', (req, res) => {
   const q = (req.query.q || '').trim();
   const status = (req.query.status || '').trim();
   const classId = (req.query.class || '').trim();
-  const rows = selectMembers({ q, status, classId });
+  const matched = countMembers({ q, status, classId });
+  const pages = Math.max(1, Math.ceil(matched / MEMBERS_PER_PAGE));
+  const page = Math.min(pages, Math.max(1, parseInt(req.query.page, 10) || 1));
+  const rows = selectMembers({ q, status, classId, limit: MEMBERS_PER_PAGE, offset: (page - 1) * MEMBERS_PER_PAGE });
   const isAdmin = res.locals.isAdmin;
 
   const totalMembers = db.prepare(`SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL`).get().c;
@@ -1710,14 +1739,15 @@ app.get('/members', (req, res) => {
       <div class="card-head list-head">
         <h2>👥 Members List</h2>
         <div class="list-head-right">
-          <span class="count-badge">${rows.length} members</span>
+          <span class="count-badge">${matched} members</span>
           <span class="list-note">Results update as you search and filter</span>
         </div>
       </div>
       ${rows.length ? `<table class="data-table members-table">
         <thead><tr><th>Name</th><th>Contact</th><th>Bible class</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
-      </table>` : `<div class="empty-state">
+      </table>
+      ${pager('/members', { q, status, class: classId }, page, pages)}` : `<div class="empty-state">
         <div class="empty-ico">👥</div>
         <p>No members match your search.</p>
         ${isAdmin ? '<a class="btn" href="/members/new">👤＋ Add New Member</a>' : ''}

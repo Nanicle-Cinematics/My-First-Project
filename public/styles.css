@@ -1208,6 +1208,13 @@ form.inline button { padding: 0.4rem 0.7rem; font-size: 0.85rem; height: 34px; }
 .icon-btn.edit:hover { background: var(--gold-soft);  color: var(--gold-deep);  border-color: var(--gold-soft); }
 .icon-btn.del:hover  { background: var(--danger-soft); color: var(--danger);    border-color: var(--danger-soft); }
 
+.pager {
+  display: flex; align-items: center; justify-content: center; gap: 1rem;
+  margin-top: 1rem; padding-top: 0.9rem; border-top: 1px solid var(--border);
+}
+.pager-info { color: var(--muted); font-size: 0.85rem; }
+.btn.ghost.disabled { opacity: 0.45; pointer-events: none; }
+
 .empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--muted); }
 .empty-state .empty-ico { font-size: 2.2rem; margin-bottom: 0.5rem; }
 .empty-state p { margin: 0 0 1rem; }
