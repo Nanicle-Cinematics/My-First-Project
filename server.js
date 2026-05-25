@@ -420,6 +420,27 @@ try {
 const app = express();
 // Trust the reverse proxy in production so secure cookies work behind Fly/Render/etc.
 app.set('trust proxy', 1);
+
+// Baseline security headers (no external deps). CSP allows inline scripts/styles
+// because the app renders them inline; it still blocks external sources, framing,
+// plugins, and constrains form submission targets.
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-XSS-Protection', '0');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "img-src 'self' data:",
+    "style-src 'self' 'unsafe-inline'",
+    "script-src 'self' 'unsafe-inline'",
+    "form-action 'self'",
+  ].join('; '));
+  next();
+});
 app.use(express.urlencoded({ extended: false }));
 app.use('/static', express.static(path.join(__dirname, 'public')));
 
@@ -438,6 +459,40 @@ app.use(session({
     maxAge: 1000 * 60 * 60 * 24 * 30,
   },
 }));
+
+// CSRF: a synchronizer token per session, auto-injected into every POST form
+// rendered as HTML, and validated on every state-changing request.
+app.use((req, res, next) => {
+  if (!req.session.csrfToken) req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+  const token = req.session.csrfToken;
+  res.locals.csrfToken = token;
+  const field = `<input type="hidden" name="_csrf" value="${token}">`;
+  const origSend = res.send.bind(res);
+  res.send = (body) => {
+    if (typeof body === 'string' && body.indexOf('<form') !== -1) {
+      body = body.replace(/(<form\b[^>]*\bmethod=["']post["'][^>]*>)/gi, `$1${field}`);
+    }
+    return origSend(body);
+  };
+  next();
+});
+
+function csrfValid(req) {
+  const t = req.body && req.body._csrf;
+  return !!t && t === req.session.csrfToken;
+}
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  if (req.path.startsWith('/webhooks/')) return next();   // external, separately verified
+  if (req.path.startsWith('/checkin/')) return next();    // public QR check-in (no session)
+  if (req.is('multipart/form-data')) return next();       // body parsed later; checked in-route
+  if (csrfValid(req)) return next();
+  return res.status(403).send(layout({
+    title: 'Security check failed', active: null, user: res.locals.user,
+    body: '<p>This form was stale or your session expired. Please go back and try again.</p>'
+        + '<p><a href="/">Back to dashboard</a></p>',
+  }));
+});
 
 // Render helper that auto-injects the current user into the layout.
 app.use((req, res, next) => {
@@ -559,6 +614,15 @@ const EXT_FROM_MIME = {
   'image/jpeg': 'jpg', 'image/jpg': 'jpg',
   'image/png':  'png', 'image/webp': 'webp', 'image/gif': 'gif',
 };
+// Verify the bytes really are an image (mime can be spoofed by the client).
+function looksLikeImage(buf) {
+  if (!buf || buf.length < 12) return false;
+  const jpg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+  const png = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+  const gif = buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38;
+  const webp = buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+  return jpg || png || gif || webp;
+}
 
 // ---------- SMS (Arkesel) + Email (SMTP) helpers ----------
 const ARKESEL_API_KEY = process.env.ARKESEL_API_KEY || '';
@@ -1960,7 +2024,15 @@ app.post('/members/:id', requireAdmin, (req, res) => {
 
 app.post('/members/:id/photo', requireAdmin, photoUpload.single('photo'), (req, res) => {
   const id = Number(req.params.id);
+  if (!csrfValid(req)) return res.status(403).send(layout({
+    title: 'Security check failed', user: res.locals.user, active: null,
+    body: '<p>This form was stale. Please go back and try again.</p>',
+  }));
   if (!req.file) return res.redirect(`/members/${id}`);
+  if (!looksLikeImage(req.file.buffer)) return res.status(400).send(layout({
+    title: 'Invalid image', user: res.locals.user, active: null,
+    body: `<p>That file does not look like a valid image. Upload a JPG, PNG, WebP or GIF.</p><p><a href="/members/${id}">Back</a></p>`,
+  }));
   const ext = EXT_FROM_MIME[req.file.mimetype.toLowerCase()] || 'jpg';
   const filename = `${id}.${ext}`;
   try {
@@ -5882,14 +5954,37 @@ app.get('/login', (req, res) => {
   `));
 });
 
+// In-memory login throttle: max attempts per IP within a rolling window.
+const LOGIN_MAX = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginHits = new Map();
+function loginBlocked(ip) {
+  const e = loginHits.get(ip);
+  return !!e && (Date.now() - e.first) < LOGIN_WINDOW_MS && e.count >= LOGIN_MAX;
+}
+function noteLoginFail(ip) {
+  const now = Date.now();
+  const e = loginHits.get(ip);
+  if (!e || now - e.first >= LOGIN_WINDOW_MS) loginHits.set(ip, { count: 1, first: now });
+  else e.count += 1;
+}
+
 app.post('/login', (req, res) => {
+  const ip = req.ip || 'unknown';
+  if (loginBlocked(ip)) {
+    return res.status(429).send(authPage('Too many attempts',
+      '<p class="error">Too many sign-in attempts. Please wait a few minutes and try again.</p>'
+      + '<p><a href="/login">Back to sign in</a></p>'));
+  }
   const { username, password } = req.body;
   const user = db.prepare(
     `SELECT user_id, password_hash FROM users WHERE username = ? AND deleted_at IS NULL`
   ).get((username || '').trim());
   if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
+    noteLoginFail(ip);
     return res.redirect('/login?e=1');
   }
+  loginHits.delete(ip);
   req.session.userId = user.user_id;
   res.redirect('/');
 });
