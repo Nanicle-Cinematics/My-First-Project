@@ -800,10 +800,146 @@ form.inline button { padding: 0.3rem 0.6rem; font-size: 0.85rem; }
 .dob-row { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
 .dob-row select { flex: 1; }
 
-/* ---------- Responsive sidebar ---------- */
+/* ---------- Mobile navigation (hamburger + slide-in drawer) ---------- */
+.nav-toggle { display: none; }            /* hidden on desktop */
+.scrim { display: none; }
+.drawer-signout { display: none; }        /* sign-out lives in the top bar on desktop */
+
 @media (max-width: 800px) {
   .app { grid-template-columns: 1fr; }
-  .sidebar { position: relative; height: auto; }
-  .sidebar nav { flex-direction: row; flex-wrap: wrap; }
-  .scripture { display: none; }
+
+  /* Sidebar becomes an off-canvas drawer that slides in from the left. */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: min(82vw, 300px); height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 60;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.35);
+    -webkit-overflow-scrolling: touch;
+  }
+  .app.nav-open .sidebar { transform: translateX(0); }
+  .sidebar nav { flex-direction: column; }
+  .sidebar nav a { padding: 0.8rem 0.75rem; font-size: 0.95rem; }
+  .scripture { display: block; }
+
+  .drawer-signout { display: block; margin-top: 0.75rem; }
+  .drawer-signout button {
+    width: 100%; justify-content: center;
+    background: rgba(255, 255, 255, 0.1); color: #fff;
+  }
+  .drawer-signout button:hover { background: rgba(255, 255, 255, 0.18); }
+
+  /* Dimmed backdrop behind the open drawer. */
+  .scrim {
+    display: block; position: fixed; inset: 0;
+    background: rgba(8, 18, 40, 0.5);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.25s ease; z-index: 50;
+  }
+  .app.nav-open .scrim { opacity: 1; pointer-events: auto; }
+
+  .nav-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 42px; height: 42px; flex-shrink: 0;
+    background: var(--soft); border: 1px solid var(--border);
+    border-radius: 10px; cursor: pointer; padding: 0;
+  }
+  .nav-toggle .bars,
+  .nav-toggle .bars::before,
+  .nav-toggle .bars::after {
+    content: ""; display: block; width: 18px; height: 2px;
+    background: var(--accent-dark); border-radius: 2px;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+  }
+  .nav-toggle .bars { position: relative; }
+  .nav-toggle .bars::before { position: absolute; top: -6px; }
+  .nav-toggle .bars::after  { position: absolute; top: 6px; }
+  .app.nav-open .nav-toggle .bars { background: transparent; }
+  .app.nav-open .nav-toggle .bars::before { transform: translateY(6px) rotate(45deg); }
+  .app.nav-open .nav-toggle .bars::after  { transform: translateY(-6px) rotate(-45deg); }
+
+  /* Tighten the top bar so it fits a phone width. */
+  .topbar { padding: 0.6rem 0.9rem; gap: 0.6rem; }
+  .topbar .search { min-width: 0; }
+  .topbar .right { gap: 0.5rem; }
+  .topbar .bell { display: none; }
+  .topbar .who .name, .topbar .who .role { display: none; }
+  .topbar .sign-out { display: none; }   /* moved into the drawer */
+
+  .page { padding: 1rem; }
+  .page > h1 { font-size: 1.35rem; }
+}
+
+/* ---------- Responsive data tables (key fields + expandable) ---------- */
+/* The "Show details" cell and helpers only exist on small screens. */
+.row-expand-cell { display: none; }
+
+/* Non-helper tables keep their native layout but scroll instead of overflowing. */
+@media (max-width: 640px) {
+  table:not(.data-table) { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  table.data-table {
+    box-shadow: none; background: transparent; border-radius: 0;
+    display: block; margin: 0.25rem 0 1rem;
+  }
+  table.data-table thead { display: none; }
+  table.data-table tbody { display: block; }
+  table.data-table tr {
+    display: block; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: var(--shadow); padding: 0.35rem 0.95rem;
+    margin-bottom: 0.7rem;
+  }
+  table.data-table tr:hover td { background: transparent; }
+  table.data-table td {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 1rem; padding: 0.45rem 0; text-align: right;
+    border-bottom: 1px solid var(--border); font-size: 0.92rem;
+  }
+  table.data-table td::before {
+    content: attr(data-label);
+    font-size: 0.7rem; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.03em;
+    text-align: left; flex: 0 0 42%;
+  }
+  table.data-table td[data-label=""]::before { content: none; }
+  /* First cell is emphasized as the card's anchor line (label kept for clarity). */
+  table.data-table td:first-child {
+    font-weight: 700; font-size: 0.98rem; padding-top: 0.6rem;
+  }
+  table.data-table td:first-child::before { color: var(--accent-dark); }
+  /* Collapsed extra fields, revealed when the row is open. */
+  table.data-table tr:not(.is-open) td.td-extra { display: none; }
+  table.data-table td:last-child:not(.row-expand-cell) { border-bottom: none; }
+
+  .row-expand-cell { display: block; padding: 0.5rem 0 0.3rem; border: none; }
+  .row-expand {
+    width: 100%; background: var(--soft); color: var(--accent-dark);
+    border: none; border-radius: 8px; padding: 0.5rem; font-weight: 600;
+    font-size: 0.82rem; justify-content: center;
+  }
+  .row-expand:hover { background: var(--accent-soft); }
+}
+
+/* ---------- Touch & small-screen polish ---------- */
+@media (max-width: 640px) {
+  /* 16px inputs stop iOS Safari from zooming when a field is focused. */
+  input, select, textarea, .form label input, .form label select, .form label textarea {
+    font-size: 16px;
+  }
+  /* Comfortable tap targets. */
+  button, .btn, .btn-link, .pill { min-height: 40px; }
+  .btn-link, .pill { display: inline-flex; align-items: center; }
+  .stat-grid, .report-tiles { gap: 0.7rem; }
+  .stat { padding: 0.9rem; }
+  table { font-size: 0.9rem; }
+}
+
+@media (hover: none) {
+  a, button, .btn { -webkit-tap-highlight-color: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; }
 }

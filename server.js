@@ -882,7 +882,7 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
 </head>
 <body>
 <div class="app">
-  <aside class="sidebar">
+  <aside class="sidebar" id="app-nav">
     <div class="brand">
       <div class="logo">⛪</div>
       <div>
@@ -896,9 +896,16 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
       <blockquote>“${esc(verse[0])}”</blockquote>
       <cite>– ${esc(verse[1])}</cite>
     </div>
+    <form class="drawer-signout" method="post" action="/logout">
+      <button type="submit">Sign out</button>
+    </form>
   </aside>
+  <div class="scrim" hidden></div>
   <div class="main">
     <div class="topbar">
+      <button class="nav-toggle" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="app-nav">
+        <span class="bars"></span>
+      </button>
       <form class="search" action="/members" method="get">
         <span>🔍</span>
         <input type="search" name="q" placeholder="Search members, phone, email…">
@@ -954,6 +961,66 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
             if (!window.confirm('Save these changes?')) e.preventDefault();
           });
         });
+
+        // Mobile slide-in navigation drawer.
+        (function () {
+          var app = document.querySelector('.app');
+          var toggle = document.querySelector('.nav-toggle');
+          var scrim = document.querySelector('.scrim');
+          if (!app || !toggle || !scrim) return;
+          function setOpen(open) {
+            app.classList.toggle('nav-open', open);
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            scrim.hidden = !open;
+            document.body.style.overflow = open ? 'hidden' : '';
+          }
+          toggle.addEventListener('click', function () {
+            setOpen(!app.classList.contains('nav-open'));
+          });
+          scrim.addEventListener('click', function () { setOpen(false); });
+          app.querySelectorAll('.sidebar nav a').forEach(function (a) {
+            a.addEventListener('click', function () { setOpen(false); });
+          });
+          document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') setOpen(false);
+          });
+        })();
+
+        // On phones, collapse wide tables to key fields with a per-row toggle.
+        (function () {
+          var KEY_COLS = 2; // columns shown before "Show details"
+          var mq = window.matchMedia('(max-width: 640px)');
+          function enhance() {
+            if (!mq.matches) return;
+            document.querySelectorAll('table.data-table tbody tr').forEach(function (tr) {
+              if (tr.dataset.rEnhanced) return;
+              var tds = tr.querySelectorAll('td');
+              if (tds.length <= KEY_COLS) { tr.dataset.rEnhanced = '1'; return; }
+              var hasExtra = false;
+              for (var i = KEY_COLS; i < tds.length; i++) {
+                if (tds[i].textContent.trim() !== '') hasExtra = true;
+                tds[i].classList.add('td-extra');
+              }
+              tr.dataset.rEnhanced = '1';
+              if (!hasExtra) return;
+              var cell = document.createElement('td');
+              cell.className = 'row-expand-cell';
+              var btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'row-expand';
+              btn.textContent = 'Show details';
+              btn.addEventListener('click', function () {
+                var open = tr.classList.toggle('is-open');
+                btn.textContent = open ? 'Hide details' : 'Show details';
+              });
+              cell.appendChild(btn);
+              tr.appendChild(cell);
+            });
+          }
+          enhance();
+          if (mq.addEventListener) mq.addEventListener('change', enhance);
+          window.addEventListener('resize', enhance);
+        })();
       </script>
     </main>
     <footer class="footer">
@@ -971,9 +1038,9 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
 function table(headers, rows) {
   const ths = headers.map((h) => `<th>${esc(h)}</th>`).join('');
   const trs = rows.map((r) =>
-    `<tr>${r.map((c) => `<td>${c == null ? '' : c}</td>`).join('')}</tr>`
+    `<tr>${r.map((c, i) => `<td data-label="${esc(headers[i] || '')}">${c == null ? '' : c}</td>`).join('')}</tr>`
   ).join('');
-  return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+  return `<table class="data-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
 }
 
 // ---------- routes: dashboard ----------
