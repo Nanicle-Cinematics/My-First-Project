@@ -150,6 +150,15 @@ test('live-search and bulk markup is present on the members page', async () => {
   assert.match(r.body, /class="bulk-bar"/);
 });
 
+test('giving statement pages render', async () => {
+  const idx = await get('/finance/statements');
+  assert.strictEqual(idx.status, 200);
+  assert.match(idx.body, /Giving Statements/);
+  const stmt = await get('/members/1/statement');
+  assert.strictEqual(stmt.status, 200);
+  assert.match(stmt.body, /Annual Giving Statement/);
+});
+
 test('security headers are present', async () => {
   const res = await fetch(base + '/login', { redirect: 'manual' });
   assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');

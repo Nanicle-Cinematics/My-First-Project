@@ -2170,6 +2170,8 @@ app.get('/members/:id', (req, res) => {
       <section>
         <h2>At a glance</h2>
 
+        <p><a class="btn ghost" href="/members/${id}/statement">🧾 Giving statement</a></p>
+
         <h3>🚨 Emergency contact</h3>
         ${(m.emergency_contact_name || m.emergency_contact_phone || m.emergency_contact_relation)
           ? `<dl class="stats emergency-box">
@@ -2740,6 +2742,7 @@ const FINANCE_TABS = [
   ['/finance/harvests', 'Harvests'],
   ['/finance/special',  'Special Offerings'],
   ['/finance/pledges',  'Pledges'],
+  ['/finance/statements', 'Statements'],
   ['/finance/receipts', 'Receipts'],
   ['/finance/expenses', 'Expenses'],
 ];
@@ -3661,6 +3664,143 @@ app.post('/finance/pledges/statement/:memberId/send', requireAdmin, async (req, 
   logActivity('statement_sent', `Sent outstanding-pledge statement to ${memberName}`,
     `/finance/pledges/statement/${member.member_id}`, res.locals.user.user_id);
   res.redirect(`/finance/pledges/statement/${member.member_id}?sent=${result.dryRun ? 'dry' : 'sent'}`);
+});
+
+// ---------- giving statements (per-member annual contribution summary) ----------
+function givingYears() {
+  const now = new Date().getFullYear();
+  const years = [];
+  for (let y = now; y >= now - 6; y--) years.push(y);
+  return years;
+}
+function safeYear(v) {
+  const y = String(v || '').replace(/[^0-9]/g, '');
+  return /^\d{4}$/.test(y) ? y : String(new Date().getFullYear());
+}
+// All giving attributable to one member in a year, merged and sorted.
+function memberGivingForYear(memberId, year) {
+  const y = String(year);
+  const lines = [];
+  for (const t of db.prepare(`SELECT tithe_date dt, amount, COALESCE(method,'') method, reference
+      FROM tithes WHERE member_id=? AND deleted_at IS NULL AND substr(tithe_date,1,4)=?`).all(memberId, y)) {
+    lines.push({ dt: t.dt, group: 'Tithes', category: 'Tithe', detail: [t.method, t.reference].filter(Boolean).join(' · '), amount: t.amount });
+  }
+  for (const s of db.prepare(`SELECT sp.offering_date dt, sp.amount, sc.category_name, COALESCE(sp.purpose,'') purpose, sp.receipt_number
+      FROM special_offerings sp JOIN special_categories sc USING(special_cat_id)
+      WHERE sp.donor_id=? AND sp.deleted_at IS NULL AND substr(sp.offering_date,1,4)=?`).all(memberId, y)) {
+    lines.push({ dt: s.dt, group: 'Special Offerings', category: s.category_name, detail: [s.purpose, s.receipt_number].filter(Boolean).join(' · '), amount: s.amount });
+  }
+  for (const c of db.prepare(`SELECT c.contributed_on dt, c.amount, f.name fund, COALESCE(c.method,'') method, c.reference
+      FROM contributions c JOIN funds f USING(fund_id)
+      WHERE c.member_id=? AND substr(c.contributed_on,1,4)=?`).all(memberId, y)) {
+    lines.push({ dt: c.dt, group: 'Contributions', category: c.fund, detail: [c.method, c.reference].filter(Boolean).join(' · '), amount: c.amount });
+  }
+  for (const p of db.prepare(`SELECT pp.paid_on dt, pp.amount, h.harvest_name, pp.receipt_number
+      FROM pledge_payments pp JOIN pledges pl USING(pledge_id) JOIN harvests h USING(harvest_id)
+      WHERE pl.member_id=? AND substr(pp.paid_on,1,4)=?`).all(memberId, y)) {
+    lines.push({ dt: p.dt, group: 'Pledge Redemptions', category: `Pledge — ${p.harvest_name}`, detail: p.receipt_number || '', amount: p.amount });
+  }
+  lines.sort((a, b) => String(a.dt).localeCompare(String(b.dt)));
+  const byGroup = {};
+  for (const l of lines) byGroup[l.group] = (byGroup[l.group] || 0) + l.amount;
+  const total = lines.reduce((s, l) => s + l.amount, 0);
+  return { lines, byGroup, total };
+}
+
+app.get('/finance/statements', (req, res) => {
+  const year = safeYear(req.query.year);
+  const rows = db.prepare(`
+    SELECT g.member_id, m.external_id, m.first_name || ' ' || m.last_name AS name,
+           COUNT(*) gifts, SUM(g.amount) total
+    FROM (
+      SELECT member_id, amount FROM tithes
+        WHERE deleted_at IS NULL AND member_id IS NOT NULL AND substr(tithe_date,1,4)=@y
+      UNION ALL
+      SELECT donor_id AS member_id, amount FROM special_offerings
+        WHERE deleted_at IS NULL AND donor_id IS NOT NULL AND substr(offering_date,1,4)=@y
+      UNION ALL
+      SELECT member_id, amount FROM contributions
+        WHERE member_id IS NOT NULL AND substr(contributed_on,1,4)=@y
+      UNION ALL
+      SELECT pl.member_id, pp.amount FROM pledge_payments pp JOIN pledges pl USING(pledge_id)
+        WHERE substr(pp.paid_on,1,4)=@y
+    ) g JOIN members m ON m.member_id = g.member_id AND m.deleted_at IS NULL
+    GROUP BY g.member_id HAVING total > 0
+    ORDER BY total DESC`).all({ y: year });
+
+  const totalGiving = rows.reduce((s, r) => s + r.total, 0);
+  const yearSel = `<form method="get" class="filter-bar" style="margin:0">
+      <label class="muted-text" style="display:flex;align-items:center;gap:0.4rem">Year
+        <select name="year" onchange="this.form.submit()">
+          ${givingYears().map((y) => `<option ${String(y) === year ? 'selected' : ''}>${y}</option>`).join('')}
+        </select></label>
+    </form>`;
+  const inner = rows.length
+    ? `<table class="data-table members-table">
+        <thead><tr><th>Member</th><th>Gifts</th><th>Total ${year}</th><th>Statement</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr>
+          <td data-label="Member"><a class="m-name" href="/members/${r.member_id}">${esc(r.name)}</a>
+            <div class="m-sub">${esc(r.external_id) || '—'}</div></td>
+          <td data-label="Gifts">${r.gifts}</td>
+          <td data-label="Total">${fmtMoney(r.total)}</td>
+          <td data-label="Statement"><a class="btn ghost" href="/members/${r.member_id}/statement?year=${year}">View →</a></td>
+        </tr>`).join('')}</tbody>
+      </table>`
+    : `<div class="empty-state"><div class="empty-ico">🧾</div><p>No member giving recorded for ${year}.</p></div>`;
+
+  res.page({
+    title: 'Finance · Statements', active: '/finance', noHeader: true,
+    body: `${pageHero('Giving Statements', 'Per-member annual contribution summaries for year-end records.')}
+      ${financeTabs('/finance/statements')}
+      ${statsRow([
+        { cls: 'gold', icon: '🧾', value: rows.length.toLocaleString(), label: `Givers in ${year}` },
+        { cls: 'green', icon: '₵', value: fmtMoney(totalGiving), label: `Attributed Giving ${year}` },
+      ], yearSel)}
+      ${listCard({ title: `🧾 Members with giving in ${year}`, count: rows.length, countLabel: 'members', inner })}`,
+  });
+});
+
+app.get('/members/:id/statement', (req, res) => {
+  const id = Number(req.params.id);
+  const m = db.prepare(`SELECT member_id, external_id, first_name, last_name
+    FROM members WHERE member_id=? AND deleted_at IS NULL`).get(id);
+  if (!m) return res.status(404).send('Member not found');
+  const year = safeYear(req.query.year);
+  const { lines, byGroup, total } = memberGivingForYear(id, year);
+  const name = `${m.first_name} ${m.last_name}`.trim();
+
+  const yearSel = `<form method="get" class="screen-only" style="display:inline">
+      <label>Year <select name="year" onchange="this.form.submit()">
+        ${givingYears().map((y) => `<option ${String(y) === year ? 'selected' : ''}>${y}</option>`).join('')}
+      </select></label></form>`;
+  const rowsHtml = lines.length
+    ? table(['Date', 'Category', 'Details', 'Amount'],
+        lines.map((l) => [esc(l.dt), esc(l.category), esc(l.detail) || '—', fmtMoney(l.amount)]))
+    : `<p class="muted-text">No giving was recorded for ${esc(name)} in ${year}.</p>`;
+  const subtotals = Object.entries(byGroup)
+    .map(([g, a]) => `<div class="rc-line"><span>${esc(g)}</span><span>${fmtMoney(a)}</span></div>`).join('');
+
+  const body = `
+    <div class="screen-only receipt-actions">
+      <a class="btn" href="javascript:window.print()">🖨 Print / save as PDF</a>
+      ${yearSel}
+      <a class="btn-link" href="/finance/statements?year=${year}">← Back to statements</a>
+    </div>
+    <div class="print-doc receipt-doc">
+      <div class="rc-head">
+        <div><div class="rc-church">⛪ ${esc(CHURCH_NAME)}</div>
+          <div class="muted-text">Annual Giving Statement · ${year}</div></div>
+        <div class="rc-no"><strong>${esc(name)}</strong><br>
+          <span class="muted-text">${esc(m.external_id) || ''}</span></div>
+      </div>
+      ${rowsHtml}
+      ${lines.length ? `<div style="margin-top:0.75rem">${subtotals}
+        <div class="rc-line rc-total"><span>Total giving ${year}</span><span>${fmtMoney(total)}</span></div></div>
+        <p class="rc-foot">Thank you for your faithful giving. This statement summarises contributions
+          recorded for the ${year} calendar year and is provided for your records. Please retain it for
+          your reference.</p>` : ''}
+    </div>`;
+  res.page({ title: `Giving Statement — ${name}`, active: '/finance', noHeader: true, body });
 });
 
 app.get('/finance/receipts', (req, res) => {
