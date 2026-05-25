@@ -922,9 +922,12 @@ function logActivity(kind, description, link, userId) {
 
 function flashHtml(flash, flashType) {
   if (!flash) return '';
-  const type = flashType === 'success' ? 'success' : flashType === 'info' ? 'info' : flashType === 'error' ? 'error' : '';
+  const type = flashType === 'success' ? 'success' : flashType === 'info' ? 'info' : flashType === 'error' ? 'error' : 'info';
   const role = type === 'error' ? 'alert' : 'status';
-  return `<div class="flash${type ? ` flash-${type}` : ''}" role="${role}" aria-live="polite">${esc(flash)}</div>`;
+  return `<div class="toast toast-${type}" role="${role}" aria-live="polite">
+    <span class="toast-msg">${esc(flash)}</span>
+    <button type="button" class="toast-x" aria-label="Dismiss">×</button>
+  </div>`;
 }
 // ---------- shared UI components (directory layout) ----------
 // Gradient page banner. Title/subtitle are escaped.
@@ -951,7 +954,7 @@ function statsRow(stats, actions = '') {
 function filterCard({ q = '', placeholder = 'Search…', controls = '', name = 'q' }) {
   return `<div class="card filters-card">
     <div class="card-head"><h2>🔎 Search &amp; Filters</h2></div>
-    <form class="filter-bar" method="get">
+    <form class="filter-bar" method="get" data-live-search>
       <div class="search-field"><span>🔍</span>
         <input type="search" name="${esc(name)}" placeholder="${esc(placeholder)}" value="${esc(q)}"></div>
       ${controls}
@@ -961,7 +964,7 @@ function filterCard({ q = '', placeholder = 'Search…', controls = '', name = '
 }
 // Card wrapper for a list/table with a count badge and optional note. `inner` is raw HTML.
 function listCard({ title, count, countLabel = 'items', note = '', inner }) {
-  return `<div class="card list-card">
+  return `<div class="card list-card" data-results>
     <div class="card-head list-head">
       <h2>${title}</h2>
       <div class="list-head-right">
@@ -1148,7 +1151,7 @@ function layout({ title, subtitle, body, active, flash, flashType, user, bare, n
           var mq = window.matchMedia('(max-width: 640px)');
           function enhance() {
             if (!mq.matches) return;
-            document.querySelectorAll('table.data-table tbody tr').forEach(function (tr) {
+            document.querySelectorAll('table.data-table:not(.members-table) tbody tr').forEach(function (tr) {
               if (tr.dataset.rEnhanced) return;
               var tds = tr.querySelectorAll('td');
               if (tds.length <= KEY_COLS) { tr.dataset.rEnhanced = '1'; return; }
@@ -1176,7 +1179,79 @@ function layout({ title, subtitle, body, active, flash, flashType, user, bare, n
           enhance();
           if (mq.addEventListener) mq.addEventListener('change', enhance);
           window.addEventListener('resize', enhance);
+          document.addEventListener('results:updated', enhance);
         })();
+
+        // Toast notifications: auto-dismiss + manual close.
+        function initToasts() {
+          document.querySelectorAll('.toast:not([data-init])').forEach(function (t) {
+            t.setAttribute('data-init', '1');
+            var x = t.querySelector('.toast-x');
+            function dismiss() { t.classList.add('toast-hide'); setTimeout(function () { t.remove(); }, 250); }
+            if (x) x.addEventListener('click', dismiss);
+            setTimeout(dismiss, 5000);
+          });
+        }
+        initToasts();
+
+        // Live search: debounce GET filter forms and swap the results region.
+        (function () {
+          document.querySelectorAll('form[data-live-search]').forEach(function (form) {
+            var timer;
+            function run() {
+              var params = new URLSearchParams(new FormData(form));
+              var url = (form.getAttribute('action') || location.pathname) + '?' + params.toString();
+              var cur = document.querySelector('[data-results]');
+              if (cur) cur.classList.add('is-loading');
+              fetch(url, { headers: { 'X-Requested-With': 'fetch' } })
+                .then(function (r) { return r.text(); })
+                .then(function (html) {
+                  var doc = new DOMParser().parseFromString(html, 'text/html');
+                  var next = doc.querySelector('[data-results]');
+                  var now = document.querySelector('[data-results]');
+                  if (next && now) now.replaceWith(next);
+                  history.replaceState(null, '', url);
+                  document.dispatchEvent(new Event('results:updated'));
+                })
+                .catch(function () { if (cur) cur.classList.remove('is-loading'); });
+            }
+            form.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(run, 300); });
+            form.addEventListener('change', function () { clearTimeout(timer); timer = setTimeout(run, 120); });
+          });
+        })();
+
+        // Bulk selection (Members). Re-binds after live-search swaps.
+        function initBulk() {
+          var table = document.querySelector('table[data-bulk]');
+          var bar = document.querySelector('.bulk-bar');
+          if (!table || !bar) return;
+          var idsField = bar.querySelector('input[name="member_ids"]');
+          var countEl = bar.querySelector('.bulk-count');
+          var all = table.querySelector('.bulk-all');
+          function boxes() { return Array.prototype.slice.call(table.querySelectorAll('.bulk-box')); }
+          function update() {
+            var ids = boxes().filter(function (b) { return b.checked; }).map(function (b) { return b.value; });
+            idsField.value = ids.join(',');
+            countEl.textContent = ids.length;
+            bar.classList.toggle('show', ids.length > 0);
+          }
+          if (all && !all.dataset.init) {
+            all.dataset.init = '1';
+            all.addEventListener('change', function () {
+              boxes().forEach(function (b) { b.checked = all.checked; });
+              update();
+            });
+          }
+          if (!table.dataset.bulkInit) {
+            table.dataset.bulkInit = '1';
+            table.addEventListener('change', function (e) {
+              if (e.target.classList && e.target.classList.contains('bulk-box')) update();
+            });
+          }
+          update();
+        }
+        initBulk();
+        document.addEventListener('results:updated', function () { initBulk(); initToasts(); });
       </script>
     </main>
     <footer class="footer">
@@ -1778,6 +1853,7 @@ app.get('/members', (req, res) => {
         </form>` : ''}
       </div>`;
     return `<tr>
+      ${isAdmin ? `<td class="bulk-cell"><input type="checkbox" class="bulk-box" value="${id}" aria-label="Select ${esc(r.first_name)} ${esc(r.last_name)}"></td>` : ''}
       <td data-label="Name">
         <div class="m-name-cell">
           ${memberAvatar(r)}
@@ -1799,11 +1875,25 @@ app.get('/members', (req, res) => {
     </tr>`;
   }).join('');
 
+  const orgsForBulk = loadOrganizations();
+  const bulkBar = isAdmin ? `
+    <form class="bulk-bar" method="post" action="/members/bulk">
+      <input type="hidden" name="member_ids" value="">
+      <span class="bulk-summary"><strong class="bulk-count">0</strong> selected</span>
+      <select name="action" aria-label="Bulk action">
+        <option value="export">Export selected (CSV)</option>
+        <option value="add_org">Add to organization…</option>
+      </select>
+      <select name="org_id" aria-label="Organization">
+        ${orgsForBulk.map((o) => `<option value="${o.org_id}">${esc(o.name)}</option>`).join('')}
+      </select>
+      <button type="submit">Apply</button>
+    </form>` : '';
   const list = listCard({
     title: '👥 Members List', count: matched, countLabel: 'members',
     note: 'Results update as you search and filter',
-    inner: rows.length ? `<table class="data-table members-table">
-        <thead><tr><th>Name</th><th>Contact</th><th>Bible class</th><th>Status</th><th>Actions</th></tr></thead>
+    inner: rows.length ? `${bulkBar}<table class="data-table members-table"${isAdmin ? ' data-bulk' : ''}>
+        <thead><tr>${isAdmin ? '<th class="bulk-cell"><input type="checkbox" class="bulk-all" aria-label="Select all"></th>' : ''}<th>Name</th><th>Contact</th><th>Bible class</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
       </table>
       ${pager('/members', { q, status, class: classId }, page, pages)}` : `<div class="empty-state">
@@ -1821,17 +1911,51 @@ app.get('/members', (req, res) => {
   });
 });
 
-app.get('/members.csv', (req, res) => {
-  const rows = selectMembers({ q: req.query.q || '', status: req.query.status || '' });
+function membersCsv(rows) {
   const headers = ['Member ID', 'First name', 'Last name', 'Bible class', 'Status', 'Email', 'Phone'];
-  const csv = [headers.join(',')].concat(
+  return [headers.join(',')].concat(
     rows.map((r) => [r.external_id, r.first_name, r.last_name, r.bible_class,
       r.membership_status, r.email, r.mobile_phone]
       .map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','))
   ).join('\n');
+}
+function sendCsv(res, filename, csv) {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename=members.csv');
+  res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
   res.send(csv);
+}
+
+app.get('/members.csv', (req, res) => {
+  sendCsv(res, 'members.csv', membersCsv(selectMembers({ q: req.query.q || '', status: req.query.status || '' })));
+});
+
+// Bulk actions on selected members: export to CSV or add to an organization.
+app.post('/members/bulk', requireAdmin, (req, res) => {
+  const ids = String(req.body.member_ids || '').split(',').map(Number).filter(Boolean);
+  if (!ids.length) { flash(req, 'Select at least one member first.'); return res.redirect('/members'); }
+  const placeholders = ids.map(() => '?').join(',');
+  if (req.body.action === 'export') {
+    const rows = db.prepare(`
+      SELECT m.external_id, m.first_name, m.last_name, m.membership_status, m.email, m.mobile_phone,
+             mn.name AS bible_class
+      FROM members m LEFT JOIN ministries mn ON mn.ministry_id = m.bible_class_id
+      WHERE m.member_id IN (${placeholders}) AND m.deleted_at IS NULL
+      ORDER BY m.last_name, m.first_name`).all(...ids);
+    return sendCsv(res, 'members-selected.csv', membersCsv(rows));
+  }
+  if (req.body.action === 'add_org') {
+    const orgId = Number(req.body.org_id);
+    if (!orgId) { flash(req, 'Choose an organization.'); return res.redirect('/members'); }
+    const org = db.prepare(`SELECT name FROM organizations WHERE org_id=? AND active=1`).get(orgId);
+    if (!org) { flash(req, 'That organization no longer exists.'); return res.redirect('/members'); }
+    const ins = db.prepare(`INSERT OR IGNORE INTO organization_memberships (org_id, member_id, role) VALUES (?, ?, 'member')`);
+    const tx = db.transaction(() => { for (const id of ids) ins.run(orgId, id); });
+    tx();
+    flash(req, `Added ${ids.length} member${ids.length === 1 ? '' : 's'} to ${org.name}.`, 'success');
+    return res.redirect('/members');
+  }
+  flash(req, 'Unknown bulk action.');
+  res.redirect('/members');
 });
 
 function memberForm(member = {}, bibleClasses = [], organizations = [], memberOrgIds = [], action) {
@@ -5019,7 +5143,7 @@ app.get('/inventory', (req, res) => {
   res.page({
     title: 'Inventory',
     active: '/inventory', noHeader: true,
-    body: `${hero}${stats}${filters}${newForm}${sections}`,
+    body: `${hero}${stats}${filters}${newForm}<div data-results>${sections}</div>`,
   });
 });
 

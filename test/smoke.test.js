@@ -128,6 +128,28 @@ test('negative finance amount is rejected', async () => {
   assert.match(back.body, /Amount must be a number of 0 or more/);
 });
 
+test('bulk export of selected members returns CSV', async () => {
+  const list = await get('/members');
+  const m = list.body.match(/class="bulk-box" value="(\d+)"/);
+  assert.ok(m, 'members list should expose selectable checkboxes');
+  const token = tokenFrom(list.body);
+  const res = await fetch(base + '/members/bulk', {
+    method: 'POST', redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ member_ids: m[1], action: 'export', _csrf: token }).toString(),
+  });
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-type') || '', /csv/);
+  assert.match(await res.text(), /Member ID,First name/);
+});
+
+test('live-search and bulk markup is present on the members page', async () => {
+  const r = await get('/members');
+  assert.match(r.body, /data-live-search/);
+  assert.match(r.body, /data-results/);
+  assert.match(r.body, /class="bulk-bar"/);
+});
+
 test('security headers are present', async () => {
   const res = await fetch(base + '/login', { redirect: 'manual' });
   assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');
