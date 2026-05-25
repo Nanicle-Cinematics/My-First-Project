@@ -107,6 +107,27 @@ test('login throttle returns 429 after repeated failures', async () => {
   cookie = saved;
 });
 
+test('invalid member submission is rejected with a flash message', async () => {
+  const form = await get('/members/new');
+  const token = tokenFrom(form.body);
+  const r = await post('/members', { first_name: '', last_name: '', mobile_phone: '123', _csrf: token });
+  assert.strictEqual(r.status, 302);
+  assert.match(r.location, /\/members\/new/);
+  const back = await get('/members/new');
+  assert.match(back.body, /First name is required/);
+});
+
+test('negative finance amount is rejected', async () => {
+  const form = await get('/finance/services');
+  const token = tokenFrom(form.body);
+  const r = await post('/finance/services', {
+    service_type_id: '1', service_date: '2025-01-05', total_amount: '-50', _csrf: token,
+  });
+  assert.strictEqual(r.status, 302);
+  const back = await get('/finance/services');
+  assert.match(back.body, /Amount must be a number of 0 or more/);
+});
+
 test('security headers are present', async () => {
   const res = await fetch(base + '/login', { redirect: 'manual' });
   assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');

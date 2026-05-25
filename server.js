@@ -494,9 +494,26 @@ app.use((req, res, next) => {
   }));
 });
 
-// Render helper that auto-injects the current user into the layout.
+// One-shot flash messages stored on the session.
+function flash(req, msg, type = 'error') { req.session.flash = { msg, type }; }
+
 app.use((req, res, next) => {
-  res.page = (opts) => res.send(layout({ ...opts, user: opts.user ?? res.locals.user }));
+  if (req.session.flash) {
+    res.locals.flash = req.session.flash.msg;
+    res.locals.flashType = req.session.flash.type;
+    delete req.session.flash;
+  }
+  next();
+});
+
+// Render helper that auto-injects the current user (and any flash) into the layout.
+app.use((req, res, next) => {
+  res.page = (opts) => res.send(layout({
+    ...opts,
+    user: opts.user ?? res.locals.user,
+    flash: opts.flash ?? res.locals.flash,
+    flashType: opts.flashType ?? res.locals.flashType,
+  }));
   next();
 });
 
@@ -903,7 +920,13 @@ function logActivity(kind, description, link, userId) {
   } catch (_) { /* table may not exist on very old DBs */ }
 }
 
-function layout({ title, subtitle, body, active, flash, user, bare, noHeader }) {
+function flashHtml(flash, flashType) {
+  if (!flash) return '';
+  const type = flashType === 'success' ? 'success' : flashType === 'info' ? 'info' : flashType === 'error' ? 'error' : '';
+  const role = type === 'error' ? 'alert' : 'status';
+  return `<div class="flash${type ? ` flash-${type}` : ''}" role="${role}" aria-live="polite">${esc(flash)}</div>`;
+}
+function layout({ title, subtitle, body, active, flash, flashType, user, bare, noHeader }) {
   if (bare) {
     return `<!doctype html>
 <html lang="en">
@@ -919,7 +942,7 @@ function layout({ title, subtitle, body, active, flash, user, bare, noHeader }) 
   <div class="auth-card">
     <div class="brand-mini">⛪ ${esc(CHURCH_NAME)}</div>
     <h1>${esc(title)}</h1>
-    ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
+    ${flashHtml(flash, flashType)}
     ${body}
   </div>
 </div>
@@ -952,6 +975,7 @@ function layout({ title, subtitle, body, active, flash, user, bare, noHeader }) 
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <div class="app">
   <aside class="sidebar" id="app-nav">
     <div class="brand">
@@ -994,8 +1018,8 @@ function layout({ title, subtitle, body, active, flash, user, bare, noHeader }) 
         <form method="post" action="/logout"><button class="sign-out" type="submit">Sign out</button></form>
       </div>
     </div>
-    <main class="page">
-      ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
+    <main class="page" id="main" tabindex="-1">
+      ${flashHtml(flash, flashType)}
       ${noHeader ? '' : `<h1>${esc(title)}</h1>${subtitle ? `<p class="subtitle">${esc(subtitle)}</p>` : ''}`}
       ${body}
       <div class="print-footer">
@@ -1571,6 +1595,26 @@ app.get('/', (req, res) => {
   });
 });
 
+// ---------- input validation helpers ----------
+function isValidDate(s) {
+  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
+}
+function isMoneyNonNeg(s) { const n = Number(s); return Number.isFinite(n) && n >= 0; }
+function isMoneyPositive(s) { const n = Number(s); return Number.isFinite(n) && n > 0; }
+function isEmailish(s) { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s)); }
+function isPhoneish(s) { return String(s).replace(/\D/g, '').length >= 7; }
+
+function memberErrors(b) {
+  if (!b.first_name || !b.first_name.trim()) return 'First name is required.';
+  if (!b.last_name || !b.last_name.trim()) return 'Last name is required.';
+  if (b.email && !isEmailish(b.email)) return 'Enter a valid email address, or leave it blank.';
+  if (b.mobile_phone && !isPhoneish(b.mobile_phone)) return 'Enter a valid mobile number (at least 7 digits).';
+  for (const f of ['join_date', 'baptism_date', 'confirmation_date']) {
+    if (b[f] && !isValidDate(b[f])) return 'Dates must be in YYYY-MM-DD format.';
+  }
+  return null;
+}
+
 // ---------- members ----------
 function memberWhere({ q, status, classId }) {
   const where = ['m.deleted_at IS NULL'];
@@ -1877,6 +1921,8 @@ function saveMemberOrgs(memberId, orgIds) {
 
 app.post('/members', requireAdmin, (req, res) => {
   const b = req.body;
+  const err = memberErrors(b);
+  if (err) { flash(req, err); return res.redirect('/members/new'); }
   const externalId = nextMemberId();
   const info = db.prepare(`
     INSERT INTO members (external_id, bible_class_id, first_name, last_name, email, mobile_phone,
@@ -2019,6 +2065,8 @@ app.get('/members/:id', (req, res) => {
 app.post('/members/:id', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const b = req.body;
+  const err = memberErrors(b);
+  if (err) { flash(req, err); return res.redirect(`/members/${id}`); }
   db.prepare(`
     UPDATE members SET bible_class_id=@bible_class_id, first_name=@first_name, last_name=@last_name,
       email=@email, mobile_phone=@mobile_phone, date_of_birth=@date_of_birth,
@@ -2657,6 +2705,9 @@ app.get('/finance/services', (req, res) => {
 
 app.post('/finance/services', requireAdmin, (req, res) => {
   const b = req.body;
+  if (!Number(b.service_type_id)) { flash(req, 'Choose a service type.'); return res.redirect('/finance/services'); }
+  if (!isValidDate(b.service_date)) { flash(req, 'Enter a valid service date.'); return res.redirect('/finance/services'); }
+  if (!isMoneyNonNeg(b.total_amount)) { flash(req, 'Amount must be a number of 0 or more.'); return res.redirect('/finance/services'); }
   const info = db.prepare(`
     INSERT INTO services (service_type_id, service_date, total_amount, recorded_by, notes)
     VALUES (?, ?, ?, ?, ?)`).run(
@@ -2908,6 +2959,9 @@ app.get('/finance/special', (req, res) => {
 
 app.post('/finance/special', requireAdmin, (req, res) => {
   const b = req.body;
+  if (!Number(b.special_cat_id)) { flash(req, 'Choose a category.'); return res.redirect('/finance/special'); }
+  if (!isValidDate(b.offering_date)) { flash(req, 'Enter a valid offering date.'); return res.redirect('/finance/special'); }
+  if (!isMoneyPositive(b.amount)) { flash(req, 'Amount must be greater than 0.'); return res.redirect('/finance/special'); }
   db.prepare(`
     INSERT INTO special_offerings (special_cat_id, offering_date, donor_id, donor_name_manual,
       amount, purpose, receipt_number, recorded_by, notes)
@@ -3514,6 +3568,9 @@ app.get('/finance/expenses', (req, res) => {
 
 app.post('/finance/expenses', requireAdmin, (req, res) => {
   const b = req.body;
+  if (!Number(b.expense_cat_id)) { flash(req, 'Choose an expense category.'); return res.redirect('/finance/expenses'); }
+  if (!isValidDate(b.spent_on)) { flash(req, 'Enter a valid date.'); return res.redirect('/finance/expenses'); }
+  if (!isMoneyNonNeg(b.amount)) { flash(req, 'Amount must be a number of 0 or more.'); return res.redirect('/finance/expenses'); }
   const cat = db.prepare(`SELECT category_name FROM expense_categories WHERE expense_cat_id=?`).get(Number(b.expense_cat_id));
   db.prepare(`
     INSERT INTO expenses (expense_cat_id, category, amount, spent_on, description, paid_to,
@@ -4816,23 +4873,29 @@ app.get('/organizations/:id', (req, res) => {
 
 app.post('/organizations', requireAdmin, (req, res) => {
   const b = req.body;
-  if (!b.name) return res.redirect('/organizations');
+  if (!b.name || !b.name.trim()) { flash(req, 'Organization name is required.'); return res.redirect('/organizations/new'); }
   try {
     db.prepare(`INSERT INTO organizations (name, description, meets_on, leader_id) VALUES (?, ?, ?, ?)`)
-      .run(b.name, b.description || null, b.meets_on || null,
+      .run(b.name.trim(), b.description || null, b.meets_on || null,
            b.leader_id ? Number(b.leader_id) : null);
-  } catch (_) { /* unique conflict */ }
+    flash(req, `Added “${b.name.trim()}”.`, 'success');
+  } catch (e) {
+    flash(req, 'An organization with that name already exists.');
+    return res.redirect('/organizations/new');
+  }
   res.redirect('/organizations');
 });
 
 app.post('/organizations/:id/add', requireAdmin, (req, res) => {
   const oid = Number(req.params.id);
   const mid = Number(req.body.member_id);
-  if (!mid) return res.redirect(`/organizations/${oid}`);
+  if (!mid) { flash(req, 'Choose a member to add.'); return res.redirect(`/organizations/${oid}`); }
   try {
     db.prepare(`INSERT INTO organization_memberships (org_id, member_id, role) VALUES (?, ?, ?)`)
       .run(oid, mid, req.body.role === 'leader' ? 'leader' : 'member');
-  } catch (_) { /* already a member */ }
+  } catch (e) {
+    flash(req, 'That member is already in this group.', 'info');
+  }
   res.redirect(`/organizations/${oid}`);
 });
 

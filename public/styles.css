@@ -9,8 +9,8 @@
   --bg: #f6f7fb;                /* cool light app background */
   --panel: #ffffff;
   --ink: #1f2433;
-  --muted: #7c8398;
-  --soft: #f1f2f7;              /* neutral chip / hover */
+  --muted: #5f6675;            /* meets WCAG AA on light surfaces */
+  --soft: #f1f2f7;             /* neutral chip / hover */
   --border: #ececf1;
   --field: #ffffff;            /* form input background */
   --topbar-bg: rgba(255, 255, 255, 0.82);
@@ -252,8 +252,21 @@ a:hover { text-decoration: underline; }
 
 .flash {
   background: var(--flash-bg); border: 1px solid var(--flash-border);
-  padding: 0.5rem 1rem; border-radius: 8px; margin-bottom: 1rem;
+  padding: 0.6rem 1rem; border-radius: 8px; margin-bottom: 1rem;
 }
+.flash-success { background: var(--green-soft); border-color: var(--green); color: var(--ink); }
+.flash-error   { background: var(--danger-soft); border-color: var(--danger); color: var(--ink); }
+.flash-info    { background: var(--blue-soft); border-color: var(--blue); color: var(--ink); }
+
+/* Keyboard skip link — hidden until focused */
+.skip-link {
+  position: absolute; left: 0.5rem; top: -3rem; z-index: 1000;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--border);
+  padding: 0.5rem 0.9rem; border-radius: 8px; box-shadow: var(--shadow-md);
+  transition: top 0.15s var(--ease);
+}
+.skip-link:focus { top: 0.5rem; }
+#main:focus { outline: none; }
 .error { color: var(--danger); margin: 0; }
 
 .finance-tabs {
