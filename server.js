@@ -12,6 +12,30 @@ const PORT = process.env.PORT || 3000;
 const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
 const PUBLIC_URL  = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 
+// Apply a staged restore (if any) BEFORE the DB is opened. Restores are staged
+// from the Backups UI and applied here at a clean startup so they can never
+// corrupt a live connection. The current DB is copied aside first as a safety net.
+const RESTORE_PENDING = DB_PATH + '.restore-pending';
+if (fs.existsSync(RESTORE_PENDING)) {
+  try {
+    const fd = fs.openSync(RESTORE_PENDING, 'r');
+    const hdr = Buffer.alloc(16);
+    fs.readSync(fd, hdr, 0, 16, 0);
+    fs.closeSync(fd);
+    if (hdr.toString('latin1', 0, 15) !== 'SQLite format 3') throw new Error('staged file is not a SQLite database');
+    if (fs.existsSync(DB_PATH)) {
+      const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+      try { fs.copyFileSync(DB_PATH, `${DB_PATH}.pre-restore-${stamp}`); } catch (_) {}
+      for (const ext of ['-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext); } catch (_) {} }
+    }
+    fs.renameSync(RESTORE_PENDING, DB_PATH);
+    console.log('Applied staged database restore.');
+  } catch (e) {
+    console.error('Staged restore failed, ignoring:', e.message);
+    try { fs.unlinkSync(RESTORE_PENDING); } catch (_) {}
+  }
+}
+
 // Auto-create the DB from schema.sql on first boot (so deployments work without shell access).
 // SAFETY: in production, refuse to silently create an empty DB unless ALLOW_DB_INIT=1 is set.
 // This prevents a missing/unmounted volume from being papered over with a fresh empty schema,
@@ -46,6 +70,35 @@ if (!fs.existsSync(DB_PATH)) {
 
 const db = new Database(DB_PATH);
 db.pragma('foreign_keys = ON');
+
+// ---------- backups ----------
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(path.dirname(DB_PATH), 'backups');
+const BACKUP_KEEP = Number(process.env.BACKUP_KEEP || 12);
+try { fs.mkdirSync(BACKUP_DIR, { recursive: true }); } catch (_) {}
+function listBackups() {
+  try {
+    return fs.readdirSync(BACKUP_DIR)
+      .filter((f) => /^church-\d+\.db$/.test(f))
+      .map((f) => { const st = fs.statSync(path.join(BACKUP_DIR, f)); return { name: f, size: st.size, mtime: st.mtime }; })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch (_) { return []; }
+}
+async function createBackup() {
+  const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+  const name = `church-${stamp}.db`;
+  await db.backup(path.join(BACKUP_DIR, name));
+  for (const old of listBackups().slice(BACKUP_KEEP)) {
+    try { fs.unlinkSync(path.join(BACKUP_DIR, old.name)); } catch (_) {}
+  }
+  return name;
+}
+// Schedule automatic daily backups only when running as a server (not under tests).
+if (require.main === module) {
+  const t1 = setTimeout(() => { createBackup().catch((e) => console.error('backup failed:', e.message)); }, 60 * 1000);
+  const t2 = setInterval(() => { createBackup().catch((e) => console.error('backup failed:', e.message)); }, 24 * 60 * 60 * 1000);
+  if (t1.unref) t1.unref();
+  if (t2.unref) t2.unref();
+}
 
 // Migrations for older databases.
 db.exec(`
@@ -588,6 +641,7 @@ const NAV = [
   ['/communications',  'Communications', '✉'],
   ['/reports',         'Reports',        '📊'],
   ['/users',           'Users & Roles',  '🔑', 'admin'],
+  ['/backups',         'Backups',        '💾', 'admin'],
   ['/settings',        'Settings',       '⚙'],
 ];
 
@@ -631,6 +685,16 @@ const EXT_FROM_MIME = {
   'image/jpeg': 'jpg', 'image/jpg': 'jpg',
   'image/png':  'png', 'image/webp': 'webp', 'image/gif': 'gif',
 };
+// Uploader for restoring a database backup (.db file).
+const dbUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+function isSqliteBuffer(buf) {
+  return buf && buf.length >= 16 && buf.toString('latin1', 0, 15) === 'SQLite format 3';
+}
 // Verify the bytes really are an image (mime can be spoofed by the client).
 function looksLikeImage(buf) {
   if (!buf || buf.length < 12) return false;
@@ -1011,8 +1075,9 @@ function layout({ title, subtitle, body, active, flash, flashType, user, bare, n
   const roleLabel = user ? (user.role === 'admin' ? 'Administrator' : 'Viewer') : '';
   const backup = (() => {
     try {
-      const last = fs.statSync(DB_PATH).mtime;
-      return last.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const latest = listBackups()[0];
+      if (!latest) return 'never';
+      return latest.mtime.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     } catch (_) { return '—'; }
   })();
   return `<!doctype html>
@@ -6099,6 +6164,104 @@ app.post('/settings/birthdays/run', requireAdmin, async (req, res) => {
     if (result.broadcastId) return res.redirect(`/communications/broadcasts/${result.broadcastId}`);
   } catch (e) { console.error('birthday manual run failed:', e.message); }
   res.redirect('/settings');
+});
+
+// ---------- backups & restore ----------
+function backupName(req) {
+  const name = String(req.params.name || '');
+  if (!/^church-\d+\.db$/.test(name)) return null;
+  return listBackups().some((b) => b.name === name) ? name : null;
+}
+
+app.get('/backups', requireAdmin, (req, res) => {
+  const backups = listBackups();
+  const totalSize = backups.reduce((s, b) => s + b.size, 0);
+  const latest = backups[0] ? backups[0].mtime.toLocaleString('en-GB') : 'never';
+  const rows = backups.length
+    ? `<table class="data-table members-table">
+        <thead><tr><th>Backup</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody>${backups.map((b) => `<tr>
+          <td data-label="Backup"><span class="m-name">${esc(b.name)}</span></td>
+          <td data-label="Size">${fmtBytes(b.size)}</td>
+          <td data-label="Created">${b.mtime.toLocaleString('en-GB')}</td>
+          <td data-label="Actions"><div class="row-actions" style="gap:0.5rem">
+            <a class="btn ghost" href="/backups/${encodeURIComponent(b.name)}/download">⬇ Download</a>
+            <form method="post" action="/backups/${encodeURIComponent(b.name)}/restore"
+                  onsubmit="return confirm('Restore from ${esc(b.name)}? The current database is copied aside and replaced when the app next restarts. This cannot be undone.')">
+              <button class="btn" type="submit">♻ Restore</button></form>
+            <form method="post" action="/backups/${encodeURIComponent(b.name)}/delete"
+                  onsubmit="return confirm('Delete ${esc(b.name)}?')">
+              <button class="icon-btn del" type="submit" title="Delete" aria-label="Delete">${ICON_TRASH}</button></form>
+          </div></td>
+        </tr>`).join('')}</tbody>
+      </table>`
+    : '<div class="empty-state"><div class="empty-ico">💾</div><p>No backups yet. Create one below.</p></div>';
+
+  const tools = `
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Create &amp; restore</h2></div>
+      <div class="filter-bar">
+        <form method="post" action="/backups/create"><button type="submit">＋ Create backup now</button></form>
+        <form method="post" action="/backups/restore-upload" enctype="multipart/form-data" class="filter-bar" style="margin:0"
+              onsubmit="return confirm('Restore from the uploaded file on next restart? The current database is copied aside first.')">
+          <input type="file" name="backup" accept=".db,.sqlite,application/octet-stream" required>
+          <button class="ghost" type="submit">Upload &amp; stage restore</button>
+        </form>
+      </div>
+      <p class="muted-text" style="margin:0.6rem 0 0">Restores are applied safely on the next app restart. Keep downloaded copies off-site.</p>
+    </div>`;
+
+  res.page({
+    title: 'Backups', active: '/backups', noHeader: true,
+    body: `${pageHero('Backups & Restore', 'Snapshots of the church database. Download copies for safe-keeping, or restore from one.')}
+      ${statsRow([
+        { cls: 'gold', icon: '💾', value: backups.length.toLocaleString(), label: 'Backups Kept' },
+        { cls: 'green', icon: '🕒', value: latest, label: 'Latest Backup' },
+        { cls: 'blue', icon: '#', value: fmtBytes(totalSize), label: 'Total Size' },
+      ])}
+      ${tools}
+      ${listCard({ title: '💾 Available Backups', count: backups.length, countLabel: 'files', inner: rows })}`,
+  });
+});
+
+app.post('/backups/create', requireAdmin, async (req, res) => {
+  try { const name = await createBackup(); flash(req, `Backup created: ${name}`, 'success'); }
+  catch (e) { flash(req, `Backup failed: ${e.message}`); }
+  res.redirect('/backups');
+});
+
+app.get('/backups/:name/download', requireAdmin, (req, res) => {
+  const name = backupName(req);
+  if (!name) return res.status(404).send('Backup not found');
+  res.download(path.join(BACKUP_DIR, name), name);
+});
+
+app.post('/backups/:name/delete', requireAdmin, (req, res) => {
+  const name = backupName(req);
+  if (!name) { flash(req, 'Backup not found.'); return res.redirect('/backups'); }
+  try { fs.unlinkSync(path.join(BACKUP_DIR, name)); flash(req, `Deleted ${name}.`, 'success'); }
+  catch (e) { flash(req, `Could not delete: ${e.message}`); }
+  res.redirect('/backups');
+});
+
+app.post('/backups/:name/restore', requireAdmin, (req, res) => {
+  const name = backupName(req);
+  if (!name) { flash(req, 'Backup not found.'); return res.redirect('/backups'); }
+  try {
+    fs.copyFileSync(path.join(BACKUP_DIR, name), RESTORE_PENDING);
+    flash(req, `Restore from ${name} is staged. Restart the app to apply it.`, 'info');
+  } catch (e) { flash(req, `Could not stage restore: ${e.message}`); }
+  res.redirect('/backups');
+});
+
+app.post('/backups/restore-upload', requireAdmin, dbUpload.single('backup'), (req, res) => {
+  if (!csrfValid(req)) return res.status(403).send(layout({ title: 'Security check failed', user: res.locals.user, active: null, body: '<p>Stale form. Go back and try again.</p>' }));
+  if (!req.file || !isSqliteBuffer(req.file.buffer)) { flash(req, 'That file is not a valid SQLite database.'); return res.redirect('/backups'); }
+  try {
+    fs.writeFileSync(RESTORE_PENDING, req.file.buffer);
+    flash(req, 'Uploaded database is staged for restore. Restart the app to apply it.', 'info');
+  } catch (e) { flash(req, `Could not stage restore: ${e.message}`); }
+  res.redirect('/backups');
 });
 
 app.get('/settings', requireAdmin, (req, res) => {

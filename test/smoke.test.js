@@ -9,7 +9,9 @@ const fs = require('node:fs');
 
 // Point the app at a temp DB BEFORE requiring it (it opens the DB on import).
 const TMP_DB = path.join(os.tmpdir(), `cms-test-${process.pid}-${Date.now()}.db`);
+const TMP_BACKUPS = `${TMP_DB}-backups`;
 process.env.CHURCH_DB = TMP_DB;
+process.env.BACKUP_DIR = TMP_BACKUPS;
 process.env.SESSION_SECRET = 'test-secret';
 process.env.NODE_ENV = 'test';
 
@@ -23,6 +25,7 @@ test.before(async () => {
 test.after(() => {
   server.close();
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(TMP_DB + ext); } catch (_) {} }
+  try { fs.rmSync(TMP_BACKUPS, { recursive: true, force: true }); } catch (_) {}
 });
 
 // --- tiny cookie-aware client + CSRF token extraction ---
@@ -157,6 +160,17 @@ test('giving statement pages render', async () => {
   const stmt = await get('/members/1/statement');
   assert.strictEqual(stmt.status, 200);
   assert.match(stmt.body, /Annual Giving Statement/);
+});
+
+test('backups page renders and a backup can be created', async () => {
+  const page = await get('/backups');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Backups &amp; Restore/);
+  const token = tokenFrom(page.body);
+  const r = await post('/backups/create', { _csrf: token });
+  assert.strictEqual(r.status, 302);
+  const after = await get('/backups');
+  assert.match(after.body, /church-\d+\.db/);
 });
 
 test('security headers are present', async () => {
