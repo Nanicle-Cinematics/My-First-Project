@@ -1067,6 +1067,54 @@ function sparkline(points) {
   </svg>`;
 }
 
+// Tiny inline sparkline for stat cards (no axes). `color` is a CSS color string.
+function miniSpark(values, color) {
+  const v = (values && values.length) ? values : [0, 0];
+  const W = 96, H = 44, P = 3;
+  const max = Math.max(...v, 1), min = Math.min(...v, 0);
+  const xs = v.map((_, i) => P + (i * (W - 2 * P)) / Math.max(1, v.length - 1));
+  const ys = v.map((val) => H - P - ((val - min) / Math.max(1, max - min)) * (H - 2 * P));
+  const line = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' ');
+  const area = `M${xs[0].toFixed(1)} ${H - P} L${xs.map((x, i) => `${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' L')} L${xs[xs.length - 1].toFixed(1)} ${H - P} Z`;
+  return `<svg class="mini" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="--c:${color}">
+    <path class="mini-area" d="${area}"></path><path class="mini-line" d="${line}"></path></svg>`;
+}
+
+// Donut chart. segments: [{label, value, color}]. Renders ring + centred caption.
+function donut(segments, centerTop, centerBig) {
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  const cx = 80, cy = 80, R = 60, sw = 24, C = 2 * Math.PI * R;
+  let off = 0;
+  const rings = total > 0 ? segments.filter((s) => s.value > 0).map((s) => {
+    const len = (s.value / total) * C;
+    const seg = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${s.color}" stroke-width="${sw}"
+      stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"
+      transform="rotate(-90 ${cx} ${cy})" stroke-linecap="butt"></circle>`;
+    off += len;
+    return seg;
+  }).join('') : `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--soft)" stroke-width="${sw}"></circle>`;
+  return `<svg class="donut" viewBox="0 0 160 160">
+    ${rings}
+    <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="donut-top">${esc(centerTop)}</text>
+    <text x="${cx}" y="${cy + 20}" text-anchor="middle" class="donut-big">${esc(String(centerBig))}</text>
+  </svg>`;
+}
+
+// Build a 'YYYY-MM' array for the last n months (oldest first).
+function lastMonths(n) {
+  const out = [], now = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return out;
+}
+// Map grouped {ym, v} rows onto a months[] array → number[].
+function seriesOn(months, rows) {
+  const m = new Map(rows.map((r) => [r.ym, Number(r.v) || 0]));
+  return months.map((ym) => m.get(ym) || 0);
+}
+
 app.get('/', (req, res) => {
   const totalMembers = db.prepare(
     `SELECT COUNT(*) c FROM members WHERE membership_status IN ('member','regular','visitor')`
@@ -1187,43 +1235,81 @@ app.get('/', (req, res) => {
                           AND join_date <= date('now','-90 days') AND deleted_at IS NULL`).get().c,
   };
 
+  // ----- monthly series for stat-card sparklines + giving chart (last 6 months) -----
+  const months = lastMonths(6);
+  const monthLabel = (ym) => new Date(`${ym}-01T00:00:00`).toLocaleString('en', { month: 'short' });
+  const memberSeries = seriesOn(months, db.prepare(
+    `SELECT substr(join_date,1,7) ym, COUNT(*) v FROM members
+       WHERE join_date >= date('now','start of month','-5 months') GROUP BY ym`).all());
+  const visitorSeries = seriesOn(months, db.prepare(
+    `SELECT substr(join_date,1,7) ym, COUNT(*) v FROM members
+       WHERE membership_status='visitor' AND join_date >= date('now','start of month','-5 months') GROUP BY ym`).all());
+  const svcSeries = seriesOn(months, db.prepare(
+    `SELECT substr(service_date,1,7) ym, SUM(total_amount) v FROM services
+       WHERE deleted_at IS NULL AND service_date >= date('now','start of month','-5 months') GROUP BY ym`).all());
+  const specSeries = seriesOn(months, db.prepare(
+    `SELECT substr(offering_date,1,7) ym, SUM(amount) v FROM special_offerings
+       WHERE deleted_at IS NULL AND offering_date >= date('now','start of month','-5 months') GROUP BY ym`).all());
+  const givingSeries = months.map((_, i) => svcSeries[i] + specSeries[i]);
+  const attendanceSpark = trendPts.map((p) => p.value);
+
+  // ----- giving overview breakdown (this month) -----
+  const specialTotal = specialByCat.reduce((s, x) => s + x.t, 0);
+  const givingTotal = servicesMonth + harvestsMonth + specialTotal;
+  const givingLegend = [
+    { label: 'Service Offerings', value: servicesMonth, color: 'var(--gold)' },
+    { label: 'Harvests', value: harvestsMonth, color: 'var(--purple)' },
+    { label: 'Special Offerings', value: specialTotal, color: 'var(--green)' },
+  ];
+
+  // ----- attendance donut (by service type, last 30 days) -----
+  const attByType = db.prepare(`
+    SELECT e.event_type AS k, COUNT(a.member_id) AS v
+    FROM events e JOIN attendance a USING(event_id)
+    WHERE e.starts_at >= date('now','-30 days')
+    GROUP BY e.event_type ORDER BY v DESC`).all();
+  const typeNames = {
+    service: 'Services', prayer: 'Prayer', bible_study: 'Bible Study', outreach: 'Outreach',
+    youth: 'Youth', wedding: 'Weddings', funeral: 'Funerals', baptism: 'Baptisms', other: 'Other',
+  };
+  const donutColors = ['var(--purple)', 'var(--gold)', 'var(--green)', 'var(--blue)', 'var(--orange)', '#a78bfa', '#f472b6', '#94a3b8'];
+  const attSegments = attByType.map((r, i) => ({ label: typeNames[r.k] || r.k, value: r.v, color: donutColors[i % donutColors.length] }));
+  const attTotal = attSegments.reduce((s, x) => s + x.value, 0);
+  const attAvg = attByType.length ? Math.round(attTotal / attByType.length) : 0;
+
+  // ----- ministry overview tiles -----
+  const ministryCount = db.prepare(`SELECT COUNT(*) c FROM ministries WHERE active=1`).get().c;
+  const orgCount = db.prepare(`SELECT COUNT(*) c FROM organizations WHERE active=1`).get().c;
+  const volunteerCount = db.prepare(
+    `SELECT COUNT(DISTINCT member_id) c FROM ministry_memberships WHERE left_date IS NULL`).get().c;
+  const peopleInvolved = db.prepare(`
+    SELECT COUNT(*) c FROM (
+      SELECT member_id FROM ministry_memberships WHERE left_date IS NULL
+      UNION SELECT member_id FROM organization_memberships)`).get().c;
+
   const trendDelta = (n) => n == null ? '' :
     `<div class="trend ${n < 0 ? 'down' : ''}">${n >= 0 ? '↑' : '↓'} ${Math.abs(n)}% from last period</div>`;
 
+  const statCard = (cls, icon, label, value, trend, spark, color) => `
+    <div class="stat">
+      <div class="ico ${cls}">${icon}</div>
+      <div class="stat-body">
+        <div class="label">${label}</div>
+        <div class="value">${value}</div>
+        ${trend}
+      </div>
+      <div class="spark">${miniSpark(spark, color)}</div>
+    </div>`;
   const cards = `
     <div class="stat-grid">
-      <div class="stat">
-        <div class="ico purple">👥</div>
-        <div>
-          <div class="label">Total Members</div>
-          <div class="value">${totalMembers.toLocaleString()}</div>
-          <div class="trend">↑ ${newMembersThisMonth} this month</div>
-        </div>
-      </div>
-      <div class="stat">
-        <div class="ico green">✓</div>
-        <div>
-          <div class="label">Sunday Attendance</div>
-          <div class="value">${sundayAttendance}</div>
-          ${trendDelta(attendanceDelta)}
-        </div>
-      </div>
-      <div class="stat">
-        <div class="ico blue">₵</div>
-        <div>
-          <div class="label">Offerings This Month</div>
-          <div class="value">${fmtMoney(offeringsThisMonth)}</div>
-          ${trendDelta(offeringsDelta)}
-        </div>
-      </div>
-      <div class="stat">
-        <div class="ico orange">🚶</div>
-        <div>
-          <div class="label">Visitors This Month</div>
-          <div class="value">${visitorsThisMonth}</div>
-          <div class="trend">↑ ${visitorsThisWeek} new this week</div>
-        </div>
-      </div>
+      ${statCard('purple', '👥', 'Total Members', totalMembers.toLocaleString(),
+        `<div class="trend">↑ ${newMembersThisMonth} this month</div>`, memberSeries, 'var(--purple)')}
+      ${statCard('green', '✓', 'Sunday Attendance', sundayAttendance,
+        trendDelta(attendanceDelta), attendanceSpark, 'var(--green)')}
+      ${statCard('amber', '₵', 'Offerings This Month', fmtMoney(offeringsThisMonth),
+        trendDelta(offeringsDelta), givingSeries, 'var(--gold)')}
+      ${statCard('blue', '🚶', 'Visitors This Month', visitorsThisMonth,
+        `<div class="trend">↑ ${visitorsThisWeek} new this week</div>`, visitorSeries, 'var(--blue)')}
     </div>`;
 
   const isAdmin = res.locals.isAdmin;
@@ -1264,10 +1350,58 @@ app.get('/', (req, res) => {
       </details>
     </div>`;
 
-  const chartCard = `
+  const givingPoints = months.map((ym, i) => ({ label: monthLabel(ym), value: givingSeries[i] }));
+  const givingLegendRows = givingLegend.map((g) => {
+    const pct = givingTotal > 0 ? Math.round((g.value / givingTotal) * 100) : 0;
+    return `<div class="legend-row">
+      <span class="legend-dot" style="background:${g.color}"></span>
+      <span class="legend-label">${g.label}</span>
+      <span class="legend-val">${fmtMoney(g.value)}</span>
+      <span class="legend-pct">${pct}%</span>
+    </div>`;
+  }).join('');
+  const givingCard = `
     <div class="card">
-      <div class="card-head"><h2>Attendance Trend</h2><span class="meta">Last 8 services</span></div>
-      ${sparkline(trendPts)}
+      <div class="card-head"><h2>Giving Overview</h2><span class="meta">This month</span></div>
+      <div class="big-figure">${fmtMoney(givingTotal)}</div>
+      <div class="big-sub">Total giving ${trendDelta(offeringsDelta) || '<span class="trend">this month</span>'}</div>
+      ${sparkline(givingPoints)}
+      <div class="legend">${givingLegendRows}</div>
+    </div>`;
+
+  const attLegendRows = attSegments.map((s) => {
+    const pct = attTotal > 0 ? Math.round((s.value / attTotal) * 100) : 0;
+    return `<div class="legend-row">
+      <span class="legend-dot" style="background:${s.color}"></span>
+      <span class="legend-label">${esc(s.label)}</span>
+      <span class="legend-pct">${pct}%</span>
+      <span class="legend-val">${s.value} ppl</span>
+    </div>`;
+  }).join('');
+  const attendanceCard = `
+    <div class="card">
+      <div class="card-head"><h2>Attendance Overview</h2><span class="meta">Last 30 days</span></div>
+      <div class="donut-wrap">
+        ${donut(attSegments, 'Avg / type', attAvg)}
+        <div class="legend">${attLegendRows || '<p class="muted-text">No attendance recorded yet.</p>'}</div>
+      </div>
+    </div>`;
+
+  const ministryTile = (icon, cls, value, label) => `
+    <div class="m-tile">
+      <div class="ico ${cls}">${icon}</div>
+      <div class="m-value">${value}</div>
+      <div class="m-label">${label}</div>
+    </div>`;
+  const ministryCard = `
+    <div class="card">
+      <div class="card-head"><h2>Ministry Overview</h2><a href="/organizations">View all</a></div>
+      <div class="m-grid">
+        ${ministryTile('👥', 'purple', ministryCount, 'Ministries')}
+        ${ministryTile('🙋', 'green', volunteerCount, 'Volunteers')}
+        ${ministryTile('♫', 'amber', orgCount, 'Organizations')}
+        ${ministryTile('❤', 'blue', peopleInvolved, 'People Involved')}
+      </div>
     </div>`;
 
   const netBalance = offeringsThisMonth + harvestsMonth - monthExpenses;
@@ -1332,10 +1466,12 @@ app.get('/', (req, res) => {
 
   const grid = `
     <div class="dash-grid">
-      ${activityCard}
-      ${chartCard}
-      ${financeCard}
       ${upcomingCard}
+      ${givingCard}
+      ${activityCard}
+      <div class="col-2">${ministryCard}</div>
+      ${attendanceCard}
+      ${financeCard}
       ${birthdaysCard}
       ${followupsCard}
     </div>`;
