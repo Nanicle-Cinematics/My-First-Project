@@ -458,9 +458,9 @@ app.use((req, res, next) => {
   ).get(req.session.userId);
   if (!res.locals.user) { req.session.destroy(() => {}); return res.redirect('/login'); }
   res.locals.isAdmin = res.locals.user.role === 'admin';
-  // Adding and deleting user accounts is reserved for the main administrator.
+  // Adding/deleting accounts and resetting passwords is reserved for the main administrator.
   res.locals.isUserManager = res.locals.isAdmin
-    && String(res.locals.user.username || '').toLowerCase() === 'dunwell';
+    && String(res.locals.user.username || '').toLowerCase() === 'dunwelladmin';
   next();
 });
 
@@ -477,7 +477,7 @@ function requireUserManager(req, res, next) {
   if (res.locals.isUserManager) return next();
   res.status(403).send(layout({
     title: 'Not allowed', user: res.locals.user, active: null,
-    body: '<p>Only the main administrator (<strong>dunwell</strong>) can add or delete user accounts.</p>'
+    body: '<p>Only the main administrator (<strong>dunwelladmin</strong>) can add or delete user accounts and reset passwords.</p>'
          + '<p><a href="/users">Back to users</a></p>',
   }));
 }
@@ -5337,10 +5337,12 @@ app.get('/users', requireAdmin, (req, res) => {
        </select>
        <button type="submit">Save</button>
      </form>
-     <form method="post" action="/users/${u.user_id}/reset" class="inline">
-       <input type="password" name="password" placeholder="new password" minlength="8" required>
-       <button type="submit">Reset</button>
-     </form>
+     ${res.locals.isUserManager
+       ? `<form method="post" action="/users/${u.user_id}/reset" class="inline">
+            <input type="password" name="password" placeholder="new password" minlength="8" required>
+            <button type="submit">Reset</button>
+          </form>`
+       : ''}
      ${(res.locals.isUserManager && u.user_id !== res.locals.user.user_id)
        ? `<form method="post" action="/users/${u.user_id}/delete" class="inline"
             onsubmit="return confirm('Delete ${esc(u.username)}?')">
@@ -5349,9 +5351,9 @@ app.get('/users', requireAdmin, (req, res) => {
        : ''}`,
   ]);
   const body = `
-    <p class="muted-text">Any administrator can reset passwords and set a user's access level (read/write jurisdiction):
+    <p class="muted-text">Any administrator can set a user's access level (read/write jurisdiction):
       <strong>Admin</strong> = full read &amp; write; <strong>Viewer</strong> = read-only.
-      Only the main administrator (<strong>dunwell</strong>) can add or delete user accounts.</p>
+      Only the main administrator (<strong>dunwelladmin</strong>) can add or delete user accounts and reset passwords.</p>
     ${res.locals.isUserManager ? '<p><a class="btn" href="/users/new">+ New user</a></p>' : ''}
     ${table(['Username', 'Display name', 'Role', 'Created', 'Actions'], rows)}`;
   res.page({ title: 'Users', body });
@@ -5408,7 +5410,7 @@ app.post('/users/:id/role', requireAdmin, (req, res) => {
   res.redirect('/users');
 });
 
-app.post('/users/:id/reset', requireAdmin, (req, res) => {
+app.post('/users/:id/reset', requireUserManager, (req, res) => {
   const id = Number(req.params.id);
   const { password } = req.body;
   if (!password || password.length < 8) return res.redirect('/users');
