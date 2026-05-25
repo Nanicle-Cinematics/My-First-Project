@@ -669,20 +669,13 @@ function requireUserManager(req, res, next) {
 }
 
 // ---------- helpers ----------
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
-  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-));
-const fmtMoney = (n) => {
-  if (n == null) return '';
-  const v = Number(n);
-  return 'GH₵ ' + v.toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
-const fmtOutstanding = (n) => Number(n) > 0 ? `<span class="negative">${fmtMoney(n)}</span>` : fmtMoney(n);
-const fmtDate = (s) => (s ? String(s).slice(0, 10) : '');
-const initials = (name) => {
-  if (!name) return '?';
-  return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
-};
+const {
+  MONTHS, DAYS_OF_WEEK,
+  esc, fmtMoney, fmtOutstanding, fmtDate, todayISO, initials,
+  dobMonth, dobDay, fmtDobShort, parseDob, fmtPreachDate,
+  isValidDate, isMoneyNonNeg, isMoneyPositive, isEmailish, isPhoneish,
+  fmtBytes, isSqliteBuffer, looksLikeImage,
+} = require('./lib/format');
 
 const NAV = [
   ['/',                'Dashboard',      '▥'],
@@ -700,30 +693,6 @@ const NAV = [
   ['/backups',         'Backups',        '💾', 'admin'],
   ['/settings',        'Settings',       '⚙'],
 ];
-
-const DAYS_OF_WEEK = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-// DOB is stored as YYYY-MM-DD; the year is sentinel 1900 for entries collected
-// via the day+month picker. Existing rows may carry a real birth year — we
-// surface only the month+day from them too, so the year is never displayed.
-const dobMonth = (s) => (s ? Number(String(s).slice(5, 7)) : 0);
-const dobDay   = (s) => (s ? Number(String(s).slice(8, 10)) : 0);
-const fmtDobShort = (s) => {
-  const m = dobMonth(s), d = dobDay(s);
-  return (m && d) ? `${MONTHS[m - 1]} ${d}` : '';
-};
-function parseDob(m, d) {
-  const mm = Number(m), dd = Number(d);
-  if (!mm || !dd || mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
-  return `1900-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
-}
-const fmtPreachDate = (s) => {
-  if (!s) return '';
-  const d = new Date(String(s).slice(0, 10) + 'T00:00:00');
-  return isNaN(d) ? String(s)
-    : d.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
-};
 
 // ---------- Photo storage (member photos saved next to the DB) ----------
 const PHOTO_DIR = process.env.PHOTO_DIR || path.join(path.dirname(DB_PATH), 'photos');
@@ -743,24 +712,6 @@ const EXT_FROM_MIME = {
 };
 // Uploader for restoring a database backup (.db file).
 const dbUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
-function fmtBytes(n) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-function isSqliteBuffer(buf) {
-  return buf && buf.length >= 16 && buf.toString('latin1', 0, 15) === 'SQLite format 3';
-}
-// Verify the bytes really are an image (mime can be spoofed by the client).
-function looksLikeImage(buf) {
-  if (!buf || buf.length < 12) return false;
-  const jpg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
-  const png = buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
-  const gif = buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38;
-  const webp = buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
-  return jpg || png || gif || webp;
-}
-
 // ---------- SMS (Arkesel) + Email (SMTP) helpers ----------
 const ARKESEL_API_KEY = process.env.ARKESEL_API_KEY || '';
 const ARKESEL_SENDER  = process.env.ARKESEL_SENDER  || 'DUNWELL';
@@ -1396,76 +1347,7 @@ function table(headers, rows) {
 }
 
 // ---------- routes: dashboard ----------
-function sparkline(points) {
-  if (!points.length) return '<p class="muted-text">No data yet.</p>';
-  const W = 560, H = 200, P = 28;
-  const xs = points.map((_, i) => P + (i * (W - P * 2)) / Math.max(1, points.length - 1));
-  const max = Math.max(...points.map((p) => p.value), 1);
-  const min = Math.min(...points.map((p) => p.value), 0);
-  const yScale = (v) => H - P - ((v - min) / Math.max(1, max - min)) * (H - P * 2);
-  const ys = points.map((p) => yScale(p.value));
-  const line = xs.map((x, i) => `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' ');
-  const area = `M ${xs[0]} ${H - P} L ${xs.map((x, i) => `${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' L ')} L ${xs[xs.length - 1]} ${H - P} Z`;
-  const dots = xs.map((x, i) =>
-    `<circle class="dot" cx="${x.toFixed(1)}" cy="${ys[i].toFixed(1)}" r="3.5"></circle>`).join('');
-  const xLabels = points.map((p, i) =>
-    `<text x="${xs[i].toFixed(1)}" y="${H - 8}" text-anchor="middle">${esc(p.label)}</text>`).join('');
-  const yMax = `<text x="6" y="${(P + 4).toFixed(1)}">${max}</text>`;
-  const yMin = `<text x="6" y="${(H - P + 4).toFixed(1)}">${min}</text>`;
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <path class="area" d="${area}"></path>
-    <path class="line" d="${line}"></path>
-    ${dots}${xLabels}${yMax}${yMin}
-  </svg>`;
-}
-
-// Tiny inline sparkline for stat cards (no axes). `color` is a CSS color string.
-function miniSpark(values, color) {
-  const v = (values && values.length) ? values : [0, 0];
-  const W = 96, H = 44, P = 3;
-  const max = Math.max(...v, 1), min = Math.min(...v, 0);
-  const xs = v.map((_, i) => P + (i * (W - 2 * P)) / Math.max(1, v.length - 1));
-  const ys = v.map((val) => H - P - ((val - min) / Math.max(1, max - min)) * (H - 2 * P));
-  const line = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' ');
-  const area = `M${xs[0].toFixed(1)} ${H - P} L${xs.map((x, i) => `${x.toFixed(1)} ${ys[i].toFixed(1)}`).join(' L')} L${xs[xs.length - 1].toFixed(1)} ${H - P} Z`;
-  return `<svg class="mini" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="--c:${color}">
-    <path class="mini-area" d="${area}"></path><path class="mini-line" d="${line}"></path></svg>`;
-}
-
-// Donut chart. segments: [{label, value, color}]. Renders ring + centred caption.
-function donut(segments, centerTop, centerBig) {
-  const total = segments.reduce((s, x) => s + x.value, 0);
-  const cx = 80, cy = 80, R = 60, sw = 24, C = 2 * Math.PI * R;
-  let off = 0;
-  const rings = total > 0 ? segments.filter((s) => s.value > 0).map((s) => {
-    const len = (s.value / total) * C;
-    const seg = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${s.color}" stroke-width="${sw}"
-      stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}"
-      transform="rotate(-90 ${cx} ${cy})" stroke-linecap="butt"></circle>`;
-    off += len;
-    return seg;
-  }).join('') : `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--soft)" stroke-width="${sw}"></circle>`;
-  return `<svg class="donut" viewBox="0 0 160 160">
-    ${rings}
-    <text x="${cx}" y="${cy - 4}" text-anchor="middle" class="donut-top">${esc(centerTop)}</text>
-    <text x="${cx}" y="${cy + 20}" text-anchor="middle" class="donut-big">${esc(String(centerBig))}</text>
-  </svg>`;
-}
-
-// Build a 'YYYY-MM' array for the last n months (oldest first).
-function lastMonths(n) {
-  const out = [], now = new Date();
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-  }
-  return out;
-}
-// Map grouped {ym, v} rows onto a months[] array → number[].
-function seriesOn(months, rows) {
-  const m = new Map(rows.map((r) => [r.ym, Number(r.v) || 0]));
-  return months.map((ym) => m.get(ym) || 0);
-}
+const { sparkline, miniSpark, donut, lastMonths, seriesOn } = require('./lib/charts');
 
 app.get('/', (req, res) => {
   const totalMembers = db.prepare(
@@ -1837,15 +1719,6 @@ app.get('/', (req, res) => {
     body: `${cards}${quick}${grid}`,
   });
 });
-
-// ---------- input validation helpers ----------
-function isValidDate(s) {
-  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
-}
-function isMoneyNonNeg(s) { const n = Number(s); return Number.isFinite(n) && n >= 0; }
-function isMoneyPositive(s) { const n = Number(s); return Number.isFinite(n) && n > 0; }
-function isEmailish(s) { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s)); }
-function isPhoneish(s) { return String(s).replace(/\D/g, '').length >= 7; }
 
 function memberErrors(b) {
   if (!b.first_name || !b.first_name.trim()) return 'First name is required.';
@@ -3002,7 +2875,6 @@ function financeTabs(activePath) {
   return `<div class="finance-tabs">${FINANCE_TABS.map(([href, label]) =>
     `<a class="${href === activePath ? 'active' : ''}" href="${href}">${esc(label)}</a>`).join('')}</div>`;
 }
-function todayISO() { return new Date().toISOString().slice(0, 10); }
 function loadServiceTypes() {
   return db.prepare(`SELECT service_type_id, type_name FROM service_types WHERE is_active=1 ORDER BY type_name`).all();
 }
