@@ -5994,6 +5994,10 @@ app.post('/logout', (req, res) => {
 });
 
 // ---------- start ----------
-app.listen(PORT, () => {
-  console.log(`Church Manager running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Church Manager running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
