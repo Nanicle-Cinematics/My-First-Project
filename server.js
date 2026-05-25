@@ -835,7 +835,7 @@ function logActivity(kind, description, link, userId) {
   } catch (_) { /* table may not exist on very old DBs */ }
 }
 
-function layout({ title, subtitle, body, active, flash, user, bare }) {
+function layout({ title, subtitle, body, active, flash, user, bare, noHeader }) {
   if (bare) {
     return `<!doctype html>
 <html lang="en">
@@ -928,8 +928,7 @@ function layout({ title, subtitle, body, active, flash, user, bare }) {
     </div>
     <main class="page">
       ${flash ? `<div class="flash">${esc(flash)}</div>` : ''}
-      <h1>${esc(title)}</h1>
-      ${subtitle ? `<p class="subtitle">${esc(subtitle)}</p>` : ''}
+      ${noHeader ? '' : `<h1>${esc(title)}</h1>${subtitle ? `<p class="subtitle">${esc(subtitle)}</p>` : ''}`}
       ${body}
       <div class="print-footer">
         Printed by <strong>${esc(userName)}</strong>
@@ -1505,7 +1504,7 @@ app.get('/', (req, res) => {
 });
 
 // ---------- members ----------
-function selectMembers({ q, status }) {
+function selectMembers({ q, status, classId }) {
   const where = ['m.deleted_at IS NULL'];
   const params = {};
   if (q) {
@@ -1514,45 +1513,155 @@ function selectMembers({ q, status }) {
     params.q = `%${q}%`;
   }
   if (status) { where.push(`m.membership_status = @status`); params.status = status; }
+  if (classId) { where.push(`m.bible_class_id = @classId`); params.classId = Number(classId); }
   const sql = `
     SELECT m.member_id, m.external_id, m.first_name, m.last_name, m.email, m.mobile_phone,
-           m.membership_status, mn.name AS bible_class
+           m.membership_status, m.photo_filename, mn.name AS bible_class
     FROM members m LEFT JOIN ministries mn ON mn.ministry_id = m.bible_class_id
     WHERE ${where.join(' AND ')}
     ORDER BY m.last_name, m.first_name`;
   return db.prepare(sql).all(params);
 }
 
+const MEMBER_STATUS_LABELS = {
+  visitor: 'Visitor', regular: 'Regular', member: 'Member', inactive: 'Inactive',
+  transferred: 'Transferred', deceased: 'Deceased', other: 'Other',
+};
+const ICON_EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const ICON_PENCIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>';
+const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+
+function memberAvatar(m) {
+  return m.photo_filename
+    ? `<img class="m-avatar" src="/photos/${esc(m.photo_filename)}" alt="">`
+    : `<span class="m-avatar m-avatar-fallback">${esc(initials(m.first_name + ' ' + m.last_name))}</span>`;
+}
+
 app.get('/members', (req, res) => {
   const q = (req.query.q || '').trim();
   const status = (req.query.status || '').trim();
-  const rows = selectMembers({ q, status });
-  const statuses = ['', 'visitor', 'regular', 'member', 'inactive', 'transferred', 'deceased'];
-  const opts = statuses.map((s) =>
-    `<option value="${s}" ${s === status ? 'selected' : ''}>${s || 'Any status'}</option>`).join('');
-  const exportQs = new URLSearchParams({ q, status }).toString();
-  const body = `
-    <form class="filters" method="get">
-      <input type="search" name="q" placeholder="Search name, ID, email, phone" value="${esc(q)}">
-      <select name="status">${opts}</select>
-      <button type="submit">Filter</button>
-      ${res.locals.isAdmin ? '<a class="btn" href="/members/new">+ New member</a>' : ''}
-      <details class="export">
-        <summary>⋯ Export</summary>
-        <a href="/members.csv?${exportQs}">Export CSV</a>
-        <a href="javascript:window.print()">Print / PDF</a>
-      </details>
-    </form>
-    ${table(['Member ID', 'Name', 'Bible class', 'Status', 'Email', 'Phone'],
-      rows.map((r) => [
-        esc(r.external_id) || '—',
-        `<a href="/members/${r.member_id}">${esc(r.first_name)} ${esc(r.last_name)}</a>`,
-        esc(r.bible_class) || '—',
-        `<span class="pill pill-${esc(r.membership_status)}">${esc(r.membership_status)}</span>`,
-        esc(r.email),
-        esc(r.mobile_phone),
-      ]))}`;
-  res.page({ title: `Members (${rows.length})`, active: '/members', body });
+  const classId = (req.query.class || '').trim();
+  const rows = selectMembers({ q, status, classId });
+  const isAdmin = res.locals.isAdmin;
+
+  const totalMembers = db.prepare(`SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL`).get().c;
+  const activeMembers = db.prepare(
+    `SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL AND membership_status IN ('member','regular')`).get().c;
+  const newMembers = db.prepare(
+    `SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL AND join_date >= date('now','-30 days')`).get().c;
+
+  const classes = loadBibleClasses();
+  const classOpts = `<option value="">All Bible classes</option>` + classes.map((c) =>
+    `<option value="${c.ministry_id}" ${String(c.ministry_id) === classId ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  const statuses = ['', 'visitor', 'regular', 'member', 'inactive', 'transferred', 'deceased', 'other'];
+  const statusOpts = statuses.map((s) =>
+    `<option value="${s}" ${s === status ? 'selected' : ''}>${s ? MEMBER_STATUS_LABELS[s] : 'All statuses'}</option>`).join('');
+  const exportQs = new URLSearchParams({ q, status, class: classId }).toString();
+
+  const hero = `
+    <div class="page-hero">
+      <div class="hero-text">
+        <h1>Members Directory</h1>
+        <p>Manage and view all church members in one place. Search, filter, and act on member records.</p>
+      </div>
+    </div>`;
+
+  const statCard = (cls, icon, value, label) => `
+    <div class="hero-stat ${cls}">
+      <div class="hs-ico">${icon}</div>
+      <div><div class="hs-value">${value}</div><div class="hs-label">${label}</div></div>
+    </div>`;
+  const statsRow = `
+    <div class="members-stats">
+      <div class="hero-stat-group">
+        ${statCard('gold', '👥', totalMembers.toLocaleString(), 'Total Members')}
+        ${statCard('green', '✓', activeMembers.toLocaleString(), 'Active')}
+        ${statCard('blue', '＋', newMembers.toLocaleString(), 'New (30d)')}
+      </div>
+      <div class="hero-actions">
+        ${isAdmin ? `<a class="btn" href="/members/new">👤＋ Add New Member</a>` : ''}
+        <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>
+      </div>
+    </div>`;
+
+  const filters = `
+    <div class="card filters-card">
+      <div class="card-head"><h2>🔎 Search &amp; Filters</h2></div>
+      <form class="filter-bar" method="get">
+        <div class="search-field">
+          <span>🔍</span>
+          <input type="search" name="q" placeholder="Search members by name, ID, email or phone…" value="${esc(q)}">
+        </div>
+        <select name="class" aria-label="Filter by Bible class">${classOpts}</select>
+        <select name="status" aria-label="Filter by status">${statusOpts}</select>
+        <button type="submit">Filter</button>
+        <details class="export">
+          <summary>⋯ Export</summary>
+          <a href="/members.csv?${exportQs}">Export CSV</a>
+          <a href="javascript:window.print()">Print / PDF</a>
+        </details>
+      </form>
+    </div>`;
+
+  const rowHtml = rows.map((r) => {
+    const id = r.member_id;
+    const phone = esc(r.mobile_phone);
+    const email = esc(r.email);
+    const actions = `
+      <div class="row-actions">
+        <a class="icon-btn view" href="/members/${id}" title="View" aria-label="View">${ICON_EYE}</a>
+        ${isAdmin ? `<a class="icon-btn edit" href="/members/${id}#edit" title="Edit" aria-label="Edit">${ICON_PENCIL}</a>
+        <form method="post" action="/members/${id}/delete" onsubmit="return confirm('Archive this member? They will be hidden but not permanently deleted.')">
+          <button class="icon-btn del" type="submit" title="Archive" aria-label="Archive">${ICON_TRASH}</button>
+        </form>` : ''}
+      </div>`;
+    return `<tr>
+      <td data-label="Name">
+        <div class="m-name-cell">
+          ${memberAvatar(r)}
+          <div>
+            <a class="m-name" href="/members/${id}">${esc(r.first_name)} ${esc(r.last_name)}</a>
+            <div class="m-sub">${esc(r.external_id) || '—'}</div>
+          </div>
+        </div>
+      </td>
+      <td data-label="Contact">
+        <div class="m-contact">
+          ${phone ? `<div><span class="ci">📞</span> <a href="tel:${phone}">${phone}</a></div>` : '<div class="muted-text">No phone</div>'}
+          ${email ? `<div><span class="ci">✉</span> <a href="mailto:${email}">${email}</a></div>` : ''}
+        </div>
+      </td>
+      <td data-label="Bible class">${esc(r.bible_class) || '—'}</td>
+      <td data-label="Status"><span class="pill pill-${esc(r.membership_status)}">${esc(MEMBER_STATUS_LABELS[r.membership_status] || r.membership_status)}</span></td>
+      <td data-label="Actions">${actions}</td>
+    </tr>`;
+  }).join('');
+
+  const list = `
+    <div class="card list-card">
+      <div class="card-head list-head">
+        <h2>👥 Members List</h2>
+        <div class="list-head-right">
+          <span class="count-badge">${rows.length} members</span>
+          <span class="list-note">Results update as you search and filter</span>
+        </div>
+      </div>
+      ${rows.length ? `<table class="data-table members-table">
+        <thead><tr><th>Name</th><th>Contact</th><th>Bible class</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${rowHtml}</tbody>
+      </table>` : `<div class="empty-state">
+        <div class="empty-ico">👥</div>
+        <p>No members match your search.</p>
+        ${isAdmin ? '<a class="btn" href="/members/new">👤＋ Add New Member</a>' : ''}
+      </div>`}
+    </div>`;
+
+  res.page({
+    title: 'Members',
+    active: '/members',
+    noHeader: true,
+    body: `${hero}${statsRow}${filters}${list}`,
+  });
 });
 
 app.get('/members.csv', (req, res) => {
