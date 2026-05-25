@@ -1,6 +1,12 @@
 church.db
 demo.db
+dev.db
+*.db-wal
+*.db-shm
 *.db-journal
+*.restore-pending
+*.pre-restore-*
+dev-backups/
 node_modules/
 package-lock.json
 # macOS Finder metadata — never commit
