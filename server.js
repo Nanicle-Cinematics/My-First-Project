@@ -926,6 +926,53 @@ function flashHtml(flash, flashType) {
   const role = type === 'error' ? 'alert' : 'status';
   return `<div class="flash${type ? ` flash-${type}` : ''}" role="${role}" aria-live="polite">${esc(flash)}</div>`;
 }
+// ---------- shared UI components (directory layout) ----------
+// Gradient page banner. Title/subtitle are escaped.
+function pageHero(title, subtitle) {
+  return `<div class="page-hero"><div class="hero-text">
+    <h1>${esc(title)}</h1>${subtitle ? `<p>${esc(subtitle)}</p>` : ''}
+  </div></div>`;
+}
+// One colored summary card. `value` may be pre-escaped HTML; `label` is escaped.
+function heroStat(cls, icon, value, label) {
+  return `<div class="hero-stat ${cls}">
+    <div class="hs-ico">${icon}</div>
+    <div><div class="hs-value">${value}</div><div class="hs-label">${esc(label)}</div></div>
+  </div>`;
+}
+// Row of summary cards + optional right-aligned action buttons (raw HTML).
+function statsRow(stats, actions = '') {
+  return `<div class="members-stats">
+    <div class="hero-stat-group">${stats.map((s) => heroStat(s.cls, s.icon, s.value, s.label)).join('')}</div>
+    ${actions ? `<div class="hero-actions">${actions}</div>` : ''}
+  </div>`;
+}
+// GET search/filter card. `controls` is raw HTML for any extra <select>s.
+function filterCard({ q = '', placeholder = 'Search…', controls = '', name = 'q' }) {
+  return `<div class="card filters-card">
+    <div class="card-head"><h2>🔎 Search &amp; Filters</h2></div>
+    <form class="filter-bar" method="get">
+      <div class="search-field"><span>🔍</span>
+        <input type="search" name="${esc(name)}" placeholder="${esc(placeholder)}" value="${esc(q)}"></div>
+      ${controls}
+      <button type="submit">Filter</button>
+    </form>
+  </div>`;
+}
+// Card wrapper for a list/table with a count badge and optional note. `inner` is raw HTML.
+function listCard({ title, count, countLabel = 'items', note = '', inner }) {
+  return `<div class="card list-card">
+    <div class="card-head list-head">
+      <h2>${title}</h2>
+      <div class="list-head-right">
+        ${count != null ? `<span class="count-badge">${count} ${esc(countLabel)}</span>` : ''}
+        ${note ? `<span class="list-note">${esc(note)}</span>` : ''}
+      </div>
+    </div>
+    ${inner}
+  </div>`;
+}
+
 function layout({ title, subtitle, body, active, flash, flashType, user, bare, noHeader }) {
   if (bare) {
     return `<!doctype html>
@@ -1699,50 +1746,24 @@ app.get('/members', (req, res) => {
     `<option value="${s}" ${s === status ? 'selected' : ''}>${s ? MEMBER_STATUS_LABELS[s] : 'All statuses'}</option>`).join('');
   const exportQs = new URLSearchParams({ q, status, class: classId }).toString();
 
-  const hero = `
-    <div class="page-hero">
-      <div class="hero-text">
-        <h1>Members Directory</h1>
-        <p>Manage and view all church members in one place. Search, filter, and act on member records.</p>
-      </div>
-    </div>`;
-
-  const statCard = (cls, icon, value, label) => `
-    <div class="hero-stat ${cls}">
-      <div class="hs-ico">${icon}</div>
-      <div><div class="hs-value">${value}</div><div class="hs-label">${label}</div></div>
-    </div>`;
-  const statsRow = `
-    <div class="members-stats">
-      <div class="hero-stat-group">
-        ${statCard('gold', '👥', totalMembers.toLocaleString(), 'Total Members')}
-        ${statCard('green', '✓', activeMembers.toLocaleString(), 'Active')}
-        ${statCard('blue', '＋', newMembers.toLocaleString(), 'New (30d)')}
-      </div>
-      <div class="hero-actions">
-        ${isAdmin ? `<a class="btn" href="/members/new">👤＋ Add New Member</a>` : ''}
-        <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>
-      </div>
-    </div>`;
-
-  const filters = `
-    <div class="card filters-card">
-      <div class="card-head"><h2>🔎 Search &amp; Filters</h2></div>
-      <form class="filter-bar" method="get">
-        <div class="search-field">
-          <span>🔍</span>
-          <input type="search" name="q" placeholder="Search members by name, ID, email or phone…" value="${esc(q)}">
-        </div>
-        <select name="class" aria-label="Filter by Bible class">${classOpts}</select>
-        <select name="status" aria-label="Filter by status">${statusOpts}</select>
-        <button type="submit">Filter</button>
-        <details class="export">
-          <summary>⋯ Export</summary>
-          <a href="/members.csv?${exportQs}">Export CSV</a>
-          <a href="javascript:window.print()">Print / PDF</a>
-        </details>
-      </form>
-    </div>`;
+  const hero = pageHero('Members Directory',
+    'Manage and view all church members in one place. Search, filter, and act on member records.');
+  const stats = statsRow([
+    { cls: 'gold', icon: '👥', value: totalMembers.toLocaleString(), label: 'Total Members' },
+    { cls: 'green', icon: '✓', value: activeMembers.toLocaleString(), label: 'Active' },
+    { cls: 'blue', icon: '＋', value: newMembers.toLocaleString(), label: 'New (30d)' },
+  ], `${isAdmin ? `<a class="btn" href="/members/new">👤＋ Add New Member</a>` : ''}
+      <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>`);
+  const filters = filterCard({
+    q, placeholder: 'Search members by name, ID, email or phone…',
+    controls: `<select name="class" aria-label="Filter by Bible class">${classOpts}</select>
+      <select name="status" aria-label="Filter by status">${statusOpts}</select>
+      <details class="export">
+        <summary>⋯ Export</summary>
+        <a href="/members.csv?${exportQs}">Export CSV</a>
+        <a href="javascript:window.print()">Print / PDF</a>
+      </details>`,
+  });
 
   const rowHtml = rows.map((r) => {
     const id = r.member_id;
@@ -1778,16 +1799,10 @@ app.get('/members', (req, res) => {
     </tr>`;
   }).join('');
 
-  const list = `
-    <div class="card list-card">
-      <div class="card-head list-head">
-        <h2>👥 Members List</h2>
-        <div class="list-head-right">
-          <span class="count-badge">${matched} members</span>
-          <span class="list-note">Results update as you search and filter</span>
-        </div>
-      </div>
-      ${rows.length ? `<table class="data-table members-table">
+  const list = listCard({
+    title: '👥 Members List', count: matched, countLabel: 'members',
+    note: 'Results update as you search and filter',
+    inner: rows.length ? `<table class="data-table members-table">
         <thead><tr><th>Name</th><th>Contact</th><th>Bible class</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
       </table>
@@ -1795,14 +1810,14 @@ app.get('/members', (req, res) => {
         <div class="empty-ico">👥</div>
         <p>No members match your search.</p>
         ${isAdmin ? '<a class="btn" href="/members/new">👤＋ Add New Member</a>' : ''}
-      </div>`}
-    </div>`;
+      </div>`,
+  });
 
   res.page({
     title: 'Members',
     active: '/members',
     noHeader: true,
-    body: `${hero}${statsRow}${filters}${list}`,
+    body: `${hero}${stats}${filters}${list}`,
   });
 });
 
@@ -2159,6 +2174,8 @@ app.get('/welfare',     (_, res) => res.redirect('/organizations'));
 
 // ---------- bible classes (formerly ministries) ----------
 app.get('/bible-classes', (req, res) => {
+  const q = (req.query.q || '').trim();
+  const isAdmin = res.locals.isAdmin;
   const rows = db.prepare(`
     SELECT mn.ministry_id, mn.name, mn.description, mn.meets_on, mn.active,
            ml.first_name || ' ' || ml.last_name AS leader_name,
@@ -2168,47 +2185,74 @@ app.get('/bible-classes', (req, res) => {
     FROM ministries mn
     LEFT JOIN members ml ON ml.member_id = mn.leader_id
     LEFT JOIN organizations o ON o.org_id = mn.org_id
-    ORDER BY mn.name`).all();
+    ${q ? 'WHERE mn.name LIKE @q' : ''}
+    ORDER BY mn.name`).all(q ? { q: `%${q}%` } : {});
   const orgs = loadOrganizations();
   const allMembers = db.prepare(
     `SELECT member_id, first_name || ' ' || last_name AS name FROM members
-       WHERE deleted_at IS NULL ORDER BY last_name`
-  ).all();
+       WHERE deleted_at IS NULL ORDER BY last_name`).all();
   const orgOpts = (selected) => '<option value="">— none —</option>' +
     orgs.map((o) => `<option value="${o.org_id}" ${o.org_id === selected ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
   const memberOpts = (selected) => '<option value="">— none —</option>' +
     allMembers.map((m) => `<option value="${m.member_id}" ${m.member_id === selected ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
 
-  const newForm = res.locals.isAdmin
-    ? `<h2>Add a Bible class</h2>
-       <form class="form" method="post" action="/bible-classes">
-         <label>Bible class<input name="name" required></label>
-         <label>Leader<select name="leader_id">${memberOpts()}</select></label>
-         <label>Organization<select name="org_id">${orgOpts()}</select></label>
-         <label>Meets<input name="meets_on" placeholder="e.g. Sunday 8am"></label>
-         <label class="wide">Description<input name="description"></label>
-         <div class="actions"><button type="submit">Add</button></div>
-       </form>` : '';
+  const totalClasses = db.prepare(`SELECT COUNT(*) c FROM ministries`).get().c;
+  const enrolled = db.prepare(`SELECT COUNT(*) c FROM members WHERE bible_class_id IS NOT NULL AND deleted_at IS NULL`).get().c;
+  const withLeader = db.prepare(`SELECT COUNT(*) c FROM ministries WHERE leader_id IS NOT NULL`).get().c;
 
-  const tableRows = rows.map((r) => [
-    `<strong>${esc(r.name)}</strong>${r.description ? `<div class="muted-text" style="font-size:0.8rem">${esc(r.description)}</div>` : ''}`,
-    r.leader_id ? `<a href="/members/${r.leader_id}">${esc(r.leader_name)}</a>` : '—',
-    r.org_id ? esc(r.org_name) : '—',
-    esc(r.meets_on) || '—',
-    `<a href="/members?q=${encodeURIComponent('')}&class=${r.ministry_id}">${r.member_count}</a>`,
-    res.locals.isAdmin
-      ? `<form method="post" action="/bible-classes/${r.ministry_id}" class="inline">
-           <select name="leader_id">${memberOpts(r.leader_id)}</select>
-           <select name="org_id">${orgOpts(r.org_id)}</select>
-           <button type="submit">Save</button>
-         </form>` : '',
-  ]);
+  const hero = pageHero('Bible Classes', 'Small groups and classes — their leaders, organizations and membership.');
+  const stats = statsRow([
+    { cls: 'gold', icon: '📖', value: totalClasses.toLocaleString(), label: 'Bible Classes' },
+    { cls: 'green', icon: '👥', value: enrolled.toLocaleString(), label: 'Members Enrolled' },
+    { cls: 'blue', icon: '★', value: withLeader.toLocaleString(), label: 'Classes with a Leader' },
+  ], isAdmin ? `<a class="btn" href="#add-class">＋ Add Bible Class</a>` : '');
+  const filters = filterCard({ q, placeholder: 'Search Bible classes by name…' });
+
+  const rowHtml = rows.map((r) => `<tr>
+    <td data-label="Bible class">
+      <div class="m-name-cell">
+        <span class="org-badge">${esc(initials(r.name))}</span>
+        <div>
+          <div class="m-name">${esc(r.name)}</div>
+          <div class="m-sub">${r.description ? esc(r.description) : (r.meets_on ? `Meets ${esc(r.meets_on)}` : '—')}</div>
+        </div>
+      </div>
+    </td>
+    <td data-label="Leader">${r.leader_id ? `<a href="/members/${r.leader_id}">${esc(r.leader_name)}</a>` : '<span class="muted-text">—</span>'}</td>
+    <td data-label="Organization">${r.org_id ? esc(r.org_name) : '<span class="muted-text">—</span>'}</td>
+    <td data-label="Members"><a class="count-badge" href="/members?class=${r.ministry_id}">${r.member_count}</a></td>
+    ${isAdmin ? `<td data-label="Edit">
+      <form method="post" action="/bible-classes/${r.ministry_id}" class="filter-bar" style="gap:0.4rem;margin:0">
+        <select name="leader_id" aria-label="Leader">${memberOpts(r.leader_id)}</select>
+        <select name="org_id" aria-label="Organization">${orgOpts(r.org_id)}</select>
+        <button type="submit">Save</button>
+      </form></td>` : ''}
+  </tr>`).join('');
+
+  const list = listCard({
+    title: '📖 All Bible Classes', count: rows.length, countLabel: 'classes',
+    inner: rows.length ? `<table class="data-table members-table">
+        <thead><tr><th>Bible class</th><th>Leader</th><th>Organization</th><th>Members</th>${isAdmin ? '<th>Edit</th>' : ''}</tr></thead>
+        <tbody>${rowHtml}</tbody>
+      </table>` : '<div class="empty-state"><div class="empty-ico">📖</div><p>No Bible classes match your search.</p></div>',
+  });
+
+  const newForm = isAdmin
+    ? `<details class="form-toggle" id="add-class" style="margin-top:1rem"${q ? '' : ''}>
+         <summary><strong>＋ Add a Bible class</strong></summary>
+         <form class="form" method="post" action="/bible-classes" style="margin-top:0.75rem">
+           <label>Bible class<input name="name" required></label>
+           <label>Leader<select name="leader_id">${memberOpts()}</select></label>
+           <label>Organization<select name="org_id">${orgOpts()}</select></label>
+           <label>Meets<input name="meets_on" placeholder="e.g. Sunday 8am"></label>
+           <label class="wide">Description<input name="description"></label>
+           <div class="actions"><button type="submit">Add</button></div>
+         </form>
+       </details>` : '';
 
   res.page({
-    title: 'Bible Classes', active: '/bible-classes',
-    body: `${newForm}
-      <h2>All Bible classes</h2>
-      ${table(['Bible class', 'Leader', 'Organization', 'Meets', 'Members', res.locals.isAdmin ? 'Actions' : ''], tableRows)}`,
+    title: 'Bible Classes', active: '/bible-classes', noHeader: true,
+    body: `${hero}${stats}${filters}${list}${newForm}`,
   });
 });
 
@@ -2237,19 +2281,54 @@ app.post('/bible-classes/:id', requireAdmin, (req, res) => {
 
 // ---------- events ----------
 app.get('/events', (req, res) => {
+  const q = (req.query.q || '').trim();
+  const isAdmin = res.locals.isAdmin;
   const rows = db.prepare(`
     SELECT e.*, COUNT(a.member_id) attendees
     FROM events e LEFT JOIN attendance a USING(event_id)
-    GROUP BY e.event_id ORDER BY e.starts_at DESC`).all();
-  const body = `
-    ${res.locals.isAdmin ? '<p><a class="btn" href="/events/new">+ New event</a></p>' : ''}
-    ${table(['When', 'Event', 'Location', 'Attendees'],
-      rows.map((r) => [
-        esc(r.starts_at),
-        `<div><span class="evt-type">${esc(r.event_type)}</span></div><a href="/events/${r.event_id}">${esc(r.title)}</a>`,
-        esc(r.location), r.attendees,
-      ]))}`;
-  res.page({ title: 'Events', active: '/events', body });
+    ${q ? 'WHERE e.title LIKE @q' : ''}
+    GROUP BY e.event_id ORDER BY e.starts_at DESC`).all(q ? { q: `%${q}%` } : {});
+
+  const totalEvents = db.prepare(`SELECT COUNT(*) c FROM events`).get().c;
+  const upcoming = db.prepare(`SELECT COUNT(*) c FROM events WHERE starts_at >= datetime('now')`).get().c;
+  const checkins = db.prepare(`SELECT COUNT(*) c FROM attendance`).get().c;
+
+  const hero = pageHero('Events', 'Services, meetings and special events — schedule them and track attendance.');
+  const stats = statsRow([
+    { cls: 'gold', icon: '📅', value: totalEvents.toLocaleString(), label: 'Total Events' },
+    { cls: 'green', icon: '⏭', value: upcoming.toLocaleString(), label: 'Upcoming' },
+    { cls: 'blue', icon: '✓', value: checkins.toLocaleString(), label: 'Check-ins Recorded' },
+  ], isAdmin ? `<a class="btn" href="/events/new">＋ New Event</a>` : '');
+  const filters = filterCard({ q, placeholder: 'Search events by title…' });
+
+  const rowHtml = rows.map((r) => {
+    const d = new Date(r.starts_at.replace(' ', 'T'));
+    const when = Number.isNaN(d.getTime()) ? esc(r.starts_at)
+      : d.toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    return `<tr>
+      <td data-label="When">${when}</td>
+      <td data-label="Event">
+        <div><span class="evt-type">${esc(r.event_type)}</span></div>
+        <a class="m-name" href="/events/${r.event_id}">${esc(r.title)}</a>
+      </td>
+      <td data-label="Location">${esc(r.location) || '<span class="muted-text">—</span>'}</td>
+      <td data-label="Attendees"><span class="count-badge">${r.attendees}</span></td>
+      <td data-label="Actions"><div class="row-actions">
+        <a class="icon-btn view" href="/events/${r.event_id}" title="View" aria-label="View">${ICON_EYE}</a>
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  const list = listCard({
+    title: '📅 Events', count: rows.length, countLabel: 'events',
+    inner: rows.length ? `<table class="data-table members-table">
+        <thead><tr><th>When</th><th>Event</th><th>Location</th><th>Attendees</th><th>Actions</th></tr></thead>
+        <tbody>${rowHtml}</tbody>
+      </table>` : `<div class="empty-state"><div class="empty-ico">📅</div><p>No events match your search.</p>
+        ${isAdmin ? '<a class="btn" href="/events/new">＋ New Event</a>' : ''}</div>`,
+  });
+
+  res.page({ title: 'Events', active: '/events', noHeader: true, body: `${hero}${stats}${filters}${list}` });
 });
 
 app.get('/events/new', requireAdmin, (req, res) => {
@@ -2610,24 +2689,15 @@ app.get('/finance', (req, res) => {
   const dayBornMap = Object.fromEntries(dayBornYtd.map((r) => [r.day_born, r]));
 
   const body = `
+    ${pageHero('Finance', 'Offerings, tithes, harvests and expenses — this year at a glance.')}
     ${financeTabs('/finance')}
-    <div class="stat-grid">
-      <div class="stat"><div class="ico green">↑</div><div>
-        <div class="label">Service Offerings YTD</div>
-        <div class="value">${fmtMoney(services)}</div></div></div>
-      <div class="stat"><div class="ico purple">₵</div><div>
-        <div class="label">Tithes YTD</div>
-        <div class="value">${fmtMoney(tithesYtd)}</div></div></div>
-      <div class="stat"><div class="ico blue">🌾</div><div>
-        <div class="label">Harvests YTD</div>
-        <div class="value">${fmtMoney(harvests)}</div></div></div>
-      <div class="stat"><div class="ico purple">✨</div><div>
-        <div class="label">Special Offerings YTD</div>
-        <div class="value">${fmtMoney(special)}</div></div></div>
-      <div class="stat"><div class="ico orange">🧾</div><div>
-        <div class="label">Expenses YTD</div>
-        <div class="value">${fmtMoney(expenses)}</div></div></div>
-    </div>
+    ${statsRow([
+      { cls: 'gold', icon: '₵', value: fmtMoney(services), label: 'Service Offerings YTD' },
+      { cls: 'green', icon: '🤲', value: fmtMoney(tithesYtd), label: 'Tithes YTD' },
+      { cls: 'blue', icon: '🌾', value: fmtMoney(harvests), label: 'Harvests YTD' },
+      { cls: 'purple', icon: '✨', value: fmtMoney(special), label: 'Special Offerings YTD' },
+      { cls: 'orange', icon: '🧾', value: fmtMoney(expenses), label: 'Expenses YTD' },
+    ])}
     <div class="card" style="margin-bottom:1rem">
       <div class="card-head"><h2>Net YTD</h2><span class="meta">Offerings + Harvests − Expenses</span></div>
       <div class="value" style="font-size:1.8rem;font-weight:700;color:${net >= 0 ? 'var(--pos)' : 'var(--danger)'}">${fmtMoney(net)}</div>
@@ -2657,7 +2727,7 @@ app.get('/finance', (req, res) => {
           return [esc(d), fmtMoney(r.total || 0), r.heads || 0];
         }))}
     </div>`;
-  res.page({ title: 'Finance', active: '/finance', body });
+  res.page({ title: 'Finance', active: '/finance', noHeader: true, body });
 });
 
 // Old "quick add" shortcut — point to the services page.
@@ -4692,46 +4762,20 @@ app.get('/organizations', (req, res) => {
   const leaders = db.prepare(
     `SELECT COUNT(*) c FROM organizations WHERE active=1 AND leader_id IS NOT NULL`).get().c;
 
-  const hero = `
-    <div class="page-hero">
-      <div class="hero-text">
-        <h1>Organizations</h1>
-        <p>Choirs, bands, fellowships and brigades. Browse every group, see its leader and membership, and manage rosters.</p>
-      </div>
-    </div>`;
-
-  const statCard = (cls, icon, value, label) => `
-    <div class="hero-stat ${cls}">
-      <div class="hs-ico">${icon}</div>
-      <div><div class="hs-value">${value}</div><div class="hs-label">${label}</div></div>
-    </div>`;
-  const statsRow = `
-    <div class="members-stats">
-      <div class="hero-stat-group">
-        ${statCard('gold', '♫', orgCount.toLocaleString(), 'Organizations')}
-        ${statCard('green', '👥', enrolled.toLocaleString(), 'Members Enrolled')}
-        ${statCard('blue', '★', leaders.toLocaleString(), 'Groups with a Leader')}
-      </div>
-      <div class="hero-actions">
-        ${isAdmin ? `<a class="btn" href="/organizations/new">＋ Add Organization</a>` : ''}
-        <a class="btn ghost" href="/members">👥 View Members</a>
-      </div>
-    </div>`;
-
+  const hero = pageHero('Organizations',
+    'Choirs, bands, fellowships and brigades. Browse every group, see its leader and membership, and manage rosters.');
+  const stats = statsRow([
+    { cls: 'gold', icon: '♫', value: orgCount.toLocaleString(), label: 'Organizations' },
+    { cls: 'green', icon: '👥', value: enrolled.toLocaleString(), label: 'Members Enrolled' },
+    { cls: 'blue', icon: '★', value: leaders.toLocaleString(), label: 'Groups with a Leader' },
+  ], `${isAdmin ? `<a class="btn" href="/organizations/new">＋ Add Organization</a>` : ''}
+      <a class="btn ghost" href="/members">👥 View Members</a>`);
   const sortOpts = [['', 'Sort: A–Z'], ['members', 'Sort: Most members']]
     .map(([v, l]) => `<option value="${v}" ${v === sort ? 'selected' : ''}>${l}</option>`).join('');
-  const filters = `
-    <div class="card filters-card">
-      <div class="card-head"><h2>🔎 Search &amp; Filters</h2></div>
-      <form class="filter-bar" method="get">
-        <div class="search-field">
-          <span>🔍</span>
-          <input type="search" name="q" placeholder="Search organizations by name…" value="${esc(q)}">
-        </div>
-        <select name="sort" aria-label="Sort organizations">${sortOpts}</select>
-        <button type="submit">Filter</button>
-      </form>
-    </div>`;
+  const filters = filterCard({
+    q, placeholder: 'Search organizations by name…',
+    controls: `<select name="sort" aria-label="Sort organizations">${sortOpts}</select>`,
+  });
 
   const rowHtml = orgs.map((o) => {
     const sub = o.meets_on ? `Meets ${esc(o.meets_on)}` : (o.description ? esc(o.description) : '—');
@@ -4758,28 +4802,22 @@ app.get('/organizations', (req, res) => {
     </tr>`;
   }).join('');
 
-  const list = `
-    <div class="card list-card">
-      <div class="card-head list-head">
-        <h2>♫ Organizations List</h2>
-        <div class="list-head-right">
-          <span class="count-badge">${orgs.length} groups</span>
-          <span class="list-note">Results update as you search and filter</span>
-        </div>
-      </div>
-      ${orgs.length ? `<table class="data-table members-table">
+  const list = listCard({
+    title: '♫ Organizations List', count: orgs.length, countLabel: 'groups',
+    note: 'Results update as you search and filter',
+    inner: orgs.length ? `<table class="data-table members-table">
         <thead><tr><th>Organization</th><th>Leader</th><th>Members</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
       </table>` : `<div class="empty-state">
         <div class="empty-ico">♫</div>
         <p>No organizations match your search.</p>
         ${isAdmin ? '<a class="btn" href="/organizations/new">＋ Add Organization</a>' : ''}
-      </div>`}
-    </div>`;
+      </div>`,
+  });
 
   res.page({
     title: 'Organizations', active: '/organizations', noHeader: true,
-    body: `${hero}${statsRow}${filters}${list}`,
+    body: `${hero}${stats}${filters}${list}`,
   });
 });
 
@@ -4850,23 +4888,13 @@ app.get('/organizations/:id', (req, res) => {
 
   const body = `
     <p><a href="/organizations">← Back to organizations</a></p>
-    <div class="page-hero">
-      <div class="hero-text">
-        <h1>${esc(o.name)}</h1>
-        <p>${o.description ? esc(o.description) : 'Group roster and membership.'}</p>
-      </div>
-    </div>
-    <div class="members-stats">
-      <div class="hero-stat-group">
-        <div class="hero-stat gold"><div class="hs-ico">👥</div><div><div class="hs-value">${members.length}</div><div class="hs-label">Members</div></div></div>
-        <div class="hero-stat green"><div class="hs-ico">★</div><div><div class="hs-value">${o.leader_id ? esc(o.leader_name) : '—'}</div><div class="hs-label">Leader</div></div></div>
-        <div class="hero-stat blue"><div class="hs-ico">📅</div><div><div class="hs-value">${o.meets_on ? esc(o.meets_on) : '—'}</div><div class="hs-label">Meets</div></div></div>
-      </div>
-    </div>
-    <div class="card list-card">
-      <div class="card-head list-head"><h2>👥 Roster</h2><span class="count-badge">${members.length} members</span></div>
-      ${roster}
-    </div>
+    ${pageHero(o.name, o.description || 'Group roster and membership.')}
+    ${statsRow([
+      { cls: 'gold', icon: '👥', value: members.length, label: 'Members' },
+      { cls: 'green', icon: '★', value: o.leader_id ? esc(o.leader_name) : '—', label: 'Leader' },
+      { cls: 'blue', icon: '📅', value: o.meets_on ? esc(o.meets_on) : '—', label: 'Meets' },
+    ])}
+    ${listCard({ title: '👥 Roster', count: members.length, countLabel: 'members', inner: roster })}
     ${manage}`;
   res.page({ title: o.name, active: '/organizations', noHeader: true, body });
 });
@@ -4920,11 +4948,12 @@ app.post('/organizations/:id/archive', requireAdmin, (req, res) => {
 
 // ---------- inventory (register of physical items the church owns) ----------
 app.get('/inventory', (req, res) => {
+  const q = (req.query.q || '').trim();
   const items = db.prepare(`
     SELECT item_id, name, quantity, category, notes
     FROM inventory_items
-    WHERE deleted_at IS NULL
-    ORDER BY COALESCE(category, 'zzz'), name`).all();
+    WHERE deleted_at IS NULL ${q ? 'AND name LIKE @q' : ''}
+    ORDER BY COALESCE(category, 'zzz'), name`).all(q ? { q: `%${q}%` } : {});
 
   const grouped = {};
   for (const it of items) {
@@ -4974,13 +5003,23 @@ app.get('/inventory', (req, res) => {
           </table>
         </section>`;
       }).join('')
-    : '<p class="muted-text">No inventory items yet.</p>';
+    : '<div class="empty-state"><div class="empty-ico">📦</div><p>No inventory items match your search.</p></div>';
+
+  const totals = db.prepare(`SELECT COUNT(*) items, COALESCE(SUM(quantity),0) qty,
+    COUNT(DISTINCT COALESCE(NULLIF(TRIM(category),''),'Uncategorized')) cats
+    FROM inventory_items WHERE deleted_at IS NULL`).get();
+  const hero = pageHero('Inventory', 'Register of physical items the church owns.');
+  const stats = statsRow([
+    { cls: 'gold', icon: '📦', value: Number(totals.items).toLocaleString(), label: 'Items' },
+    { cls: 'green', icon: '🗂', value: Number(totals.cats).toLocaleString(), label: 'Categories' },
+    { cls: 'blue', icon: '#', value: Number(totals.qty).toLocaleString(), label: 'Total Quantity' },
+  ]);
+  const filters = filterCard({ q, placeholder: 'Search items by name…' });
 
   res.page({
     title: 'Inventory',
-    subtitle: 'Register of physical items the church owns.',
-    active: '/inventory',
-    body: `${newForm}${sections}`,
+    active: '/inventory', noHeader: true,
+    body: `${hero}${stats}${filters}${newForm}${sections}`,
   });
 });
 

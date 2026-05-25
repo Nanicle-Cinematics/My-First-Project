@@ -1150,9 +1150,12 @@ form.inline button { padding: 0.4rem 0.7rem; font-size: 0.85rem; height: 34px; }
   border-radius: 16px; padding: 1.05rem 1.25rem; min-width: 160px; flex: 1;
   color: #fff; box-shadow: var(--shadow);
 }
-.hero-stat.gold  { background: linear-gradient(135deg, #e2b73a, #c8920f); color: var(--gold-ink); }
-.hero-stat.green { background: linear-gradient(135deg, #22b765, #15924c); }
-.hero-stat.blue  { background: linear-gradient(135deg, #3a82d6, #1d4e89); }
+.hero-stat.gold   { background: linear-gradient(135deg, #e2b73a, #c8920f); color: var(--gold-ink); }
+.hero-stat.green  { background: linear-gradient(135deg, #22b765, #15924c); }
+.hero-stat.blue   { background: linear-gradient(135deg, #3a82d6, #1d4e89); }
+.hero-stat.purple { background: linear-gradient(135deg, #8b6cff, #6240e0); }
+.hero-stat.orange { background: linear-gradient(135deg, #f0a23a, #d97706); }
+.hero-stat .hs-value { word-break: break-word; }
 .hs-ico {
   width: 46px; height: 46px; border-radius: 50%;
   background: rgba(255, 255, 255, 0.22);
