@@ -237,6 +237,17 @@ test('events (extracted route module) list/create/detail work', async () => {
   assert.strictEqual(cal.status, 200);
 });
 
+test('reports + communications (extracted modules) render and post', async () => {
+  assert.strictEqual((await get('/reports')).status, 200);
+  assert.strictEqual((await get('/reports/financial')).status, 200);
+  const comms = await get('/communications');
+  assert.strictEqual(comms.status, 200);
+  assert.strictEqual((await get('/communications/broadcast')).status, 200);
+  const posted = await post('/communications', { title: 'Welcome', body: 'Service 9am', audience: 'all', _csrf: tokenFrom(comms.body) });
+  assert.strictEqual(posted.status, 302);
+  assert.match((await get('/communications')).body, /Welcome/);
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
