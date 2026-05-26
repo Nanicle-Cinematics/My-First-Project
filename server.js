@@ -603,7 +603,7 @@ app.use((req, res, next) => {
     if (req.path === '/setup') return next();
     return res.redirect('/setup');
   }
-  if (req.path === '/login' || req.path === '/logout') return next();
+  if (req.path === '/login' || req.path === '/logout' || req.path === '/forgot') return next();
   if (!req.session.userId) return res.redirect('/login');
   res.locals.user = db.prepare(
     'SELECT user_id, username, display_name, role FROM users WHERE user_id=? AND deleted_at IS NULL'
@@ -1876,7 +1876,31 @@ app.get('/login', (req, res) => {
       <label class="wide">Username<input name="username" required autofocus></label>
       <label class="wide">Password<input type="password" name="password" required></label>
       <div class="actions"><button type="submit">Sign in</button></div>
+      <p class="auth-aux"><a href="/forgot">Forgot password?</a></p>
     </form>
+  `));
+});
+
+// Forgot-password guidance. Login accounts are managed by the church admin, who
+// resets passwords from Users & Roles — so this points the user there rather
+// than emailing a link (accounts have no email on file).
+app.get('/forgot', (req, res) => {
+  if (req.session.userId) return res.redirect('/');
+  const admin = db.prepare(
+    `SELECT display_name, username FROM users
+       WHERE role='admin' AND deleted_at IS NULL ORDER BY user_id LIMIT 1`).get();
+  const who = admin ? esc(admin.display_name || admin.username) : 'your church administrator';
+  res.send(authPage('Reset your password', `
+    <p class="muted">Passwords for ${esc(CHURCH_NAME)} accounts are reset by your church
+      administrator${admin ? ` (<strong>${who}</strong>)` : ''}.</p>
+    <ol class="forgot-steps">
+      <li>Ask your administrator to open <strong>Users &amp; Roles</strong>.</li>
+      <li>They click <strong>Reset</strong> next to your account and set a new password.</li>
+      <li>Sign in with the new password, then change it from your <strong>Profile</strong>.</li>
+    </ol>
+    <p class="muted">If <em>you</em> are the main administrator and are locked out, restore access
+      from the server (or a database backup) — contact whoever maintains the deployment.</p>
+    <div class="actions"><a class="btn" href="/login">← Back to sign in</a></div>
   `));
 });
 

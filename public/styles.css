@@ -977,6 +977,8 @@ form.inline button { padding: 0.4rem 0.7rem; font-size: 0.85rem; height: 34px; }
   color: var(--accent-dark); font-weight: 600;
 }
 .auth-form { grid-template-columns: 1fr; box-shadow: none; padding: 0; }
+.auth-aux { text-align: center; margin: 0.85rem 0 0; font-size: 0.9rem; }
+.forgot-steps { text-align: left; margin: 0.5rem 0 1rem; padding-left: 1.2rem; line-height: 1.65; }
 
 /* Red asterisk injected by global JS for every [required] input. */
 .req-star { color: var(--danger); font-weight: 700; margin: 0 0.15rem; }
