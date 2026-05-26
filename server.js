@@ -484,25 +484,28 @@ runOnce('users_role_add_editor_v1', () => {
   })();
   if (allowsEditor) return;
   db.pragma('foreign_keys = OFF');
-  const tx = db.transaction(() => {
-    db.exec(`
-      CREATE TABLE users_new (
-        user_id       INTEGER PRIMARY KEY,
-        username      TEXT    NOT NULL UNIQUE,
-        password_hash TEXT    NOT NULL,
-        display_name  TEXT,
-        role          TEXT    NOT NULL DEFAULT 'admin' CHECK (role IN ('admin','editor','viewer')),
-        created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        deleted_at    TEXT
-      );
-      INSERT INTO users_new (user_id, username, password_hash, display_name, role, created_at, deleted_at)
-        SELECT user_id, username, password_hash, display_name, role, created_at, deleted_at FROM users;
-      DROP TABLE users;
-      ALTER TABLE users_new RENAME TO users;
-    `);
-  });
-  tx();
-  db.pragma('foreign_keys = ON');
+  try {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE users_new (
+          user_id       INTEGER PRIMARY KEY,
+          username      TEXT    NOT NULL UNIQUE,
+          password_hash TEXT    NOT NULL,
+          display_name  TEXT,
+          role          TEXT    NOT NULL DEFAULT 'admin' CHECK (role IN ('admin','editor','viewer')),
+          created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          deleted_at    TEXT
+        );
+        INSERT INTO users_new (user_id, username, password_hash, display_name, role, created_at, deleted_at)
+          SELECT user_id, username, password_hash, display_name, role, created_at, deleted_at FROM users;
+        DROP TABLE users;
+        ALTER TABLE users_new RENAME TO users;
+      `);
+    })();
+  } finally {
+    // Always restore FK enforcement, even if the rebuild throws.
+    db.pragma('foreign_keys = ON');
+  }
 });
 
 // Households are no longer used — clean them up if anything is left.
