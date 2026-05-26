@@ -200,6 +200,16 @@ test('inventory (extracted route module) can add and list an item', async () => 
   assert.match(after.body, /Instruments/);
 });
 
+test('bible classes (extracted route module) can add and list a class', async () => {
+  const page = await get('/bible-classes');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Bible Classes/);
+  const created = await post('/bible-classes', { name: 'Adonai Class', _csrf: tokenFrom(page.body) });
+  assert.strictEqual(created.status, 302);
+  const after = await get('/bible-classes');
+  assert.match(after.body, /Adonai Class/);
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
