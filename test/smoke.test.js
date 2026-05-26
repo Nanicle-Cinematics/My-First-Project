@@ -224,6 +224,19 @@ test('organizations (extracted route module) lists, creates, and shows detail', 
   assert.match(detail.body, /Roster/);
 });
 
+test('events (extracted route module) list/create/detail work', async () => {
+  const form = await get('/events/new');
+  const created = await post('/events', {
+    title: 'Sunday Service', event_type: 'service', starts_at: '2026-06-01T09:00', _csrf: tokenFrom(form.body),
+  });
+  assert.strictEqual(created.status, 302);
+  const list = await get('/events');
+  assert.strictEqual(list.status, 200);            // regression guard: list uses ICON_EYE
+  assert.match(list.body, /Sunday Service/);
+  const cal = await get('/events/calendar');
+  assert.strictEqual(cal.status, 200);
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
