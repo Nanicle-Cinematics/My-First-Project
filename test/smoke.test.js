@@ -210,6 +210,20 @@ test('bible classes (extracted route module) can add and list a class', async ()
   assert.match(after.body, /Adonai Class/);
 });
 
+test('organizations (extracted route module) lists, creates, and shows detail', async () => {
+  const page = await get('/organizations');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Organizations/);
+  assert.match(page.body, /Church Choir/);            // seeded default org
+  const created = await post('/organizations', { name: 'Prayer Tower', _csrf: tokenFrom(page.body) });
+  assert.strictEqual(created.status, 302);
+  const after = await get('/organizations');
+  assert.match(after.body, /Prayer Tower/);
+  const detail = await get('/organizations/1');
+  assert.strictEqual(detail.status, 200);
+  assert.match(detail.body, /Roster/);
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
