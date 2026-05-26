@@ -248,6 +248,19 @@ test('reports + communications (extracted modules) render and post', async () =>
   assert.match((await get('/communications')).body, /Welcome/);
 });
 
+test('login page links to /forgot, which renders without auth', async () => {
+  // sign out to an anonymous session
+  const saved = cookie; cookie = undefined;
+  const login = await get('/login');
+  assert.match(login.body, /href="\/forgot"/);
+  assert.match(login.body, /Forgot password\?/);
+  const forgot = await get('/forgot');
+  assert.strictEqual(forgot.status, 200);
+  assert.match(forgot.body, /Reset your password/);
+  assert.match(forgot.body, /Users &amp; Roles/);
+  cookie = saved;
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
