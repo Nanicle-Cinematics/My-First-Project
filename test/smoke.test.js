@@ -188,6 +188,23 @@ test('editor role can edit content but is blocked from owner areas', async () =>
   cookie = owner;
 });
 
+test('unknown route returns a 404 page', async () => {
+  const r = await get('/no/such/page');
+  assert.strictEqual(r.status, 404);
+  assert.match(r.body, /does not exist/);
+});
+
+test('the error handler catches a thrown route error, logs it, shows 500', async () => {
+  const r = await get('/__throw');
+  assert.strictEqual(r.status, 500);
+  assert.match(r.body, /Something went wrong/);
+  // The owner can then see it in the error log.
+  const log = await get('/errors');
+  assert.strictEqual(log.status, 200);
+  assert.match(log.body, /Error Log/);
+  assert.match(log.body, /\/__throw/);
+});
+
 test('security headers are present', async () => {
   const res = await fetch(base + '/login', { redirect: 'manual' });
   assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');

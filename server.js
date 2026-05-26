@@ -31,11 +31,30 @@ function listBackups() {
 async function createBackup() {
   const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
   const name = `church-${stamp}.db`;
-  await db.backup(path.join(BACKUP_DIR, name));
+  const full = path.join(BACKUP_DIR, name);
+  await db.backup(full);
   for (const old of listBackups().slice(BACKUP_KEEP)) {
     try { fs.unlinkSync(path.join(BACKUP_DIR, old.name)); } catch (_) {}
   }
+  await uploadBackupOffsite(full, name);
   return name;
+}
+// Off-site copy: if BACKUP_UPLOAD_URL is set (e.g. a presigned S3/Backblaze PUT
+// URL), upload the backup there. No-op when unset; never throws (logs instead).
+async function uploadBackupOffsite(filePath, name) {
+  const base = process.env.BACKUP_UPLOAD_URL;
+  if (!base) return false;
+  try {
+    const url = base.includes('?') ? base : base.replace(/\/$/, '') + '/' + encodeURIComponent(name);
+    const body = fs.readFileSync(filePath);
+    const res = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    console.log(`Off-site backup uploaded: ${name}`);
+    return true;
+  } catch (e) {
+    console.error('Off-site backup upload failed:', e.message);
+    return false;
+  }
 }
 // Schedule automatic daily backups only when running as a server (not under tests).
 if (require.main === module) {
@@ -145,6 +164,17 @@ addColumnIfMissing('members', 'photo_filename',   `photo_filename TEXT`);
 addColumnIfMissing('members', 'emergency_contact_name',     `emergency_contact_name TEXT`);
 addColumnIfMissing('members', 'emergency_contact_phone',    `emergency_contact_phone TEXT`);
 addColumnIfMissing('members', 'emergency_contact_relation', `emergency_contact_relation TEXT`);
+
+// Server-side error log (captured by the global error handler) for visibility.
+db.exec(`CREATE TABLE IF NOT EXISTS error_log (
+  error_id    INTEGER PRIMARY KEY,
+  occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  method      TEXT,
+  path        TEXT,
+  message     TEXT,
+  stack       TEXT,
+  user_id     INTEGER
+);`);
 
 // Persistent app state for scheduled jobs (last birthday run, etc.).
 db.exec(`CREATE TABLE IF NOT EXISTS app_state (
@@ -5867,6 +5897,10 @@ app.get('/settings', requireOwner, (req, res) => {
       <p>Manage user accounts and permissions on the <a href="/users">Users &amp; Roles</a> page.</p>
     </div>
     <div class="card">
+      <h2>Maintenance</h2>
+      <p>Snapshots and restore on the <a href="/backups">Backups</a> page · recent server errors in the <a href="/errors">Error Log</a>.</p>
+    </div>
+    <div class="card">
       <h2>SMS &amp; Email</h2>
       <dl class="stats">
         <dt>SMS provider</dt><dd>Arkesel — <span class="pill pill-${ARKESEL_API_KEY ? 'sent' : 'dry_run'}">${ARKESEL_API_KEY ? 'configured' : 'dry-run'}</span></dd>
@@ -6134,6 +6168,62 @@ app.post('/login', (req, res) => {
 
 app.post('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/login'));
+});
+
+// ---------- error tracking ----------
+app.get('/errors', requireOwner, (req, res) => {
+  const rows = db.prepare(`SELECT error_id, occurred_at, method, path, message
+    FROM error_log ORDER BY error_id DESC LIMIT 100`).all();
+  const inner = rows.length
+    ? `<table class="data-table">
+        <thead><tr><th>When</th><th>Request</th><th>Message</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr>
+          <td data-label="When">${esc(r.occurred_at)}</td>
+          <td data-label="Request"><code>${esc(r.method || '')} ${esc(r.path || '')}</code></td>
+          <td data-label="Message">${esc(r.message || '')}</td>
+        </tr>`).join('')}</tbody></table>`
+    : '<div class="empty-state"><div class="empty-ico">✓</div><p>No errors logged. All clear.</p></div>';
+  res.page({
+    title: 'Error Log', active: null, noHeader: true,
+    body: `${pageHero('Error Log', 'The 100 most recent server errors captured by the app.')}
+      ${listCard({ title: '⚠ Recent Errors', count: rows.length, countLabel: 'logged', inner })}`,
+  });
+});
+app.post('/errors/clear', requireOwner, (req, res) => {
+  db.prepare(`DELETE FROM error_log`).run();
+  flash(req, 'Error log cleared.', 'success');
+  res.redirect('/errors');
+});
+
+// Test-only route to exercise the global error handler (never registered in prod).
+if (process.env.NODE_ENV === 'test') {
+  app.get('/__throw', () => { throw new Error('boom for tests'); });
+}
+
+// 404 for unmatched routes.
+app.use((req, res) => {
+  res.status(404).send(layout({
+    title: 'Page not found', user: res.locals.user, active: null,
+    body: '<p>That page does not exist.</p><p><a href="/">Back to dashboard</a></p>',
+  }));
+});
+
+// Global error handler: log to console + error_log, show a friendly page.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', req.method, req.path, '-', err && err.message);
+  try {
+    db.prepare(`INSERT INTO error_log (method, path, message, stack, user_id) VALUES (?, ?, ?, ?, ?)`)
+      .run(req.method, req.path, String(err && err.message || err).slice(0, 500),
+           String(err && err.stack || '').slice(0, 4000),
+           res.locals.user ? res.locals.user.user_id : null);
+  } catch (_) { /* never let logging throw */ }
+  if (res.headersSent) return;
+  res.status(500).send(layout({
+    title: 'Something went wrong', user: res.locals.user, active: null,
+    body: '<p>An unexpected error occurred and has been logged. Please try again.</p>'
+        + '<p><a href="/">Back to dashboard</a></p>',
+  }));
 });
 
 // ---------- start ----------
