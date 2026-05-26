@@ -43,6 +43,9 @@ CREATE TABLE members (
     preferred_channel TEXT   NOT NULL DEFAULT 'none'
                           CHECK (preferred_channel IN ('either','sms_only','email_only','none')),
     unsubscribe_token TEXT  UNIQUE,
+    emergency_contact_name     TEXT,
+    emergency_contact_phone    TEXT,
+    emergency_contact_relation TEXT,
     created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at       TEXT
 );
@@ -225,7 +228,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT    NOT NULL,
     display_name  TEXT,
     role          TEXT    NOT NULL DEFAULT 'admin'
-                  CHECK (role IN ('admin','viewer')),
+                  CHECK (role IN ('admin','editor','viewer')),
     created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at    TEXT
 );
@@ -314,12 +317,56 @@ CREATE TABLE pledges (
     created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE pledge_payments (
+    payment_id     INTEGER PRIMARY KEY,
+    pledge_id      INTEGER NOT NULL REFERENCES pledges(pledge_id) ON DELETE CASCADE,
+    amount         REAL NOT NULL CHECK (amount > 0),
+    paid_on        TEXT NOT NULL,
+    receipt_number TEXT NOT NULL UNIQUE,
+    recorded_by    INTEGER REFERENCES users(user_id),
+    sent_at        TEXT,
+    sent_channel   TEXT,
+    notes          TEXT,
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_pledge_payments_pledge ON pledge_payments(pledge_id);
+
 CREATE TABLE expense_categories (
     expense_cat_id INTEGER PRIMARY KEY,
     category_name  TEXT NOT NULL UNIQUE,
     description    TEXT,
     is_active      INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE inventory_items (
+    item_id     INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    quantity    INTEGER NOT NULL DEFAULT 0,
+    category    TEXT,
+    notes       TEXT,
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TEXT,
+    deleted_at  TEXT
+);
+CREATE INDEX idx_inventory_active ON inventory_items(deleted_at);
+
+CREATE TABLE preaching_plan (
+    plan_id          INTEGER PRIMARY KEY,
+    preach_date      TEXT NOT NULL,
+    service_label    TEXT,
+    member_id        INTEGER REFERENCES members(member_id),
+    preacher_name    TEXT,
+    preacher_phone   TEXT,
+    preacher_email   TEXT,
+    topic            TEXT,
+    scripture        TEXT,
+    notes            TEXT,
+    reminder_sent_at TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TEXT,
+    deleted_at       TEXT
+);
+CREATE INDEX idx_preaching_date ON preaching_plan(preach_date);
 
 INSERT INTO service_types (type_name, description) VALUES
  ('Sunday Service',    'Regular Sunday worship service'),
