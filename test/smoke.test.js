@@ -188,6 +188,72 @@ test('editor role can edit content but is blocked from owner areas', async () =>
   cookie = owner;
 });
 
+test('inventory (extracted route module) can add and list an item', async () => {
+  const page = await get('/inventory');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Inventory/);
+  const token = tokenFrom(page.body);
+  const created = await post('/inventory', { name: 'Keyboard', quantity: '2', category: 'Instruments', _csrf: token });
+  assert.strictEqual(created.status, 302);
+  const after = await get('/inventory');
+  assert.match(after.body, /Keyboard/);
+  assert.match(after.body, /Instruments/);
+});
+
+test('bible classes (extracted route module) can add and list a class', async () => {
+  const page = await get('/bible-classes');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Bible Classes/);
+  const created = await post('/bible-classes', { name: 'Adonai Class', _csrf: tokenFrom(page.body) });
+  assert.strictEqual(created.status, 302);
+  const after = await get('/bible-classes');
+  assert.match(after.body, /Adonai Class/);
+});
+
+test('organizations (extracted route module) lists, creates, and shows detail', async () => {
+  const page = await get('/organizations');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Organizations/);
+  assert.match(page.body, /Church Choir/);            // seeded default org
+  const created = await post('/organizations', { name: 'Prayer Tower', _csrf: tokenFrom(page.body) });
+  assert.strictEqual(created.status, 302);
+  const after = await get('/organizations');
+  assert.match(after.body, /Prayer Tower/);
+  const detail = await get('/organizations/1');
+  assert.strictEqual(detail.status, 200);
+  assert.match(detail.body, /Roster/);
+});
+
+test('events (extracted route module) list/create/detail work', async () => {
+  const form = await get('/events/new');
+  const created = await post('/events', {
+    title: 'Sunday Service', event_type: 'service', starts_at: '2026-06-01T09:00', _csrf: tokenFrom(form.body),
+  });
+  assert.strictEqual(created.status, 302);
+  const list = await get('/events');
+  assert.strictEqual(list.status, 200);            // regression guard: list uses ICON_EYE
+  assert.match(list.body, /Sunday Service/);
+  const cal = await get('/events/calendar');
+  assert.strictEqual(cal.status, 200);
+});
+
+test('unknown route returns a 404 page', async () => {
+  const r = await get('/no/such/page');
+  assert.strictEqual(r.status, 404);
+  assert.match(r.body, /does not exist/);
+});
+
+test('the error handler catches a thrown route error, logs it, shows 500', async () => {
+  const r = await get('/__throw');
+  assert.strictEqual(r.status, 500);
+  assert.match(r.body, /Something went wrong/);
+  // The owner can then see it in the error log.
+  const log = await get('/errors');
+  assert.strictEqual(log.status, 200);
+  assert.match(log.body, /Error Log/);
+  assert.match(log.body, /\/__throw/);
+});
+
 test('security headers are present', async () => {
   const res = await fetch(base + '/login', { redirect: 'manual' });
   assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');

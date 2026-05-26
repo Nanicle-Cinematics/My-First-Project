@@ -4,72 +4,17 @@ const crypto = require('crypto');
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
-const Database = require('better-sqlite3');
 const SqliteStore = require('better-sqlite3-session-store')(session);
+const { db, DB_PATH, RESTORE_PENDING } = require('./lib/db');
+const {
+  givingYears, safeYear, financeYtd, givingByMember,
+  memberGivingForYear: financeMemberGiving,
+} = require('./lib/finance');
+const memberGivingForYear = (memberId, year) => financeMemberGiving(db, memberId, year);
 
-const DB_PATH = process.env.CHURCH_DB || path.join(__dirname, 'church.db');
 const PORT = process.env.PORT || 3000;
 const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
 const PUBLIC_URL  = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
-
-// Apply a staged restore (if any) BEFORE the DB is opened. Restores are staged
-// from the Backups UI and applied here at a clean startup so they can never
-// corrupt a live connection. The current DB is copied aside first as a safety net.
-const RESTORE_PENDING = DB_PATH + '.restore-pending';
-if (fs.existsSync(RESTORE_PENDING)) {
-  try {
-    const fd = fs.openSync(RESTORE_PENDING, 'r');
-    const hdr = Buffer.alloc(16);
-    fs.readSync(fd, hdr, 0, 16, 0);
-    fs.closeSync(fd);
-    if (hdr.toString('latin1', 0, 15) !== 'SQLite format 3') throw new Error('staged file is not a SQLite database');
-    if (fs.existsSync(DB_PATH)) {
-      const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
-      try { fs.copyFileSync(DB_PATH, `${DB_PATH}.pre-restore-${stamp}`); } catch (_) {}
-      for (const ext of ['-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext); } catch (_) {} }
-    }
-    fs.renameSync(RESTORE_PENDING, DB_PATH);
-    console.log('Applied staged database restore.');
-  } catch (e) {
-    console.error('Staged restore failed, ignoring:', e.message);
-    try { fs.unlinkSync(RESTORE_PENDING); } catch (_) {}
-  }
-}
-
-// Auto-create the DB from schema.sql on first boot (so deployments work without shell access).
-// SAFETY: in production, refuse to silently create an empty DB unless ALLOW_DB_INIT=1 is set.
-// This prevents a missing/unmounted volume from being papered over with a fresh empty schema,
-// which would look like total data loss to the user.
-if (!fs.existsSync(DB_PATH)) {
-  const schemaPath = path.join(__dirname, 'schema.sql');
-  if (!fs.existsSync(schemaPath)) {
-    console.error(`Database not found at ${DB_PATH} and schema.sql is missing.`);
-    process.exit(1);
-  }
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DB_INIT !== '1') {
-    console.error(
-      `\nREFUSING TO START: no database at ${DB_PATH}.\n` +
-      `\nThis is production (NODE_ENV=production) and a missing DB usually means\n` +
-      `the volume isn't mounted — not that you actually want a fresh empty schema.\n` +
-      `\nIf you really do want to initialize a brand-new database here, set the\n` +
-      `secret ALLOW_DB_INIT=1, redeploy, then unset it once the DB exists:\n` +
-      `\n  flyctl secrets set ALLOW_DB_INIT=1 -a <app>\n` +
-      `  flyctl deploy -a <app>\n` +
-      `  flyctl secrets unset ALLOW_DB_INIT -a <app>\n`
-    );
-    process.exit(1);
-  }
-  if (process.env.NODE_ENV === 'production') {
-    console.warn(`ALLOW_DB_INIT=1 is set — creating a fresh DB at ${DB_PATH}. Unset this secret after first boot.`);
-  }
-  console.log(`No database at ${DB_PATH}; creating from schema.sql...`);
-  const fresh = new Database(DB_PATH);
-  fresh.exec(fs.readFileSync(schemaPath, 'utf8'));
-  fresh.close();
-}
-
-const db = new Database(DB_PATH);
-db.pragma('foreign_keys = ON');
 
 // ---------- backups ----------
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(path.dirname(DB_PATH), 'backups');
@@ -86,11 +31,30 @@ function listBackups() {
 async function createBackup() {
   const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
   const name = `church-${stamp}.db`;
-  await db.backup(path.join(BACKUP_DIR, name));
+  const full = path.join(BACKUP_DIR, name);
+  await db.backup(full);
   for (const old of listBackups().slice(BACKUP_KEEP)) {
     try { fs.unlinkSync(path.join(BACKUP_DIR, old.name)); } catch (_) {}
   }
+  await uploadBackupOffsite(full, name);
   return name;
+}
+// Off-site copy: if BACKUP_UPLOAD_URL is set (e.g. a presigned S3/Backblaze PUT
+// URL), upload the backup there. No-op when unset; never throws (logs instead).
+async function uploadBackupOffsite(filePath, name) {
+  const base = process.env.BACKUP_UPLOAD_URL;
+  if (!base) return false;
+  try {
+    const url = base.includes('?') ? base : base.replace(/\/$/, '') + '/' + encodeURIComponent(name);
+    const body = fs.readFileSync(filePath);
+    const res = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    console.log(`Off-site backup uploaded: ${name}`);
+    return true;
+  } catch (e) {
+    console.error('Off-site backup upload failed:', e.message);
+    return false;
+  }
 }
 // Schedule automatic daily backups only when running as a server (not under tests).
 if (require.main === module) {
@@ -200,6 +164,17 @@ addColumnIfMissing('members', 'photo_filename',   `photo_filename TEXT`);
 addColumnIfMissing('members', 'emergency_contact_name',     `emergency_contact_name TEXT`);
 addColumnIfMissing('members', 'emergency_contact_phone',    `emergency_contact_phone TEXT`);
 addColumnIfMissing('members', 'emergency_contact_relation', `emergency_contact_relation TEXT`);
+
+// Server-side error log (captured by the global error handler) for visibility.
+db.exec(`CREATE TABLE IF NOT EXISTS error_log (
+  error_id    INTEGER PRIMARY KEY,
+  occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  method      TEXT,
+  path        TEXT,
+  message     TEXT,
+  stack       TEXT,
+  user_id     INTEGER
+);`);
 
 // Persistent app state for scheduled jobs (last birthday run, etc.).
 db.exec(`CREATE TABLE IF NOT EXISTS app_state (
@@ -1940,571 +1915,15 @@ app.get('/ministries',  (_, res) => res.redirect('/bible-classes'));
 app.get('/welfare',     (_, res) => res.redirect('/organizations'));
 
 // ---------- bible classes (formerly ministries) ----------
-app.get('/bible-classes', (req, res) => {
-  const q = (req.query.q || '').trim();
-  const isAdmin = res.locals.isAdmin;
-  const rows = db.prepare(`
-    SELECT mn.ministry_id, mn.name, mn.description, mn.meets_on, mn.active,
-           ml.first_name || ' ' || ml.last_name AS leader_name,
-           ml.member_id AS leader_id,
-           o.org_id, o.name AS org_name,
-           (SELECT COUNT(*) FROM members m WHERE m.bible_class_id=mn.ministry_id AND m.deleted_at IS NULL) AS member_count
-    FROM ministries mn
-    LEFT JOIN members ml ON ml.member_id = mn.leader_id
-    LEFT JOIN organizations o ON o.org_id = mn.org_id
-    ${q ? 'WHERE mn.name LIKE @q' : ''}
-    ORDER BY mn.name`).all(q ? { q: `%${q}%` } : {});
-  const orgs = loadOrganizations();
-  const allMembers = db.prepare(
-    `SELECT member_id, first_name || ' ' || last_name AS name FROM members
-       WHERE deleted_at IS NULL ORDER BY last_name`).all();
-  const orgOpts = (selected) => '<option value="">— none —</option>' +
-    orgs.map((o) => `<option value="${o.org_id}" ${o.org_id === selected ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
-  const memberOpts = (selected) => '<option value="">— none —</option>' +
-    allMembers.map((m) => `<option value="${m.member_id}" ${m.member_id === selected ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
-
-  const totalClasses = db.prepare(`SELECT COUNT(*) c FROM ministries`).get().c;
-  const enrolled = db.prepare(`SELECT COUNT(*) c FROM members WHERE bible_class_id IS NOT NULL AND deleted_at IS NULL`).get().c;
-  const withLeader = db.prepare(`SELECT COUNT(*) c FROM ministries WHERE leader_id IS NOT NULL`).get().c;
-
-  const hero = pageHero('Bible Classes', 'Small groups and classes — their leaders, organizations and membership.');
-  const stats = statsRow([
-    { cls: 'gold', icon: '📖', value: totalClasses.toLocaleString(), label: 'Bible Classes' },
-    { cls: 'green', icon: '👥', value: enrolled.toLocaleString(), label: 'Members Enrolled' },
-    { cls: 'blue', icon: '★', value: withLeader.toLocaleString(), label: 'Classes with a Leader' },
-  ], isAdmin ? `<a class="btn" href="#add-class">＋ Add Bible Class</a>` : '');
-  const filters = filterCard({ q, placeholder: 'Search Bible classes by name…' });
-
-  const rowHtml = rows.map((r) => `<tr>
-    <td data-label="Bible class">
-      <div class="m-name-cell">
-        <span class="org-badge">${esc(initials(r.name))}</span>
-        <div>
-          <div class="m-name">${esc(r.name)}</div>
-          <div class="m-sub">${r.description ? esc(r.description) : (r.meets_on ? `Meets ${esc(r.meets_on)}` : '—')}</div>
-        </div>
-      </div>
-    </td>
-    <td data-label="Leader">${r.leader_id ? `<a href="/members/${r.leader_id}">${esc(r.leader_name)}</a>` : '<span class="muted-text">—</span>'}</td>
-    <td data-label="Organization">${r.org_id ? esc(r.org_name) : '<span class="muted-text">—</span>'}</td>
-    <td data-label="Members"><a class="count-badge" href="/members?class=${r.ministry_id}">${r.member_count}</a></td>
-    ${isAdmin ? `<td data-label="Edit">
-      <form method="post" action="/bible-classes/${r.ministry_id}" class="filter-bar" style="gap:0.4rem;margin:0">
-        <select name="leader_id" aria-label="Leader">${memberOpts(r.leader_id)}</select>
-        <select name="org_id" aria-label="Organization">${orgOpts(r.org_id)}</select>
-        <button type="submit">Save</button>
-      </form></td>` : ''}
-  </tr>`).join('');
-
-  const list = listCard({
-    title: '📖 All Bible Classes', count: rows.length, countLabel: 'classes',
-    inner: rows.length ? `<table class="data-table members-table">
-        <thead><tr><th>Bible class</th><th>Leader</th><th>Organization</th><th>Members</th>${isAdmin ? '<th>Edit</th>' : ''}</tr></thead>
-        <tbody>${rowHtml}</tbody>
-      </table>` : '<div class="empty-state"><div class="empty-ico">📖</div><p>No Bible classes match your search.</p></div>',
-  });
-
-  const newForm = isAdmin
-    ? `<details class="form-toggle" id="add-class" style="margin-top:1rem"${q ? '' : ''}>
-         <summary><strong>＋ Add a Bible class</strong></summary>
-         <form class="form" method="post" action="/bible-classes" style="margin-top:0.75rem">
-           <label>Bible class<input name="name" required></label>
-           <label>Leader<select name="leader_id">${memberOpts()}</select></label>
-           <label>Organization<select name="org_id">${orgOpts()}</select></label>
-           <label>Meets<input name="meets_on" placeholder="e.g. Sunday 8am"></label>
-           <label class="wide">Description<input name="description"></label>
-           <div class="actions"><button type="submit">Add</button></div>
-         </form>
-       </details>` : '';
-
-  res.page({
-    title: 'Bible Classes', active: '/bible-classes', noHeader: true,
-    body: `${hero}${stats}${filters}${list}${newForm}`,
-  });
-});
-
-app.post('/bible-classes', requireAdmin, (req, res) => {
-  const b = req.body;
-  if (!b.name) return res.redirect('/bible-classes');
-  db.prepare(`
-    INSERT INTO ministries (name, description, leader_id, org_id, meets_on)
-    VALUES (?, ?, ?, ?, ?)`).run(
-    b.name, b.description || null,
-    b.leader_id ? Number(b.leader_id) : null,
-    b.org_id ? Number(b.org_id) : null,
-    b.meets_on || null
-  );
-  res.redirect('/bible-classes');
-});
-
-app.post('/bible-classes/:id', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  const b = req.body;
-  db.prepare(`UPDATE ministries SET leader_id=?, org_id=? WHERE ministry_id=?`)
-    .run(b.leader_id ? Number(b.leader_id) : null,
-         b.org_id ? Number(b.org_id) : null, id);
-  res.redirect('/bible-classes');
+require('./routes/bible-classes').register(app, {
+  db, esc, initials, pageHero, statsRow, filterCard, listCard, loadOrganizations, requireAdmin,
 });
 
 // ---------- events ----------
-app.get('/events', (req, res) => {
-  const q = (req.query.q || '').trim();
-  const isAdmin = res.locals.isAdmin;
-  const rows = db.prepare(`
-    SELECT e.*, COUNT(a.member_id) attendees
-    FROM events e LEFT JOIN attendance a USING(event_id)
-    ${q ? 'WHERE e.title LIKE @q' : ''}
-    GROUP BY e.event_id ORDER BY e.starts_at DESC`).all(q ? { q: `%${q}%` } : {});
-
-  const totalEvents = db.prepare(`SELECT COUNT(*) c FROM events`).get().c;
-  const upcoming = db.prepare(`SELECT COUNT(*) c FROM events WHERE starts_at >= datetime('now')`).get().c;
-  const checkins = db.prepare(`SELECT COUNT(*) c FROM attendance`).get().c;
-
-  const hero = pageHero('Events', 'Services, meetings and special events — schedule them and track attendance.');
-  const stats = statsRow([
-    { cls: 'gold', icon: '📅', value: totalEvents.toLocaleString(), label: 'Total Events' },
-    { cls: 'green', icon: '⏭', value: upcoming.toLocaleString(), label: 'Upcoming' },
-    { cls: 'blue', icon: '✓', value: checkins.toLocaleString(), label: 'Check-ins Recorded' },
-  ], `<a class="btn ghost" href="/events/calendar">🗓 Calendar view</a>
-      ${isAdmin ? `<a class="btn" href="/events/new">＋ New Event</a>` : ''}`);
-  const filters = filterCard({ q, placeholder: 'Search events by title…' });
-
-  const rowHtml = rows.map((r) => {
-    const d = new Date(r.starts_at.replace(' ', 'T'));
-    const when = Number.isNaN(d.getTime()) ? esc(r.starts_at)
-      : d.toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-    return `<tr>
-      <td data-label="When">${when}</td>
-      <td data-label="Event">
-        <div><span class="evt-type">${esc(r.event_type)}</span></div>
-        <a class="m-name" href="/events/${r.event_id}">${esc(r.title)}</a>
-      </td>
-      <td data-label="Location">${esc(r.location) || '<span class="muted-text">—</span>'}</td>
-      <td data-label="Attendees"><span class="count-badge">${r.attendees}</span></td>
-      <td data-label="Actions"><div class="row-actions">
-        <a class="icon-btn view" href="/events/${r.event_id}" title="View" aria-label="View">${ICON_EYE}</a>
-      </div></td>
-    </tr>`;
-  }).join('');
-
-  const list = listCard({
-    title: '📅 Events', count: rows.length, countLabel: 'events',
-    inner: rows.length ? `<table class="data-table members-table">
-        <thead><tr><th>When</th><th>Event</th><th>Location</th><th>Attendees</th><th>Actions</th></tr></thead>
-        <tbody>${rowHtml}</tbody>
-      </table>` : `<div class="empty-state"><div class="empty-ico">📅</div><p>No events match your search.</p>
-        ${isAdmin ? '<a class="btn" href="/events/new">＋ New Event</a>' : ''}</div>`,
-  });
-
-  res.page({ title: 'Events', active: '/events', noHeader: true, body: `${hero}${stats}${filters}${list}` });
+require('./routes/events').register(app, {
+  db, esc, pageHero, statsRow, filterCard, listCard, table,
+  requireAdmin, logActivity, layout, flash, PUBLIC_URL, ICON_EYE,
 });
-
-app.get('/events/calendar', (req, res) => {
-  const now = new Date();
-  const month = /^\d{4}-\d{2}$/.test(req.query.month || '')
-    ? req.query.month : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const [y, mo] = month.split('-').map(Number);
-  const first = new Date(y, mo - 1, 1);
-  const startDow = first.getDay();
-  const daysInMonth = new Date(y, mo, 0).getDate();
-  const prev = new Date(y, mo - 2, 1);
-  const next = new Date(y, mo, 1);
-  const fmtMonthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-
-  const events = db.prepare(`SELECT event_id, title, event_type, starts_at FROM events
-    WHERE substr(starts_at,1,7)=? ORDER BY starts_at`).all(month);
-  const byDay = {};
-  for (const e of events) { const d = Number(String(e.starts_at).slice(8, 10)); (byDay[d] = byDay[d] || []).push(e); }
-
-  const cells = [];
-  for (let i = 0; i < startDow; i++) cells.push('<div class="cal-cell blank"></div>');
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dayKey = `${month}-${String(d).padStart(2, '0')}`;
-    const evs = (byDay[d] || []).map((e) =>
-      `<a class="cal-ev" href="/events/${e.event_id}" title="${esc(e.title)}">${esc(e.title)}</a>`).join('');
-    cells.push(`<div class="cal-cell${dayKey === todayKey ? ' today' : ''}"><div class="cal-day">${d}</div>${evs}</div>`);
-  }
-  const dows = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="cal-dow">${d}</div>`).join('');
-  const monthLabel = first.toLocaleString('en-GB', { month: 'long', year: 'numeric' });
-
-  const body = `
-    ${pageHero('Events Calendar', 'A month-at-a-glance view of every scheduled event.')}
-    ${statsRow([{ cls: 'gold', icon: '🗓', value: events.length.toLocaleString(), label: `Events in ${monthLabel}` }],
-      `<a class="btn ghost" href="/events">📋 List view</a>`)}
-    <div class="card">
-      <div class="card-head cal-nav">
-        <a class="btn ghost" href="/events/calendar?month=${fmtMonthKey(prev)}">← ${prev.toLocaleString('en-GB', { month: 'short' })}</a>
-        <h2>${esc(monthLabel)}</h2>
-        <a class="btn ghost" href="/events/calendar?month=${fmtMonthKey(next)}">${next.toLocaleString('en-GB', { month: 'short' })} →</a>
-      </div>
-      <div class="calendar">${dows}${cells.join('')}</div>
-    </div>`;
-  res.page({ title: 'Events Calendar', active: '/events', noHeader: true, body });
-});
-
-app.get('/events/new', requireAdmin, (req, res) => {
-  const body = `
-    <form class="form" method="post" action="/events">
-      <label>Title<input name="title" required></label>
-      <label>Type<select name="event_type">
-        ${['service', 'prayer', 'bible_study', 'outreach', 'youth', 'wedding', 'funeral', 'baptism', 'other']
-          .map((t) => `<option value="${t}">${t}</option>`).join('')}
-      </select></label>
-      <label>Starts<input type="datetime-local" name="starts_at" required></label>
-      <label>Ends<input type="datetime-local" name="ends_at"></label>
-      <label>Location<input name="location"></label>
-      <label class="wide">Notes<textarea name="notes" rows="2"></textarea></label>
-      <div class="actions"><button type="submit">Save</button></div>
-    </form>`;
-  res.page({ title: 'New event', active: '/events', body });
-});
-
-app.post('/events', requireAdmin, (req, res) => {
-  const b = req.body;
-  const info = db.prepare(`
-    INSERT INTO events (title, event_type, starts_at, ends_at, location, notes, checkin_token)
-    VALUES (@title, @event_type, @starts_at, @ends_at, @location, @notes, lower(hex(randomblob(16))))
-  `).run({
-    title: b.title, event_type: b.event_type || 'service',
-    starts_at: b.starts_at.replace('T', ' '),
-    ends_at: b.ends_at ? b.ends_at.replace('T', ' ') : null,
-    location: b.location || null, notes: b.notes || null,
-  });
-  logActivity('event_created', `Event scheduled: ${b.title}`,
-    `/events/${info.lastInsertRowid}`, res.locals.user.user_id);
-  res.redirect(`/events/${info.lastInsertRowid}`);
-});
-
-app.get('/events/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const ev = db.prepare(`SELECT * FROM events WHERE event_id=?`).get(id);
-  if (!ev) return res.status(404).send('Not found');
-  const attendees = db.prepare(`
-    SELECT m.member_id, m.first_name || ' ' || m.last_name AS name, a.checked_in_at
-    FROM attendance a JOIN members m USING(member_id)
-    WHERE a.event_id=? ORDER BY m.last_name`).all(id);
-  const others = db.prepare(`
-    SELECT member_id, first_name || ' ' || last_name AS name
-    FROM members WHERE member_id NOT IN (SELECT member_id FROM attendance WHERE event_id=?)
-      AND membership_status IN ('member','regular','visitor')
-      AND deleted_at IS NULL
-    ORDER BY last_name`).all(id);
-
-  const removeForm = (mid) => res.locals.isAdmin
-    ? `<form method="post" action="/events/${id}/uncheck">
-         <input type="hidden" name="member_id" value="${mid}">
-         <button class="link" type="submit">remove</button>
-       </form>`
-    : '';
-  const attendList = attendees.length
-    ? `<ul class="check-list">${attendees.map((a) =>
-        `<li><a href="/members/${a.member_id}">${esc(a.name)}</a>${removeForm(a.member_id)}</li>`).join('')}</ul>`
-    : '<p>No one checked in yet.</p>';
-
-  const otherOpts = others.map((o) =>
-    `<option value="${o.member_id}">${esc(o.name)}</option>`).join('');
-
-  const checkInPanel = res.locals.isAdmin
-    ? `<h2>Check in</h2>
-       <form method="post" action="/events/${id}/check">
-         <select name="member_id" required><option value="">— pick a member —</option>${otherOpts}</select>
-         <button type="submit">Check in</button>
-       </form>`
-    : '';
-
-  const qrButton = res.locals.isAdmin
-    ? `<p><a class="btn" href="/events/${id}/qr">📱 QR check-in page</a>
-         <a class="btn ghost" href="/checkin/${esc(ev.checkin_token || '')}" target="_blank" rel="noopener">Preview self-check-in</a></p>`
-    : '';
-
-  // RSVPs
-  const RSVP_LABELS = { going: 'Going', maybe: 'Maybe', no: "Can't" };
-  const rsvps = db.prepare(`
-    SELECT r.member_id, r.response, m.first_name || ' ' || m.last_name AS name
-    FROM event_rsvps r JOIN members m USING(member_id)
-    WHERE r.event_id=? AND m.deleted_at IS NULL
-    ORDER BY r.response, m.last_name`).all(id);
-  const rsvpCounts = { going: 0, maybe: 0, no: 0 };
-  for (const r of rsvps) rsvpCounts[r.response] = (rsvpCounts[r.response] || 0) + 1;
-  const rsvpPillClass = { going: 'pill-member', maybe: 'pill-visitor', no: 'pill-inactive' };
-  const rsvpList = rsvps.length
-    ? `<ul class="check-list">${rsvps.map((r) => `<li>
-        <a href="/members/${r.member_id}">${esc(r.name)}</a>
-        <span class="pill ${rsvpPillClass[r.response]}">${RSVP_LABELS[r.response]}</span>
-        ${res.locals.isAdmin ? `<form method="post" action="/events/${id}/rsvp/remove">
-          <input type="hidden" name="member_id" value="${r.member_id}">
-          <button class="link" type="submit">remove</button></form>` : ''}
-      </li>`).join('')}</ul>`
-    : '<p class="muted-text">No responses yet.</p>';
-  const rsvpAdmin = res.locals.isAdmin
-    ? `<form method="post" action="/events/${id}/rsvp" class="filter-bar" style="margin-top:0.6rem">
-         <select name="member_id" required style="flex:1;min-width:180px"><option value="">— pick a member —</option>${otherOpts}</select>
-         <select name="response">${Object.entries(RSVP_LABELS).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
-         <button type="submit">Save RSVP</button>
-       </form>` : '';
-  const rsvpLink = `<p class="muted-text" style="margin-top:0.4rem">Public RSVP link:
-    <a href="/rsvp/${esc(ev.checkin_token || '')}" target="_blank" rel="noopener">/rsvp/${esc(ev.checkin_token || '')}</a></p>`;
-
-  const body = `
-    <p><strong>${esc(ev.event_type)}</strong> · ${esc(ev.starts_at)} · ${esc(ev.location) || ''}</p>
-    ${qrButton}
-    <div class="card" style="margin-bottom:1rem">
-      <div class="card-head"><h2>RSVPs</h2>
-        <span class="meta">✅ ${rsvpCounts.going} going · 🤔 ${rsvpCounts.maybe} maybe · ✖ ${rsvpCounts.no} can't</span></div>
-      ${rsvpList}
-      ${rsvpAdmin}
-      ${res.locals.isAdmin ? rsvpLink : ''}
-    </div>
-    <div class="two-col">
-      <section>
-        <h2>Attendees (${attendees.length})</h2>
-        ${attendList}
-      </section>
-      <section>
-        ${checkInPanel}
-        ${ev.notes ? `<h3>Notes</h3><p>${esc(ev.notes)}</p>` : ''}
-      </section>
-    </div>`;
-  res.page({ title: ev.title, active: '/events', body });
-});
-
-app.post('/events/:id/rsvp', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  const memberId = Number(req.body.member_id);
-  const response = ['going', 'maybe', 'no'].includes(req.body.response) ? req.body.response : 'going';
-  if (memberId) {
-    db.prepare(`INSERT INTO event_rsvps (event_id, member_id, response) VALUES (?, ?, ?)
-      ON CONFLICT(event_id, member_id) DO UPDATE SET response=excluded.response, responded_at=CURRENT_TIMESTAMP`)
-      .run(id, memberId, response);
-  }
-  res.redirect(`/events/${id}`);
-});
-app.post('/events/:id/rsvp/remove', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  db.prepare(`DELETE FROM event_rsvps WHERE event_id=? AND member_id=?`).run(id, Number(req.body.member_id));
-  res.redirect(`/events/${id}`);
-});
-
-// Public self-service RSVP (no login), keyed by the event's token.
-app.get('/rsvp/:token', (req, res) => {
-  const ev = db.prepare(`SELECT * FROM events WHERE checkin_token=?`).get(req.params.token);
-  if (!ev) return res.status(404).send(layout({ title: 'RSVP link not recognized', bare: true, body: '<p>This RSVP link is not valid.</p>' }));
-  const members = db.prepare(`SELECT member_id, first_name || ' ' || last_name AS name FROM members
-    WHERE membership_status IN ('member','regular','visitor') AND deleted_at IS NULL ORDER BY last_name`).all();
-  const opts = members.map((m) => `<option value="${m.member_id}">${esc(m.name)}</option>`).join('');
-  const done = req.query.ok === '1';
-  res.send(layout({
-    title: `RSVP · ${ev.title}`, bare: true,
-    body: `<p class="muted">${esc(ev.event_type)} · ${esc(ev.starts_at)}${ev.location ? ` · ${esc(ev.location)}` : ''}</p>
-      ${done ? '<div class="flash flash-success">Thank you — your response has been recorded.</div>' : ''}
-      <form class="form auth-form" method="post" action="/rsvp/${esc(req.params.token)}">
-        <label class="wide">Your name<select name="member_id" required><option value="">— find your name —</option>${opts}</select></label>
-        <label class="wide">Will you attend?
-          <select name="response"><option value="going">Yes, I'll be there</option><option value="maybe">Maybe</option><option value="no">Can't make it</option></select></label>
-        <div class="actions"><button type="submit">Send RSVP</button></div>
-      </form>`,
-  }));
-});
-app.post('/rsvp/:token', (req, res) => {
-  const ev = db.prepare(`SELECT event_id FROM events WHERE checkin_token=?`).get(req.params.token);
-  if (!ev) return res.status(404).send('Not found');
-  const memberId = Number(req.body.member_id);
-  const response = ['going', 'maybe', 'no'].includes(req.body.response) ? req.body.response : 'going';
-  if (memberId) {
-    db.prepare(`INSERT INTO event_rsvps (event_id, member_id, response) VALUES (?, ?, ?)
-      ON CONFLICT(event_id, member_id) DO UPDATE SET response=excluded.response, responded_at=CURRENT_TIMESTAMP`)
-      .run(ev.event_id, memberId, response);
-  }
-  res.redirect(`/rsvp/${req.params.token}?ok=1`);
-});
-
-app.post('/events/:id/check', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  const member_id = Number(req.body.member_id);
-  if (member_id) {
-    db.prepare(`INSERT OR IGNORE INTO attendance (event_id, member_id) VALUES (?, ?)`).run(id, member_id);
-  }
-  res.redirect(`/events/${id}`);
-});
-app.post('/events/:id/uncheck', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  db.prepare(`DELETE FROM attendance WHERE event_id=? AND member_id=?`).run(id, Number(req.body.member_id));
-  res.redirect(`/events/${id}`);
-});
-
-// ---------- QR check-in (admin display) ----------
-app.get('/events/:id/qr', requireAdmin, async (req, res) => {
-  const id = Number(req.params.id);
-  const ev = db.prepare(`SELECT * FROM events WHERE event_id=?`).get(id);
-  if (!ev) return res.status(404).send('Not found');
-  if (!ev.checkin_token) {
-    db.prepare(`UPDATE events SET checkin_token = lower(hex(randomblob(16))) WHERE event_id=?`).run(id);
-    ev.checkin_token = db.prepare(`SELECT checkin_token FROM events WHERE event_id=?`).get(id).checkin_token;
-  }
-  const baseUrl = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  const url = `${baseUrl}/checkin/${ev.checkin_token}`;
-  const QRCode = require('qrcode');
-  let qrSvg;
-  try {
-    qrSvg = await QRCode.toString(url, { type: 'svg', width: 400, margin: 2, errorCorrectionLevel: 'M' });
-  } catch (e) {
-    return res.status(500).send('QR generation failed: ' + e.message);
-  }
-  const when = new Date(ev.starts_at);
-  const dateStr = when.toLocaleString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-
-  const body = `
-    <p><a href="/events/${id}">← Back to event</a></p>
-    <div class="qr-page">
-      <div class="qr-card">
-        <div class="qr-meta">
-          <h2>${esc(ev.title)}</h2>
-          <p>${esc(dateStr)}</p>
-          ${ev.location ? `<p class="muted-text">${esc(ev.location)}</p>` : ''}
-        </div>
-        <div class="qr-art">${qrSvg}</div>
-        <p class="qr-instruct"><strong>Scan with your phone camera</strong> to check in.</p>
-        <p class="qr-url muted-text">${esc(url)}</p>
-      </div>
-      <div class="qr-actions screen-only">
-        <button onclick="window.print()">🖨 Print this QR sign</button>
-        <a class="btn ghost" href="javascript:document.body.requestFullscreen ? document.body.requestFullscreen() : null">
-          Full-screen (for display)
-        </a>
-      </div>
-    </div>`;
-  res.page({ title: `Check-in QR · ${ev.title}`, active: '/events', body });
-});
-
-// ---------- QR check-in (public) ----------
-function findEventByToken(token) {
-  return db.prepare(
-    `SELECT event_id, title, starts_at, location, checkin_token
-       FROM events WHERE checkin_token = ?`
-  ).get(token);
-}
-
-app.get('/checkin/:token', (req, res) => {
-  const ev = findEventByToken(req.params.token);
-  if (!ev) {
-    return res.status(404).send(layout({
-      title: 'Check-in link not recognized', bare: true,
-      body: '<p>This check-in QR is no longer valid. Please ask an usher for help.</p>',
-    }));
-  }
-  const when = new Date(ev.starts_at).toLocaleString('en-GB', {
-    weekday: 'long', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-  });
-  res.send(layout({
-    title: `Check in · ${ev.title}`, bare: true,
-    body: `
-      <p class="muted-text">${esc(when)}${ev.location ? ' · ' + esc(ev.location) : ''}</p>
-      <form method="post" action="/checkin/${esc(req.params.token)}" class="form auth-form">
-        <label class="wide">Your name or Member ID
-          <input name="q" required autofocus
-                 placeholder="e.g. John Anderson or DMS-001">
-        </label>
-        <div class="actions"><button type="submit">Find me →</button></div>
-      </form>`,
-  }));
-});
-
-app.post('/checkin/:token', (req, res) => {
-  const ev = findEventByToken(req.params.token);
-  if (!ev) return res.status(404).send(layout({ title: 'Check-in link not recognized', bare: true,
-    body: '<p>This check-in QR is no longer valid.</p>' }));
-
-  // If the form posted a confirmed member_id, record attendance and finish.
-  if (req.body.member_id) {
-    const mid = Number(req.body.member_id);
-    const m = db.prepare(
-      `SELECT member_id, first_name, last_name FROM members WHERE member_id=? AND deleted_at IS NULL`
-    ).get(mid);
-    if (!m) return res.redirect(`/checkin/${req.params.token}`);
-    db.prepare(`INSERT OR IGNORE INTO attendance (event_id, member_id) VALUES (?, ?)`).run(ev.event_id, mid);
-    logActivity('attendance_recorded',
-      `${m.first_name} ${m.last_name} self-checked in to ${ev.title}`,
-      `/events/${ev.event_id}`, null);
-    return res.send(layout({
-      title: `✓ Checked in, ${m.first_name}`, bare: true,
-      body: `
-        <p style="font-size:1.1rem">Welcome, <strong>${esc(m.first_name)} ${esc(m.last_name)}</strong>.</p>
-        <p>You're checked in to <strong>${esc(ev.title)}</strong>. Have a blessed time. 🙏</p>
-        <p style="margin-top:1.25rem"><a href="/checkin/${esc(req.params.token)}">Check in another person</a></p>`,
-    }));
-  }
-
-  // Otherwise, search by name or external_id.
-  const q = (req.body.q || '').trim();
-  if (!q) return res.redirect(`/checkin/${req.params.token}`);
-  const like = `%${q}%`;
-  const matches = db.prepare(`
-    SELECT m.member_id, m.first_name, m.last_name, m.external_id,
-           m.mobile_phone, m.bible_class_id,
-           bc.name AS bible_class,
-           (SELECT 1 FROM attendance a WHERE a.event_id=? AND a.member_id=m.member_id) AS already
-    FROM members m
-    LEFT JOIN ministries bc ON bc.ministry_id = m.bible_class_id
-    WHERE m.deleted_at IS NULL
-      AND (
-        (m.first_name || ' ' || m.last_name) LIKE ?
-        OR m.external_id = ?
-        OR m.first_name LIKE ?
-        OR m.last_name  LIKE ?
-        OR m.mobile_phone LIKE ?
-      )
-    ORDER BY m.last_name LIMIT 12
-  `).all(ev.event_id, like, q.toUpperCase(), like, like, like);
-
-  if (matches.length === 0) {
-    return res.send(layout({
-      title: 'No match found', bare: true,
-      body: `
-        <p>No member found for <strong>"${esc(q)}"</strong>. Please ask an usher for help, or try a different spelling / your Member ID (e.g. DMS-007).</p>
-        <p><a href="/checkin/${esc(req.params.token)}">← Try again</a></p>`,
-    }));
-  }
-
-  if (matches.length === 1 && !matches[0].already) {
-    // Auto-confirm the single match.
-    db.prepare(`INSERT OR IGNORE INTO attendance (event_id, member_id) VALUES (?, ?)`).run(ev.event_id, matches[0].member_id);
-    logActivity('attendance_recorded',
-      `${matches[0].first_name} ${matches[0].last_name} self-checked in to ${ev.title}`,
-      `/events/${ev.event_id}`, null);
-    return res.send(layout({
-      title: `✓ Checked in, ${matches[0].first_name}`, bare: true,
-      body: `
-        <p style="font-size:1.1rem">Welcome, <strong>${esc(matches[0].first_name)} ${esc(matches[0].last_name)}</strong>.</p>
-        <p>You're checked in to <strong>${esc(ev.title)}</strong>. Have a blessed time. 🙏</p>
-        <p style="margin-top:1.25rem"><a href="/checkin/${esc(req.params.token)}">Check in another person</a></p>`,
-    }));
-  }
-
-  // Otherwise show a list to pick from.
-  const list = matches.map((m) => `
-    <form method="post" action="/checkin/${esc(req.params.token)}" class="checkin-pick">
-      <input type="hidden" name="member_id" value="${m.member_id}">
-      <button type="submit" ${m.already ? 'disabled' : ''}>
-        <div class="who">
-          <div class="name">${esc(m.first_name)} ${esc(m.last_name)}</div>
-          <div class="meta">${esc(m.external_id) || ''}${m.bible_class ? ' · ' + esc(m.bible_class) : ''}</div>
-        </div>
-        <span class="pick-tag">${m.already ? '✓ already checked in' : 'Tap to check in'}</span>
-      </button>
-    </form>`).join('');
-
-  res.send(layout({
-    title: matches.length === 1 ? 'Already checked in' : 'Pick your name', bare: true,
-    body: `
-      <p class="muted-text">${matches.length} match${matches.length === 1 ? '' : 'es'} for "${esc(q)}":</p>
-      ${list}
-      <p style="margin-top:1rem"><a href="/checkin/${esc(req.params.token)}">← Search again</a></p>`,
-  }));
-});
-
-// Keep old URLs working.
-app.get('/contributions', (_, res) => res.redirect('/finance'));
 
 // ---------- finance: shared helpers ----------
 const FINANCE_TABS = [
@@ -2555,15 +1974,8 @@ function dayBornFormInputs() {
 
 // ---------- finance: overview ----------
 app.get('/finance', (req, res) => {
-  const yearFilter = `substr(?,1,4) = strftime('%Y','now')`;
-  const sumYTD = (sql) => db.prepare(sql).get().t;
-  const services = sumYTD(`SELECT COALESCE(SUM(total_amount),0) t FROM services WHERE deleted_at IS NULL AND substr(service_date,1,4)=strftime('%Y','now')`);
-  const harvests = sumYTD(`SELECT COALESCE(SUM(total_collected),0) t FROM harvests WHERE deleted_at IS NULL AND harvest_year=strftime('%Y','now')`);
-  const special = sumYTD(`SELECT COALESCE(SUM(amount),0) t FROM special_offerings WHERE deleted_at IS NULL AND substr(offering_date,1,4)=strftime('%Y','now')`);
-  const tithesYtd = sumYTD(`SELECT COALESCE(SUM(amount),0) t FROM tithes WHERE deleted_at IS NULL AND substr(tithe_date,1,4)=strftime('%Y','now')`);
-  const expenses = sumYTD(`SELECT COALESCE(SUM(amount),0) t FROM expenses WHERE substr(spent_on,1,4)=strftime('%Y','now')`);
-  const offerings = services + special + tithesYtd;
-  const net = offerings + harvests - expenses;
+  const { services, harvests, special, tithes: tithesYtd, expenses, offerings, net } =
+    financeYtd(db, new Date().getFullYear());
 
   const recentServices = db.prepare(`
     SELECT s.service_id, s.service_date, s.total_amount, st.type_name
@@ -3438,66 +2850,10 @@ app.post('/finance/pledges/statement/:memberId/send', requireAdmin, async (req, 
 });
 
 // ---------- giving statements (per-member annual contribution summary) ----------
-function givingYears() {
-  const now = new Date().getFullYear();
-  const years = [];
-  for (let y = now; y >= now - 6; y--) years.push(y);
-  return years;
-}
-function safeYear(v) {
-  const y = String(v || '').replace(/[^0-9]/g, '');
-  return /^\d{4}$/.test(y) ? y : String(new Date().getFullYear());
-}
-// All giving attributable to one member in a year, merged and sorted.
-function memberGivingForYear(memberId, year) {
-  const y = String(year);
-  const lines = [];
-  for (const t of db.prepare(`SELECT tithe_date dt, amount, COALESCE(method,'') method, reference
-      FROM tithes WHERE member_id=? AND deleted_at IS NULL AND substr(tithe_date,1,4)=?`).all(memberId, y)) {
-    lines.push({ dt: t.dt, group: 'Tithes', category: 'Tithe', detail: [t.method, t.reference].filter(Boolean).join(' · '), amount: t.amount });
-  }
-  for (const s of db.prepare(`SELECT sp.offering_date dt, sp.amount, sc.category_name, COALESCE(sp.purpose,'') purpose, sp.receipt_number
-      FROM special_offerings sp JOIN special_categories sc USING(special_cat_id)
-      WHERE sp.donor_id=? AND sp.deleted_at IS NULL AND substr(sp.offering_date,1,4)=?`).all(memberId, y)) {
-    lines.push({ dt: s.dt, group: 'Special Offerings', category: s.category_name, detail: [s.purpose, s.receipt_number].filter(Boolean).join(' · '), amount: s.amount });
-  }
-  for (const c of db.prepare(`SELECT c.contributed_on dt, c.amount, f.name fund, COALESCE(c.method,'') method, c.reference
-      FROM contributions c JOIN funds f USING(fund_id)
-      WHERE c.member_id=? AND substr(c.contributed_on,1,4)=?`).all(memberId, y)) {
-    lines.push({ dt: c.dt, group: 'Contributions', category: c.fund, detail: [c.method, c.reference].filter(Boolean).join(' · '), amount: c.amount });
-  }
-  for (const p of db.prepare(`SELECT pp.paid_on dt, pp.amount, h.harvest_name, pp.receipt_number
-      FROM pledge_payments pp JOIN pledges pl USING(pledge_id) JOIN harvests h USING(harvest_id)
-      WHERE pl.member_id=? AND substr(pp.paid_on,1,4)=?`).all(memberId, y)) {
-    lines.push({ dt: p.dt, group: 'Pledge Redemptions', category: `Pledge — ${p.harvest_name}`, detail: p.receipt_number || '', amount: p.amount });
-  }
-  lines.sort((a, b) => String(a.dt).localeCompare(String(b.dt)));
-  const byGroup = {};
-  for (const l of lines) byGroup[l.group] = (byGroup[l.group] || 0) + l.amount;
-  const total = lines.reduce((s, l) => s + l.amount, 0);
-  return { lines, byGroup, total };
-}
 
 app.get('/finance/statements', (req, res) => {
   const year = safeYear(req.query.year);
-  const rows = db.prepare(`
-    SELECT g.member_id, m.external_id, m.first_name || ' ' || m.last_name AS name,
-           COUNT(*) gifts, SUM(g.amount) total
-    FROM (
-      SELECT member_id, amount FROM tithes
-        WHERE deleted_at IS NULL AND member_id IS NOT NULL AND substr(tithe_date,1,4)=@y
-      UNION ALL
-      SELECT donor_id AS member_id, amount FROM special_offerings
-        WHERE deleted_at IS NULL AND donor_id IS NOT NULL AND substr(offering_date,1,4)=@y
-      UNION ALL
-      SELECT member_id, amount FROM contributions
-        WHERE member_id IS NOT NULL AND substr(contributed_on,1,4)=@y
-      UNION ALL
-      SELECT pl.member_id, pp.amount FROM pledge_payments pp JOIN pledges pl USING(pledge_id)
-        WHERE substr(pp.paid_on,1,4)=@y
-    ) g JOIN members m ON m.member_id = g.member_id AND m.deleted_at IS NULL
-    GROUP BY g.member_id HAVING total > 0
-    ORDER BY total DESC`).all({ y: year });
+  const rows = givingByMember(db, year);
 
   const totalGiving = rows.reduce((s, r) => s + r.total, 0);
   const yearSel = `<form method="get" class="filter-bar" style="margin:0">
@@ -4728,599 +4084,25 @@ app.get('/reports/members', (req, res) => {
 });
 
 // ---------- attendance (cross-event view) ----------
-app.get('/attendance', (req, res) => {
-  const services = db.prepare(`
-    SELECT e.event_id, e.title, e.starts_at, e.location,
-           COUNT(a.member_id) attendees
-    FROM   events e LEFT JOIN attendance a USING(event_id)
-    WHERE  e.event_type='service'
-    GROUP BY e.event_id ORDER BY e.starts_at DESC LIMIT 20`).all();
-  const trend = services.slice(0, 8).reverse()
-    .map((r, i) => ({ label: `Wk ${i + 1}`, value: r.attendees }));
-  const avg = trend.length
-    ? Math.round(trend.reduce((a, b) => a + b.value, 0) / trend.length) : 0;
-  const body = `
-    <div class="stat-grid">
-      <div class="stat"><div class="ico purple">✓</div><div>
-        <div class="label">Avg attendance (last ${trend.length})</div>
-        <div class="value">${avg}</div></div></div>
-      <div class="stat"><div class="ico green">📅</div><div>
-        <div class="label">Services tracked</div>
-        <div class="value">${services.length}</div></div></div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h2>Attendance Trend</h2><span class="meta">Last ${trend.length} services</span></div>
-      ${sparkline(trend)}
-    </div>
-    <h2>Recent services</h2>
-    ${table(['When', 'Title', 'Location', 'Attendees', ''],
-      services.map((s) => [esc(s.starts_at), esc(s.title), esc(s.location),
-        s.attendees,
-        `<a class="btn ghost" href="/events/${s.event_id}">Open</a>`]))}`;
-  res.page({ title: 'Attendance', active: '/attendance', body });
-});
+// ---------- attendance ----------
+require('./routes/attendance').register(app, { db, esc, sparkline, table });
 
 // ---------- organizations ----------
-function selectOrganizations({ q, sort }) {
-  const where = ['o.active=1'];
-  const params = {};
-  if (q) { where.push(`o.name LIKE @q`); params.q = `%${q}%`; }
-  const order = sort === 'members' ? 'member_count DESC, o.name' : 'o.name';
-  return db.prepare(`
-    SELECT o.org_id, o.name, o.description, o.meets_on, o.leader_id,
-           ml.first_name || ' ' || ml.last_name AS leader_name,
-           (SELECT COUNT(*) FROM organization_memberships om WHERE om.org_id=o.org_id) AS member_count
-    FROM organizations o
-    LEFT JOIN members ml ON ml.member_id = o.leader_id
-    WHERE ${where.join(' AND ')}
-    ORDER BY ${order}`).all(params);
-}
-
-function orgMemberOptions(selected) {
-  const all = db.prepare(
-    `SELECT member_id, first_name || ' ' || last_name AS name FROM members
-       WHERE deleted_at IS NULL ORDER BY last_name`).all();
-  return '<option value="">— none —</option>' +
-    all.map((m) => `<option value="${m.member_id}" ${m.member_id === selected ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
-}
-
-app.get('/organizations', (req, res) => {
-  const q = (req.query.q || '').trim();
-  const sort = (req.query.sort || '').trim();
-  const orgs = selectOrganizations({ q, sort });
-  const isAdmin = res.locals.isAdmin;
-
-  const orgCount = db.prepare(`SELECT COUNT(*) c FROM organizations WHERE active=1`).get().c;
-  const enrolled = db.prepare(
-    `SELECT COUNT(DISTINCT om.member_id) c FROM organization_memberships om
-       JOIN organizations o USING(org_id) WHERE o.active=1`).get().c;
-  const leaders = db.prepare(
-    `SELECT COUNT(*) c FROM organizations WHERE active=1 AND leader_id IS NOT NULL`).get().c;
-
-  const hero = pageHero('Organizations',
-    'Choirs, bands, fellowships and brigades. Browse every group, see its leader and membership, and manage rosters.');
-  const stats = statsRow([
-    { cls: 'gold', icon: '♫', value: orgCount.toLocaleString(), label: 'Organizations' },
-    { cls: 'green', icon: '👥', value: enrolled.toLocaleString(), label: 'Members Enrolled' },
-    { cls: 'blue', icon: '★', value: leaders.toLocaleString(), label: 'Groups with a Leader' },
-  ], `${isAdmin ? `<a class="btn" href="/organizations/new">＋ Add Organization</a>` : ''}
-      <a class="btn ghost" href="/members">👥 View Members</a>`);
-  const sortOpts = [['', 'Sort: A–Z'], ['members', 'Sort: Most members']]
-    .map(([v, l]) => `<option value="${v}" ${v === sort ? 'selected' : ''}>${l}</option>`).join('');
-  const filters = filterCard({
-    q, placeholder: 'Search organizations by name…',
-    controls: `<select name="sort" aria-label="Sort organizations">${sortOpts}</select>`,
-  });
-
-  const rowHtml = orgs.map((o) => {
-    const sub = o.meets_on ? `Meets ${esc(o.meets_on)}` : (o.description ? esc(o.description) : '—');
-    const actions = `
-      <div class="row-actions">
-        <a class="icon-btn view" href="/organizations/${o.org_id}" title="Manage" aria-label="Manage">${ICON_EYE}</a>
-        ${isAdmin ? `<form method="post" action="/organizations/${o.org_id}/archive" onsubmit="return confirm('Archive this organization? It will be hidden from the list.')">
-          <button class="icon-btn del" type="submit" title="Archive" aria-label="Archive">${ICON_TRASH}</button>
-        </form>` : ''}
-      </div>`;
-    return `<tr>
-      <td data-label="Organization">
-        <div class="m-name-cell">
-          <span class="org-badge">${esc(initials(o.name))}</span>
-          <div>
-            <a class="m-name" href="/organizations/${o.org_id}">${esc(o.name)}</a>
-            <div class="m-sub">${sub}</div>
-          </div>
-        </div>
-      </td>
-      <td data-label="Leader">${o.leader_id ? `<a href="/members/${o.leader_id}">${esc(o.leader_name)}</a>` : '<span class="muted-text">—</span>'}</td>
-      <td data-label="Members"><span class="count-badge">${o.member_count}</span></td>
-      <td data-label="Actions">${actions}</td>
-    </tr>`;
-  }).join('');
-
-  const list = listCard({
-    title: '♫ Organizations List', count: orgs.length, countLabel: 'groups',
-    note: 'Results update as you search and filter',
-    inner: orgs.length ? `<table class="data-table members-table">
-        <thead><tr><th>Organization</th><th>Leader</th><th>Members</th><th>Actions</th></tr></thead>
-        <tbody>${rowHtml}</tbody>
-      </table>` : `<div class="empty-state">
-        <div class="empty-ico">♫</div>
-        <p>No organizations match your search.</p>
-        ${isAdmin ? '<a class="btn" href="/organizations/new">＋ Add Organization</a>' : ''}
-      </div>`,
-  });
-
-  res.page({
-    title: 'Organizations', active: '/organizations', noHeader: true,
-    body: `${hero}${stats}${filters}${list}`,
-  });
-});
-
-app.get('/organizations/new', requireAdmin, (req, res) => {
-  const body = `
-    <p><a href="/organizations">← Back to organizations</a></p>
-    <form class="form" method="post" action="/organizations">
-      <label class="wide">Name<input name="name" required></label>
-      <label>Meets<input name="meets_on" placeholder="e.g. Saturday 5pm"></label>
-      <label>Leader<select name="leader_id">${orgMemberOptions()}</select></label>
-      <label class="wide">Description<input name="description"></label>
-      <div class="actions"><button type="submit">Add organization</button></div>
-    </form>`;
-  res.page({ title: 'New organization', active: '/organizations', body });
-});
-
-app.get('/organizations/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const o = db.prepare(`
-    SELECT o.*, ml.first_name || ' ' || ml.last_name AS leader_name
-    FROM organizations o LEFT JOIN members ml ON ml.member_id = o.leader_id
-    WHERE o.org_id = ? AND o.active = 1`).get(id);
-  if (!o) return res.status(404).send('Not found');
-  const isAdmin = res.locals.isAdmin;
-  const members = db.prepare(`
-    SELECT m.member_id, m.external_id, m.first_name, m.last_name, m.photo_filename, om.role
-    FROM organization_memberships om JOIN members m USING(member_id)
-    WHERE om.org_id = ? AND m.deleted_at IS NULL
-    ORDER BY (om.role='leader') DESC, m.last_name, m.first_name`).all(id);
-
-  const roster = members.length
-    ? `<table class="data-table members-table">
-         <thead><tr><th>Member</th><th>Role</th>${isAdmin ? '<th>Actions</th>' : ''}</tr></thead>
-         <tbody>${members.map((m) => `<tr>
-           <td data-label="Member">
-             <div class="m-name-cell">
-               ${memberAvatar(m)}
-               <div>
-                 <a class="m-name" href="/members/${m.member_id}">${esc(m.first_name)} ${esc(m.last_name)}</a>
-                 <div class="m-sub">${esc(m.external_id) || '—'}</div>
-               </div>
-             </div>
-           </td>
-           <td data-label="Role"><span class="pill ${m.role === 'leader' ? 'pill-member' : 'pill-regular'}">${esc(m.role)}</span></td>
-           ${isAdmin ? `<td data-label="Actions">
-             <form method="post" action="/organizations/${id}/remove" onsubmit="return confirm('Remove this member from ${esc(o.name).replace(/'/g, "\\'")}?')">
-               <input type="hidden" name="member_id" value="${m.member_id}">
-               <button class="icon-btn del" type="submit" title="Remove" aria-label="Remove">${ICON_TRASH}</button>
-             </form></td>` : ''}
-         </tr>`).join('')}</tbody>
-       </table>`
-    : '<div class="empty-state"><div class="empty-ico">👥</div><p>No members assigned yet.</p></div>';
-
-  const manage = isAdmin
-    ? `<div class="card" style="margin-top:1rem">
-         <div class="card-head"><h2>Manage</h2></div>
-         <form method="post" action="/organizations/${id}/add" class="filter-bar" style="margin-bottom:0.8rem">
-           <select name="member_id" required style="flex:1;min-width:200px">${orgMemberOptions()}</select>
-           <select name="role"><option value="member">member</option><option value="leader">leader</option></select>
-           <button type="submit">＋ Add member</button>
-         </form>
-         <form method="post" action="/organizations/${id}/leader" class="filter-bar">
-           <select name="leader_id" style="flex:1;min-width:200px">${orgMemberOptions(o.leader_id)}</select>
-           <button type="submit">Set leader</button>
-         </form>
-       </div>`
-    : '';
-
-  const body = `
-    <p><a href="/organizations">← Back to organizations</a></p>
-    ${pageHero(o.name, o.description || 'Group roster and membership.')}
-    ${statsRow([
-      { cls: 'gold', icon: '👥', value: members.length, label: 'Members' },
-      { cls: 'green', icon: '★', value: o.leader_id ? esc(o.leader_name) : '—', label: 'Leader' },
-      { cls: 'blue', icon: '📅', value: o.meets_on ? esc(o.meets_on) : '—', label: 'Meets' },
-    ])}
-    ${listCard({ title: '👥 Roster', count: members.length, countLabel: 'members', inner: roster })}
-    ${manage}`;
-  res.page({ title: o.name, active: '/organizations', noHeader: true, body });
-});
-
-app.post('/organizations', requireAdmin, (req, res) => {
-  const b = req.body;
-  if (!b.name || !b.name.trim()) { flash(req, 'Organization name is required.'); return res.redirect('/organizations/new'); }
-  try {
-    db.prepare(`INSERT INTO organizations (name, description, meets_on, leader_id) VALUES (?, ?, ?, ?)`)
-      .run(b.name.trim(), b.description || null, b.meets_on || null,
-           b.leader_id ? Number(b.leader_id) : null);
-    flash(req, `Added “${b.name.trim()}”.`, 'success');
-  } catch (e) {
-    flash(req, 'An organization with that name already exists.');
-    return res.redirect('/organizations/new');
-  }
-  res.redirect('/organizations');
-});
-
-app.post('/organizations/:id/add', requireAdmin, (req, res) => {
-  const oid = Number(req.params.id);
-  const mid = Number(req.body.member_id);
-  if (!mid) { flash(req, 'Choose a member to add.'); return res.redirect(`/organizations/${oid}`); }
-  try {
-    db.prepare(`INSERT INTO organization_memberships (org_id, member_id, role) VALUES (?, ?, ?)`)
-      .run(oid, mid, req.body.role === 'leader' ? 'leader' : 'member');
-  } catch (e) {
-    flash(req, 'That member is already in this group.', 'info');
-  }
-  res.redirect(`/organizations/${oid}`);
-});
-
-app.post('/organizations/:id/remove', requireAdmin, (req, res) => {
-  const oid = Number(req.params.id);
-  const mid = Number(req.body.member_id);
-  db.prepare(`DELETE FROM organization_memberships WHERE org_id=? AND member_id=?`).run(oid, mid);
-  res.redirect(`/organizations/${oid}`);
-});
-
-app.post('/organizations/:id/leader', requireAdmin, (req, res) => {
-  const oid = Number(req.params.id);
-  const lid = req.body.leader_id ? Number(req.body.leader_id) : null;
-  db.prepare(`UPDATE organizations SET leader_id=? WHERE org_id=?`).run(lid, oid);
-  res.redirect(`/organizations/${oid}`);
-});
-
-app.post('/organizations/:id/archive', requireAdmin, (req, res) => {
-  db.prepare(`UPDATE organizations SET active=0 WHERE org_id=?`).run(Number(req.params.id));
-  res.redirect('/organizations');
+// ---------- organizations ----------
+require('./routes/organizations').register(app, {
+  db, esc, initials, pageHero, statsRow, filterCard, listCard,
+  ICON_EYE, ICON_TRASH, memberAvatar, requireAdmin, flash,
 });
 
 // ---------- inventory (register of physical items the church owns) ----------
-app.get('/inventory', (req, res) => {
-  const q = (req.query.q || '').trim();
-  const items = db.prepare(`
-    SELECT item_id, name, quantity, category, notes
-    FROM inventory_items
-    WHERE deleted_at IS NULL ${q ? 'AND name LIKE @q' : ''}
-    ORDER BY COALESCE(category, 'zzz'), name`).all(q ? { q: `%${q}%` } : {});
-
-  const grouped = {};
-  for (const it of items) {
-    const k = it.category && it.category.trim() ? it.category : 'Uncategorized';
-    (grouped[k] = grouped[k] || []).push(it);
-  }
-  const cats = Object.keys(grouped).sort((a, b) => {
-    if (a === 'Uncategorized') return 1;
-    if (b === 'Uncategorized') return -1;
-    return a.localeCompare(b);
-  });
-
-  const newForm = res.locals.isAdmin
-    ? `<details class="form-toggle" style="margin-bottom:1rem">
-         <summary><strong>+ Add an item</strong></summary>
-         <form class="form" method="post" action="/inventory" style="margin-top:0.75rem">
-           <label class="wide">Name<input name="name" required></label>
-           <label>Quantity<input type="number" name="quantity" min="0" value="0" required></label>
-           <label>Category<input name="category" placeholder="e.g. Instruments, Kitchen, Maintenance"></label>
-           <label class="wide-cell">Notes<textarea name="notes" rows="2"></textarea></label>
-           <div class="actions"><button type="submit">Add item</button></div>
-         </form>
-       </details>`
-    : '';
-
-  const sections = items.length
-    ? cats.map((c) => {
-        const rows = grouped[c].map((it) => `
-          <tr>
-            <td>${esc(it.name)}</td>
-            <td>${esc(String(it.quantity))}</td>
-            <td>${it.notes ? esc(it.notes) : '—'}</td>
-            ${res.locals.isAdmin ? `<td style="white-space:nowrap">
-              <a href="/inventory/${it.item_id}/edit" class="link">Edit</a>
-              <form method="post" action="/inventory/${it.item_id}/delete" class="inline"
-                    onsubmit="return confirm('Archive this item? It will be hidden but not permanently deleted.')">
-                <button type="submit" class="link">Archive</button>
-              </form>
-            </td>` : ''}
-          </tr>`).join('');
-        return `<section class="card" style="margin-bottom:1rem">
-          <div class="card-head"><h2>${esc(c)}</h2>
-            <span class="meta">${grouped[c].length} item${grouped[c].length === 1 ? '' : 's'}</span></div>
-          <table>
-            <thead><tr><th>Name</th><th>Qty</th><th>Notes</th>${res.locals.isAdmin ? '<th></th>' : ''}</tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </section>`;
-      }).join('')
-    : '<div class="empty-state"><div class="empty-ico">📦</div><p>No inventory items match your search.</p></div>';
-
-  const totals = db.prepare(`SELECT COUNT(*) items, COALESCE(SUM(quantity),0) qty,
-    COUNT(DISTINCT COALESCE(NULLIF(TRIM(category),''),'Uncategorized')) cats
-    FROM inventory_items WHERE deleted_at IS NULL`).get();
-  const hero = pageHero('Inventory', 'Register of physical items the church owns.');
-  const stats = statsRow([
-    { cls: 'gold', icon: '📦', value: Number(totals.items).toLocaleString(), label: 'Items' },
-    { cls: 'green', icon: '🗂', value: Number(totals.cats).toLocaleString(), label: 'Categories' },
-    { cls: 'blue', icon: '#', value: Number(totals.qty).toLocaleString(), label: 'Total Quantity' },
-  ]);
-  const filters = filterCard({ q, placeholder: 'Search items by name…' });
-
-  res.page({
-    title: 'Inventory',
-    active: '/inventory', noHeader: true,
-    body: `${hero}${stats}${filters}${newForm}<div data-results>${sections}</div>`,
-  });
-});
-
-app.post('/inventory', requireAdmin, (req, res) => {
-  const b = req.body;
-  const name = (b.name || '').trim();
-  if (!name) return res.redirect('/inventory');
-  const qty = Math.max(0, Number(b.quantity) || 0);
-  const category = (b.category || '').trim() || null;
-  const notes = (b.notes || '').trim() || null;
-  db.prepare(`
-    INSERT INTO inventory_items (name, quantity, category, notes)
-    VALUES (?, ?, ?, ?)`).run(name, qty, category, notes);
-  logActivity('inventory_added',
-    `Added inventory item: ${name} (qty ${qty})`,
-    '/inventory', res.locals.user.user_id);
-  res.redirect('/inventory');
-});
-
-app.get('/inventory/:id/edit', requireAdmin, (req, res) => {
-  const it = db.prepare(
-    `SELECT * FROM inventory_items WHERE item_id=? AND deleted_at IS NULL`
-  ).get(Number(req.params.id));
-  if (!it) return res.status(404).send('Item not found');
-  res.page({
-    title: 'Edit Item', active: '/inventory',
-    body: `
-      <form class="form" method="post" action="/inventory/${it.item_id}">
-        <label class="wide">Name<input name="name" required value="${esc(it.name)}"></label>
-        <label>Quantity<input type="number" name="quantity" min="0" required value="${esc(String(it.quantity))}"></label>
-        <label>Category<input name="category" value="${esc(it.category || '')}"></label>
-        <label class="wide-cell">Notes<textarea name="notes" rows="3">${esc(it.notes || '')}</textarea></label>
-        <div class="actions">
-          <button type="submit">Save changes</button>
-          <a href="/inventory" class="link">Cancel</a>
-        </div>
-      </form>`,
-  });
-});
-
-app.post('/inventory/:id', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  const b = req.body;
-  const name = (b.name || '').trim();
-  if (!name) return res.redirect(`/inventory/${id}/edit`);
-  const qty = Math.max(0, Number(b.quantity) || 0);
-  const category = (b.category || '').trim() || null;
-  const notes = (b.notes || '').trim() || null;
-  db.prepare(`
-    UPDATE inventory_items
-       SET name=?, quantity=?, category=?, notes=?, updated_at=CURRENT_TIMESTAMP
-     WHERE item_id=? AND deleted_at IS NULL`)
-    .run(name, qty, category, notes, id);
-  logActivity('inventory_updated',
-    `Updated inventory item: ${name} (qty ${qty})`,
-    '/inventory', res.locals.user.user_id);
-  res.redirect('/inventory');
-});
-
-app.post('/inventory/:id/delete', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  const it = db.prepare(`SELECT name FROM inventory_items WHERE item_id=?`).get(id);
-  db.prepare(`UPDATE inventory_items SET deleted_at=CURRENT_TIMESTAMP WHERE item_id=?`).run(id);
-  if (it) {
-    logActivity('inventory_archived',
-      `Archived inventory item: ${it.name}`,
-      '/inventory', res.locals.user.user_id);
-  }
-  res.redirect('/inventory');
+require('./routes/inventory').register(app, {
+  db, esc, pageHero, statsRow, filterCard, requireAdmin, logActivity,
 });
 
 // ---------- preaching plan (who preaches when + reminders) ----------
-function preachingMemberOptions(selectedId) {
-  const members = db.prepare(
-    `SELECT member_id, first_name || ' ' || last_name AS name
-       FROM members WHERE deleted_at IS NULL ORDER BY last_name`
-  ).all();
-  return '<option value="">— guest / not a member —</option>' +
-    members.map((m) =>
-      `<option value="${m.member_id}" ${m.member_id === selectedId ? 'selected' : ''}>${esc(m.name)}</option>`
-    ).join('');
-}
-
-function preachingForm(plan = {}, action) {
-  return `
-    <form class="form" method="post" action="${action}">
-      <label>Date<input type="date" name="preach_date" required value="${esc(fmtDate(plan.preach_date))}"></label>
-      <label>Service / occasion<input name="service_label" placeholder="e.g. Sunday 9:00 AM service" value="${esc(plan.service_label || '')}"></label>
-      <label>Preacher (member)<select name="member_id">${preachingMemberOptions(plan.member_id)}</select></label>
-      <div class="wide-cell"><span class="hint">If the preacher is a guest (not a member), leave the dropdown on
-        <em>guest</em> and fill in their name and contact below so reminders can still reach them.</span></div>
-      <label>Guest name<input name="preacher_name" value="${esc(plan.preacher_name || '')}"></label>
-      <label>Guest phone<input name="preacher_phone" value="${esc(plan.preacher_phone || '')}"></label>
-      <label>Guest email<input type="email" name="preacher_email" value="${esc(plan.preacher_email || '')}"></label>
-      <label>Topic / theme<input name="topic" value="${esc(plan.topic || '')}"></label>
-      <label>Scripture<input name="scripture" placeholder="e.g. John 3:16" value="${esc(plan.scripture || '')}"></label>
-      <label class="wide-cell">Notes<textarea name="notes" rows="2">${esc(plan.notes || '')}</textarea></label>
-      <div class="actions">
-        <button type="submit">Save</button>
-        <a href="/preaching" class="link">Cancel</a>
-      </div>
-    </form>`;
-}
-
-function preacherLabel(p) {
-  if (p.member_id && p.member_name) return `<a href="/members/${p.member_id}">${esc(p.member_name)}</a>`;
-  if (p.preacher_name) return `${esc(p.preacher_name)} <span class="muted-text">(guest)</span>`;
-  return '<span class="muted-text">— unassigned —</span>';
-}
-
-function preachingHasContact(p) {
-  if (p.member_id) return !!(p.member_phone || p.member_email);
-  return !!(p.preacher_phone || p.preacher_email);
-}
-
-const PREACHING_SELECT = `
-  SELECT pp.*, m.first_name || ' ' || m.last_name AS member_name,
-         m.mobile_phone AS member_phone, m.email AS member_email
-  FROM preaching_plan pp
-  LEFT JOIN members m ON m.member_id = pp.member_id
-  WHERE pp.deleted_at IS NULL`;
-
-app.get('/preaching', (req, res) => {
-  const upcoming = db.prepare(
-    `${PREACHING_SELECT} AND date(pp.preach_date) >= date('now') ORDER BY pp.preach_date ASC`
-  ).all();
-  const past = db.prepare(
-    `${PREACHING_SELECT} AND date(pp.preach_date) < date('now') ORDER BY pp.preach_date DESC LIMIT 20`
-  ).all();
-
-  const reminderFlash = {
-    ok: 'Preaching reminder sent.',
-    dry: 'Reminder logged as a dry run — SMS/email are not configured, so nothing was actually delivered.',
-    nocontact: 'Could not send: that preacher has no phone or email on file.',
-    fail: 'The reminder could not be sent. Check the SMS / email settings.',
-  }[req.query.reminder];
-
-  const next = upcoming[0];
-  const nextCard = next
-    ? `<section class="card" style="margin-bottom:1rem;border-left:4px solid var(--accent)">
-         <div class="card-head"><h2>Next up</h2><span class="meta">${esc(fmtPreachDate(next.preach_date))}</span></div>
-         <p style="font-size:1.05rem"><strong>${preacherLabel(next)}</strong>
-           ${next.service_label ? ` · ${esc(next.service_label)}` : ''}</p>
-         ${next.topic ? `<p>Topic: ${esc(next.topic)}${next.scripture ? ` · ${esc(next.scripture)}` : ''}</p>` : ''}
-         ${next.reminder_sent_at ? `<p class="muted-text">Reminder last sent ${esc(String(next.reminder_sent_at).slice(0, 16))}.</p>` : ''}
-         ${res.locals.isAdmin ? (preachingHasContact(next)
-           ? `<form method="post" action="/preaching/${next.plan_id}/remind"
-                    onsubmit="return confirm('Send an SMS / email reminder to this preacher?')">
-                <button type="submit">📣 Send reminder to ${esc((preacherContact(next).first) || 'preacher')}</button>
-              </form>`
-           : '<p class="muted-text">Add a phone or email for this preacher to enable reminders.</p>') : ''}
-       </section>`
-    : '<p class="muted-text">No upcoming preaching appointments scheduled.</p>';
-
-  const newForm = res.locals.isAdmin
-    ? `<details class="form-toggle" style="margin-bottom:1rem">
-         <summary><strong>+ Schedule a preaching appointment</strong></summary>
-         <div style="margin-top:0.75rem">${preachingForm({}, '/preaching')}</div>
-       </details>`
-    : '';
-
-  const renderRows = (list) => list.map((p) => `
-    <tr>
-      <td>${esc(fmtPreachDate(p.preach_date))}</td>
-      <td>${preacherLabel(p)}</td>
-      <td>${esc(p.service_label || '—')}</td>
-      <td>${p.topic ? esc(p.topic) : '—'}</td>
-      ${res.locals.isAdmin ? `<td style="white-space:nowrap">
-        <a href="/preaching/${p.plan_id}/edit" class="link">Edit</a>
-        ${preachingHasContact(p)
-          ? `<form method="post" action="/preaching/${p.plan_id}/remind" class="inline"
-                  onsubmit="return confirm('Send an SMS / email reminder to this preacher?')">
-               <button type="submit" class="link">Remind</button>
-             </form>` : ''}
-        <form method="post" action="/preaching/${p.plan_id}/delete" class="inline"
-              onsubmit="return confirm('Archive this appointment? It will be hidden but not permanently deleted.')">
-          <button type="submit" class="link">Archive</button>
-        </form>
-      </td>` : ''}
-    </tr>`).join('');
-
-  const head = `<thead><tr><th>Date</th><th>Preacher</th><th>Service</th><th>Topic</th>${res.locals.isAdmin ? '<th></th>' : ''}</tr></thead>`;
-  const upcomingTable = upcoming.length
-    ? `<section class="card" style="margin-bottom:1rem"><h2>Upcoming</h2><table>${head}<tbody>${renderRows(upcoming)}</tbody></table></section>`
-    : '';
-  const pastTable = past.length
-    ? `<section class="card"><h2>Recent (past)</h2><table>${head}<tbody>${renderRows(past)}</tbody></table></section>`
-    : '';
-
-  res.page({
-    title: 'Preaching Plan',
-    subtitle: 'Schedule of preaching appointments. Send a reminder to whoever is next.',
-    active: '/preaching',
-    flash: reminderFlash,
-    body: `${nextCard}${newForm}${upcomingTable}${pastTable}`,
-  });
-});
-
-function preachingBody(b) {
-  return {
-    preach_date: (b.preach_date || '').slice(0, 10),
-    service_label: (b.service_label || '').trim() || null,
-    member_id: b.member_id ? Number(b.member_id) : null,
-    preacher_name: (b.preacher_name || '').trim() || null,
-    preacher_phone: (b.preacher_phone || '').trim() || null,
-    preacher_email: (b.preacher_email || '').trim() || null,
-    topic: (b.topic || '').trim() || null,
-    scripture: (b.scripture || '').trim() || null,
-    notes: (b.notes || '').trim() || null,
-  };
-}
-
-app.post('/preaching', requireAdmin, (req, res) => {
-  const v = preachingBody(req.body);
-  if (!v.preach_date) return res.redirect('/preaching');
-  const info = db.prepare(`
-    INSERT INTO preaching_plan
-      (preach_date, service_label, member_id, preacher_name, preacher_phone, preacher_email, topic, scripture, notes)
-    VALUES (@preach_date, @service_label, @member_id, @preacher_name, @preacher_phone, @preacher_email, @topic, @scripture, @notes)
-  `).run(v);
-  logActivity('preaching_scheduled',
-    `Scheduled preaching for ${fmtPreachDate(v.preach_date)}`,
-    '/preaching', res.locals.user.user_id);
-  res.redirect('/preaching');
-});
-
-app.get('/preaching/:id/edit', requireAdmin, (req, res) => {
-  const plan = db.prepare(`SELECT * FROM preaching_plan WHERE plan_id=? AND deleted_at IS NULL`)
-    .get(Number(req.params.id));
-  if (!plan) return res.status(404).send('Appointment not found');
-  res.page({
-    title: 'Edit Preaching Appointment', active: '/preaching',
-    body: preachingForm(plan, `/preaching/${plan.plan_id}`),
-  });
-});
-
-app.post('/preaching/:id', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  const v = preachingBody(req.body);
-  if (!v.preach_date) return res.redirect(`/preaching/${id}/edit`);
-  db.prepare(`
-    UPDATE preaching_plan SET
-      preach_date=@preach_date, service_label=@service_label, member_id=@member_id,
-      preacher_name=@preacher_name, preacher_phone=@preacher_phone, preacher_email=@preacher_email,
-      topic=@topic, scripture=@scripture, notes=@notes, updated_at=CURRENT_TIMESTAMP
-    WHERE plan_id=@id AND deleted_at IS NULL
-  `).run({ ...v, id });
-  res.redirect('/preaching');
-});
-
-app.post('/preaching/:id/delete', requireAdmin, (req, res) => {
-  db.prepare(`UPDATE preaching_plan SET deleted_at=CURRENT_TIMESTAMP WHERE plan_id=?`)
-    .run(Number(req.params.id));
-  res.redirect('/preaching');
-});
-
-app.post('/preaching/:id/remind', requireAdmin, async (req, res) => {
-  const plan = db.prepare(`SELECT * FROM preaching_plan WHERE plan_id=? AND deleted_at IS NULL`)
-    .get(Number(req.params.id));
-  if (!plan) return res.redirect('/preaching');
-  const r = await sendPreachingReminder(plan, res.locals.user.user_id);
-  if (!r.ok) return res.redirect('/preaching?reminder=nocontact');
-  if (!r.hadPhone && !r.hadEmail) return res.redirect('/preaching?reminder=nocontact');
-  if (r.dryRun) return res.redirect('/preaching?reminder=dry');
-  const delivered = (r.smsOk === true) || (r.emailOk === true);
-  return res.redirect('/preaching?reminder=' + (delivered ? 'ok' : 'fail'));
+// ---------- preaching plan ----------
+require('./routes/preaching').register(app, {
+  db, esc, fmtDate, fmtPreachDate, requireAdmin, logActivity, preacherContact, sendPreachingReminder,
 });
 
 // ---------- communications (announcements) ----------
@@ -5985,6 +4767,10 @@ app.get('/settings', requireOwner, (req, res) => {
       <p>Manage user accounts and permissions on the <a href="/users">Users &amp; Roles</a> page.</p>
     </div>
     <div class="card">
+      <h2>Maintenance</h2>
+      <p>Snapshots and restore on the <a href="/backups">Backups</a> page · recent server errors in the <a href="/errors">Error Log</a>.</p>
+    </div>
+    <div class="card">
       <h2>SMS &amp; Email</h2>
       <dl class="stats">
         <dt>SMS provider</dt><dd>Arkesel — <span class="pill pill-${ARKESEL_API_KEY ? 'sent' : 'dry_run'}">${ARKESEL_API_KEY ? 'configured' : 'dry-run'}</span></dd>
@@ -6252,6 +5038,62 @@ app.post('/login', (req, res) => {
 
 app.post('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/login'));
+});
+
+// ---------- error tracking ----------
+app.get('/errors', requireOwner, (req, res) => {
+  const rows = db.prepare(`SELECT error_id, occurred_at, method, path, message
+    FROM error_log ORDER BY error_id DESC LIMIT 100`).all();
+  const inner = rows.length
+    ? `<table class="data-table">
+        <thead><tr><th>When</th><th>Request</th><th>Message</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr>
+          <td data-label="When">${esc(r.occurred_at)}</td>
+          <td data-label="Request"><code>${esc(r.method || '')} ${esc(r.path || '')}</code></td>
+          <td data-label="Message">${esc(r.message || '')}</td>
+        </tr>`).join('')}</tbody></table>`
+    : '<div class="empty-state"><div class="empty-ico">✓</div><p>No errors logged. All clear.</p></div>';
+  res.page({
+    title: 'Error Log', active: null, noHeader: true,
+    body: `${pageHero('Error Log', 'The 100 most recent server errors captured by the app.')}
+      ${listCard({ title: '⚠ Recent Errors', count: rows.length, countLabel: 'logged', inner })}`,
+  });
+});
+app.post('/errors/clear', requireOwner, (req, res) => {
+  db.prepare(`DELETE FROM error_log`).run();
+  flash(req, 'Error log cleared.', 'success');
+  res.redirect('/errors');
+});
+
+// Test-only route to exercise the global error handler (never registered in prod).
+if (process.env.NODE_ENV === 'test') {
+  app.get('/__throw', () => { throw new Error('boom for tests'); });
+}
+
+// 404 for unmatched routes.
+app.use((req, res) => {
+  res.status(404).send(layout({
+    title: 'Page not found', user: res.locals.user, active: null,
+    body: '<p>That page does not exist.</p><p><a href="/">Back to dashboard</a></p>',
+  }));
+});
+
+// Global error handler: log to console + error_log, show a friendly page.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', req.method, req.path, '-', err && err.message);
+  try {
+    db.prepare(`INSERT INTO error_log (method, path, message, stack, user_id) VALUES (?, ?, ?, ?, ?)`)
+      .run(req.method, req.path, String(err && err.message || err).slice(0, 500),
+           String(err && err.stack || '').slice(0, 4000),
+           res.locals.user ? res.locals.user.user_id : null);
+  } catch (_) { /* never let logging throw */ }
+  if (res.headersSent) return;
+  res.status(500).send(layout({
+    title: 'Something went wrong', user: res.locals.user, active: null,
+    body: '<p>An unexpected error occurred and has been logged. Please try again.</p>'
+        + '<p><a href="/">Back to dashboard</a></p>',
+  }));
 });
 
 // ---------- start ----------
