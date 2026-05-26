@@ -188,6 +188,18 @@ test('editor role can edit content but is blocked from owner areas', async () =>
   cookie = owner;
 });
 
+test('inventory (extracted route module) can add and list an item', async () => {
+  const page = await get('/inventory');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Inventory/);
+  const token = tokenFrom(page.body);
+  const created = await post('/inventory', { name: 'Keyboard', quantity: '2', category: 'Instruments', _csrf: token });
+  assert.strictEqual(created.status, 302);
+  const after = await get('/inventory');
+  assert.match(after.body, /Keyboard/);
+  assert.match(after.body, /Instruments/);
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
