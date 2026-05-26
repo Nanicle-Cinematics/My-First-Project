@@ -818,19 +818,19 @@ button, .btn {
   border: none; cursor: pointer;
   padding: 0.55rem 1.05rem; border-radius: 10px; text-decoration: none;
   display: inline-flex; gap: 0.4rem; align-items: center; font: inherit; font-weight: 700;
-  box-shadow: 0 4px 12px rgba(212, 160, 23, 0.3);
-  transition: filter 0.15s var(--ease), box-shadow 0.15s var(--ease), transform 0.05s var(--ease);
+  box-shadow: none;
+  transition: filter 0.15s var(--ease), transform 0.05s var(--ease);
 }
-button:hover, .btn:hover { filter: brightness(0.96); text-decoration: none; box-shadow: 0 6px 16px rgba(212, 160, 23, 0.4); color: var(--gold-ink); }
+button:hover, .btn:hover { filter: brightness(0.96); text-decoration: none; color: var(--gold-ink); }
 button:active, .btn:active { transform: translateY(1px); }
 button.link, button.link:hover { box-shadow: none; filter: none; }
 button.ghost, .btn.ghost {
   background: var(--panel); color: var(--ink); border: 1px solid var(--border);
-  box-shadow: var(--shadow); font-weight: 600;
+  box-shadow: none; font-weight: 600;
 }
 button.ghost:hover { background: var(--soft); filter: none; color: var(--ink); }
-button.danger { background: var(--danger); color: #fff; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3); }
-button.danger:hover { color: #fff; box-shadow: 0 6px 16px rgba(220, 38, 38, 0.4); }
+button.danger { background: var(--danger); color: #fff; box-shadow: none; }
+button.danger:hover { color: #fff; filter: brightness(0.96); }
 button.link {
   background: transparent; color: var(--danger); padding: 0;
   text-decoration: underline; font-weight: normal; box-shadow: none;
