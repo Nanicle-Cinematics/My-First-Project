@@ -5,7 +5,7 @@ const { table } = require('../lib/views');
 
 module.exports.register = function register(app, ctx) {
   const { db, requireAdmin, logActivity, flash, csrfValid, CHURCH_NAME, PREF_LABELS,
-    loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach,
+    loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, normalizePhoneGH,
     ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS } = ctx;
 
 app.get('/communications', (req, res) => {

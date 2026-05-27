@@ -277,6 +277,16 @@ test('settings test-send tools report dry-run when SMS/email unconfigured', asyn
   assert.match((await get('/settings')).body, /dry-run mode/);
 });
 
+test('SMS broadcast send path works (dry-run, all members)', async () => {
+  const page = await get('/communications/broadcast');
+  assert.strictEqual(page.status, 200);
+  const r = await post('/communications/broadcast', {
+    channel: 'sms', body: 'Service at 9am', all_members: '1', _csrf: tokenFrom(page.body),
+  });
+  // Must not 500 — regression guard for the missing normalizePhoneGH dep.
+  assert.ok([302, 200].includes(r.status), `expected redirect/ok, got ${r.status}`);
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
