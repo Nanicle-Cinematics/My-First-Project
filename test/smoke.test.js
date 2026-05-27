@@ -261,6 +261,22 @@ test('login page links to /forgot, which renders without auth', async () => {
   cookie = saved;
 });
 
+test('settings test-send tools report dry-run when SMS/email unconfigured', async () => {
+  const settings = await get('/settings');
+  assert.match(settings.body, /Send a test message/);
+  const token = tokenFrom(settings.body);
+  const sms = await post('/settings/test-sms', { to: '0244123456', _csrf: token });
+  assert.strictEqual(sms.status, 302);
+  const after = await get('/settings');
+  assert.match(after.body, /dry-run mode/);                 // SMS dry-run notice (no ARKESEL key in tests)
+  const bad = await post('/settings/test-sms', { to: 'not-a-phone', _csrf: token });
+  assert.strictEqual(bad.status, 302);
+  assert.match((await get('/settings')).body, /not a valid phone/);
+  const email = await post('/settings/test-email', { to: 'a@b.com', _csrf: token });
+  assert.strictEqual(email.status, 302);
+  assert.match((await get('/settings')).body, /dry-run mode/);
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);

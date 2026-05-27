@@ -1666,7 +1666,19 @@ app.get('/settings', requireOwner, (req, res) => {
   SMTP_USER="your.address@gmail.com" \\
   SMTP_PASS="your-16-char-app-password" \\
   SMTP_FROM="Dunwell Methodist &lt;your.address@gmail.com&gt;"</pre>
-      <p class="muted-text">For Gmail, generate an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> — your normal password will not work.</p>
+      <p class="muted-text">For Gmail, generate an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> — your normal password will not work. Set <code>PUBLIC_URL</code> too so unsubscribe links work.</p>
+    </div>
+    <div class="card">
+      <h2>Send a test message</h2>
+      <p class="muted-text">Verify your settings by sending yourself a test. If a service isn't configured, you'll get a dry-run notice instead of a real send.</p>
+      <form method="post" action="/settings/test-sms" class="filter-bar" data-no-confirm="1" style="margin-bottom:0.6rem">
+        <input type="tel" name="to" placeholder="Phone, e.g. 0244123456" required style="flex:1;min-width:200px">
+        <button type="submit">📱 Send test SMS</button>
+      </form>
+      <form method="post" action="/settings/test-email" class="filter-bar" data-no-confirm="1">
+        <input type="email" name="to" placeholder="you@example.com" required style="flex:1;min-width:200px">
+        <button type="submit">✉ Send test email</button>
+      </form>
     </div>
     <div class="card">
       <h2>Birthday automation</h2>
@@ -1687,6 +1699,34 @@ app.get('/settings', requireOwner, (req, res) => {
       <pre>flyctl ssh sftp get ${esc(DB_PATH)} ./church-backup.db</pre>
     </div>`;
   res.page({ title: 'Settings', active: '/settings', body });
+});
+
+app.post('/settings/test-sms', requireOwner, async (req, res) => {
+  const raw = (req.body.to || '').trim();
+  const phone = normalizePhoneGH(raw);
+  if (!phone) { flash(req, `“${raw}” is not a valid phone number.`); return res.redirect('/settings'); }
+  try {
+    const r = await sendSmsBatch([phone], `Test message from ${CHURCH_NAME} — your SMS setup is working. 🎉`);
+    if (r.dryRun) flash(req, 'SMS is in dry-run mode (ARKESEL_API_KEY not set) — nothing was actually sent.', 'info');
+    else if (r.ok) flash(req, `Test SMS sent to ${phone}.`, 'success');
+    else flash(req, `SMS send failed (HTTP ${r.status || '?'}): ${JSON.stringify(r.response || '')}`.slice(0, 300));
+  } catch (e) { flash(req, `SMS error: ${e.message}`); }
+  res.redirect('/settings');
+});
+
+app.post('/settings/test-email', requireOwner, async (req, res) => {
+  const to = (req.body.to || '').trim();
+  if (!isEmailish(to)) { flash(req, `“${to}” is not a valid email address.`); return res.redirect('/settings'); }
+  try {
+    const r = await sendEmailEach([{ addr: to, token: null }],
+      `Test email — ${CHURCH_NAME}`,
+      `This is a test email from ${CHURCH_NAME}. If you received it, your email setup is working.`,
+      { withFooter: false });
+    if (r.dryRun) flash(req, 'Email is in dry-run mode (SMTP not configured) — nothing was actually sent.', 'info');
+    else if (r.ok) flash(req, `Test email sent to ${to}.`, 'success');
+    else flash(req, `Email send failed: ${(r.errors && r.errors[0]) || 'unknown error'}`.slice(0, 300));
+  } catch (e) { flash(req, `Email error: ${e.message}`); }
+  res.redirect('/settings');
 });
 
 // ---------- profile (any signed-in user) ----------
