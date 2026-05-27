@@ -3,9 +3,35 @@
 // shared dependencies instead of these reaching for module globals.
 module.exports.register = function register(app, ctx) {
   const { db, esc, pageHero, statsRow, filterCard, requireAdmin, logActivity } = ctx;
+  const RECOMMENDED_CATEGORIES = [
+    'Audio-Visual / Media',
+    'Instruments',
+    'Sound Equipment',
+    'Office Supplies',
+    'Children Ministry',
+    'Kitchen & Catering',
+    'Cleaning & Sanitation',
+    'Furniture',
+    'Electrical',
+    'Maintenance Tools',
+    'Security',
+    'Outreach & Evangelism',
+    'Transport',
+    'Worship Materials',
+  ];
 
   app.get('/inventory', (req, res) => {
     const q = (req.query.q || '').trim();
+    const savedCategories = db.prepare(`
+      SELECT category_id, name
+      FROM inventory_categories
+      WHERE deleted_at IS NULL
+      ORDER BY name`).all();
+    const categories = [...new Set([
+      ...RECOMMENDED_CATEGORIES,
+      ...savedCategories.map((c) => c.name),
+    ])].sort((a, b) => a.localeCompare(b));
+
     const items = db.prepare(`
       SELECT item_id, name, quantity, category, notes
       FROM inventory_items
@@ -29,9 +55,24 @@ module.exports.register = function register(app, ctx) {
            <form class="form" method="post" action="/inventory" style="margin-top:0.75rem">
              <label class="wide">Name<input name="name" required></label>
              <label>Quantity<input type="number" name="quantity" min="0" value="0" required></label>
-             <label>Category<input name="category" placeholder="e.g. Instruments, Kitchen, Maintenance"></label>
+             <label>Category
+               <select name="category">
+                 <option value="">Uncategorized</option>
+                 ${categories.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join('')}
+               </select>
+             </label>
              <label class="wide-cell">Notes<textarea name="notes" rows="2"></textarea></label>
              <div class="actions"><button type="submit">Add item</button></div>
+           </form>
+         </details>`
+      : '';
+
+    const newCategoryForm = res.locals.isAdmin
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Create inventory category</strong></summary>
+           <form class="form" method="post" action="/inventory/categories" style="margin-top:0.75rem">
+             <label class="wide">Category name<input name="name" placeholder="e.g. Instruments" required></label>
+             <div class="actions"><button type="submit">Create category</button></div>
            </form>
          </details>`
       : '';
@@ -76,8 +117,21 @@ module.exports.register = function register(app, ctx) {
     res.page({
       title: 'Inventory',
       active: '/inventory', noHeader: true,
-      body: `${hero}${stats}${filters}${newForm}<div data-results>${sections}</div>`,
+      body: `${hero}${stats}${filters}${newCategoryForm}${newForm}<div data-results>${sections}</div>`,
     });
+  });
+
+  app.post('/inventory/categories', requireAdmin, (req, res) => {
+    const name = (req.body.name || '').trim();
+    if (!name) return res.redirect('/inventory');
+    db.prepare(`
+      INSERT INTO inventory_categories (name)
+      VALUES (?)
+      ON CONFLICT(name) DO UPDATE SET deleted_at=NULL`).run(name);
+    logActivity('inventory_category_added',
+      `Created inventory category: ${name}`,
+      '/inventory', res.locals.user.user_id);
+    res.redirect('/inventory');
   });
 
   app.post('/inventory', requireAdmin, (req, res) => {
@@ -97,6 +151,16 @@ module.exports.register = function register(app, ctx) {
   });
 
   app.get('/inventory/:id/edit', requireAdmin, (req, res) => {
+    const savedCategories = db.prepare(`
+      SELECT name
+      FROM inventory_categories
+      WHERE deleted_at IS NULL
+      ORDER BY name`).all();
+    const categories = [...new Set([
+      ...RECOMMENDED_CATEGORIES,
+      ...savedCategories.map((c) => c.name),
+    ])].sort((a, b) => a.localeCompare(b));
+
     const it = db.prepare(
       `SELECT * FROM inventory_items WHERE item_id=? AND deleted_at IS NULL`
     ).get(Number(req.params.id));
@@ -107,7 +171,12 @@ module.exports.register = function register(app, ctx) {
         <form class="form" method="post" action="/inventory/${it.item_id}">
           <label class="wide">Name<input name="name" required value="${esc(it.name)}"></label>
           <label>Quantity<input type="number" name="quantity" min="0" required value="${esc(String(it.quantity))}"></label>
-          <label>Category<input name="category" value="${esc(it.category || '')}"></label>
+          <label>Category
+            <select name="category">
+              <option value="">Uncategorized</option>
+              ${categories.map((name) => `<option value="${esc(name)}"${(it.category || '') === name ? ' selected' : ''}>${esc(name)}</option>`).join('')}
+            </select>
+          </label>
           <label class="wide-cell">Notes<textarea name="notes" rows="3">${esc(it.notes || '')}</textarea></label>
           <div class="actions">
             <button type="submit">Save changes</button>
