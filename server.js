@@ -1407,7 +1407,7 @@ require('./routes/preaching').register(app, {
 // ---------- communications ----------
 require('./routes/communications').register(app, {
   db, requireAdmin, logActivity, flash, csrfValid, CHURCH_NAME, PREF_LABELS,
-  loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach,
+  loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, normalizePhoneGH,
   ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS,
 });
 
@@ -2037,6 +2037,17 @@ app.use((err, req, res, next) => {
     body: '<p>An unexpected error occurred and has been logged. Please try again.</p>'
         + '<p><a href="/">Back to dashboard</a></p>',
   }));
+});
+
+// Safety net: log unhandled async rejections to the error log instead of
+// letting them crash the whole process (Express 4 doesn't auto-catch them).
+process.on('unhandledRejection', (reason) => {
+  const msg = (reason && reason.message) || String(reason);
+  console.error('Unhandled promise rejection:', msg);
+  try {
+    db.prepare(`INSERT INTO error_log (method, path, message, stack) VALUES ('', '(unhandledRejection)', ?, ?)`)
+      .run(String(msg).slice(0, 500), String((reason && reason.stack) || '').slice(0, 4000));
+  } catch (_) { /* never let logging throw */ }
 });
 
 // ---------- start ----------
