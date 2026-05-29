@@ -4,8 +4,9 @@
 // plain website. No Worker code, no build step.
 {
   "name": "mychurchmanager",
-  "compatibility_date": "2025-01-01",
+  "compatibility_date": "2026-05-29",
   "assets": {
-    "directory": "./marketing"
+    "directory": "./marketing",
+    "not_found_handling": "404-page"
   }
 }
