@@ -1224,8 +1224,8 @@ app.get('/', (req, res) => {
   const trendDelta = (n) => n == null ? '' :
     `<div class="trend ${n < 0 ? 'down' : ''}">${n >= 0 ? '↑' : '↓'} ${Math.abs(n)}% from last period</div>`;
 
-  const statCard = (cls, icon, label, value, trend, spark, color) => `
-    <div class="stat">
+  const statCard = (href, cls, icon, label, value, trend, spark, color) => `
+    <a class="stat stat-link" href="${href}" aria-label="Open ${label}">
       <div class="stat-top">
         <div class="ico ${cls}">${icon}</div>
         <div class="stat-body">
@@ -1233,18 +1233,19 @@ app.get('/', (req, res) => {
           <div class="value">${value}</div>
           ${trend}
         </div>
+        <span class="stat-arrow" aria-hidden="true">→</span>
       </div>
       <div class="spark">${miniSpark(spark, color)}</div>
-    </div>`;
+    </a>`;
   const cards = `
     <div class="stat-grid">
-      ${statCard('purple', '👥', 'Total Members', totalMembers.toLocaleString(),
+      ${statCard('/members', 'purple', '👥', 'Total Members', totalMembers.toLocaleString(),
         `<div class="trend">↑ ${newMembersThisMonth} this month</div>`, memberSeries, 'var(--purple)')}
-      ${statCard('green', '✓', 'Sunday Attendance', sundayAttendance,
+      ${statCard('/attendance', 'green', '✓', 'Sunday Attendance', sundayAttendance,
         trendDelta(attendanceDelta), attendanceSpark, 'var(--green)')}
-      ${statCard('amber', '₵', 'Offerings This Month', fmtMoney(offeringsThisMonth),
+      ${statCard('/finance', 'amber', '₵', 'Offerings This Month', fmtMoney(offeringsThisMonth),
         trendDelta(offeringsDelta), givingSeries, 'var(--gold)')}
-      ${statCard('blue', '🚶', 'Visitors This Month', visitorsThisMonth,
+      ${statCard('/members?status=visitor', 'blue', '🚶', 'Visitors This Month', visitorsThisMonth,
         `<div class="trend">↑ ${visitorsThisWeek} new this week</div>`, visitorSeries, 'var(--blue)')}
     </div>`;
 

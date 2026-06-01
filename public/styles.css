@@ -1341,3 +1341,201 @@ form.inline button { padding: 0.4rem 0.7rem; font-size: 0.85rem; height: 34px; }
 :root[data-theme="dark"] .pill-member  { color: #7ee0a3; }
 :root[data-theme="dark"] .pill-regular { color: #9cc4f5; }
 :root[data-theme="dark"] .pill-visitor { color: #f0c889; }
+
+/* ---------- Liquid glass dashboard refresh ---------- */
+:root {
+  --glass-bg: rgba(255, 255, 255, 0.58);
+  --glass-bg-strong: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.62);
+  --glass-shadow: 0 22px 70px rgba(31, 41, 71, 0.14), inset 0 1px 0 rgba(255,255,255,0.72);
+  --glass-highlight: rgba(255, 255, 255, 0.36);
+}
+:root[data-theme="dark"] {
+  --glass-bg: rgba(23, 29, 43, 0.62);
+  --glass-bg-strong: rgba(30, 38, 56, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-highlight: rgba(255, 255, 255, 0.08);
+}
+body {
+  background:
+    radial-gradient(circle at 87% 8%, rgba(255,255,255,0.96) 0 6%, transparent 24%),
+    radial-gradient(circle at 94% 24%, rgba(34, 197, 94, 0.18), transparent 22%),
+    radial-gradient(circle at 18% 0%, rgba(96, 165, 250, 0.22), transparent 32%),
+    radial-gradient(circle at 54% 18%, rgba(124, 92, 252, 0.15), transparent 28%),
+    linear-gradient(135deg, #f8fbff 0%, #eef5fb 47%, #f9fbf7 100%);
+  background-attachment: fixed;
+}
+:root[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at 90% 10%, rgba(59, 130, 246, 0.12), transparent 26%),
+    radial-gradient(circle at 16% 0%, rgba(124, 92, 252, 0.16), transparent 35%),
+    linear-gradient(135deg, #0d1320 0%, #111827 55%, #0f172a 100%);
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(110deg, transparent 0 58%, rgba(255,255,255,0.44) 58% 61%, transparent 61% 100%),
+    radial-gradient(ellipse at 72% 10%, rgba(255,255,255,0.55), transparent 25%);
+  filter: blur(18px);
+  opacity: 0.7;
+  z-index: -1;
+}
+.app { position: relative; }
+.sidebar {
+  margin: 0.9rem 0 0.9rem 0.9rem;
+  height: calc(100vh - 1.8rem);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(29, 78, 137, 0.82), rgba(16, 48, 96, 0.72)),
+    var(--glass-bg);
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(22px) saturate(1.45);
+  -webkit-backdrop-filter: blur(22px) saturate(1.45);
+}
+.sidebar .brand .logo,
+.topbar .avatar,
+.stat .ico,
+.m-tile .ico,
+.event-row .date,
+.list .ico,
+.fin-row .lbl .dot,
+.fu-row .ico {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55), 0 10px 24px rgba(67, 97, 238, 0.14);
+}
+.sidebar nav a {
+  border: 1px solid transparent;
+  transition: background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease), transform 0.18s var(--ease);
+}
+.sidebar nav a:hover,
+.sidebar nav a.active {
+  background: rgba(255,255,255,0.16);
+  border-color: rgba(255,255,255,0.18);
+  transform: translateX(2px);
+}
+.topbar {
+  margin: 0.9rem 1rem 0;
+  border-radius: 22px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-strong);
+  box-shadow: 0 12px 34px rgba(31, 41, 71, 0.10), inset 0 1px 0 rgba(255,255,255,0.65);
+  backdrop-filter: blur(24px) saturate(1.55);
+  -webkit-backdrop-filter: blur(24px) saturate(1.55);
+}
+.topbar .search,
+.topbar .bell,
+.topbar .theme-toggle {
+  background: rgba(255,255,255,0.42);
+  border-color: var(--glass-border);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.65);
+}
+:root[data-theme="dark"] .topbar .search,
+:root[data-theme="dark"] .topbar .bell,
+:root[data-theme="dark"] .topbar .theme-toggle {
+  background: rgba(15, 23, 42, 0.45);
+}
+.page { padding: 1.75rem 1.65rem 1.5rem; }
+.dash-shell::before {
+  inset: -42px -28px auto -28px;
+  height: 320px;
+  border-radius: 42px;
+  background:
+    radial-gradient(circle at 8% 18%, rgba(96, 165, 250, 0.28), transparent 42%),
+    radial-gradient(circle at 42% 2%, rgba(255,255,255,0.72), transparent 32%),
+    radial-gradient(circle at 92% 26%, rgba(22, 163, 74, 0.18), transparent 36%),
+    linear-gradient(120deg, rgba(255, 255, 255, 0.52), rgba(248, 250, 252, 0.18));
+  filter: blur(0.1px);
+}
+.card,
+.stat,
+.quick-drop > summary,
+.quick-menu,
+.report-tile,
+.qr-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(22px) saturate(1.5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+}
+.card,
+.stat {
+  position: relative;
+  overflow: hidden;
+}
+.card::before,
+.stat::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 42%;
+  background: linear-gradient(180deg, var(--glass-highlight), transparent);
+  pointer-events: none;
+}
+.dash-shell .card,
+.dash-shell .stat,
+.dash-shell .quick-drop > summary,
+.dash-shell .quick-menu {
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
+  backdrop-filter: blur(24px) saturate(1.55);
+  -webkit-backdrop-filter: blur(24px) saturate(1.55);
+}
+.stat-link {
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+}
+.stat-link:hover,
+.stat-link:focus-visible {
+  color: var(--ink);
+  text-decoration: none;
+  transform: translateY(-5px) scale(1.01);
+  box-shadow: 0 28px 80px rgba(31, 41, 71, 0.18), inset 0 1px 0 rgba(255,255,255,0.7);
+}
+.stat-link:focus-visible { outline: 2px solid rgba(124, 92, 252, 0.45); outline-offset: 3px; }
+.stat-arrow {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.42);
+  color: var(--purple-dark);
+  border: 1px solid var(--glass-border);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.18s var(--ease), transform 0.18s var(--ease);
+}
+.stat-link:hover .stat-arrow,
+.stat-link:focus-visible .stat-arrow {
+  opacity: 1;
+  transform: translateX(0);
+}
+.card-head a,
+.view-all {
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 0.24rem 0.68rem;
+  background: rgba(255,255,255,0.34);
+}
+.card-head a:hover,
+.view-all:hover {
+  background: rgba(255,255,255,0.58);
+  text-decoration: none;
+}
+@media (max-width: 860px) {
+  .sidebar { margin: 0; height: auto; border-radius: 0; }
+  .topbar { margin: 0; border-radius: 0; }
+  .page { padding: 1rem; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .card, .stat, .topbar, .sidebar, .quick-drop > summary, .quick-menu {
+    background: var(--panel);
+  }
+}
