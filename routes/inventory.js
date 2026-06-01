@@ -31,19 +31,6 @@ module.exports.register = function register(app, ctx) {
       ...RECOMMENDED_CATEGORIES,
       ...savedCategories.map((c) => c.name),
     ])].sort((a, b) => a.localeCompare(b));
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
     const items = db.prepare(`
       SELECT item_id, name, quantity, category, notes
       FROM inventory_items
@@ -87,25 +74,6 @@ module.exports.register = function register(app, ctx) {
            </form>
          </details>`
       : '';
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-
-    const newCategoryForm = res.locals.isAdmin
-      ? `<details class="form-toggle" style="margin-bottom:1rem">
-           <summary><strong>+ Create inventory category</strong></summary>
-           <form class="form" method="post" action="/inventory/categories" style="margin-top:0.75rem">
-             <label class="wide">Category name<input name="name" placeholder="e.g. Instruments" required></label>
-             <div class="actions"><button type="submit">Create category</button></div>
-           </form>
-         </details>`
-      : '';
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 
     const sections = items.length
       ? cats.map((c) => {
@@ -190,19 +158,7 @@ module.exports.register = function register(app, ctx) {
       ...RECOMMENDED_CATEGORIES,
       ...savedCategories.map((c) => c.name),
     ])].sort((a, b) => a.localeCompare(b));
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
 
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
     const it = db.prepare(
       `SELECT * FROM inventory_items WHERE item_id=? AND deleted_at IS NULL`
     ).get(Number(req.params.id));

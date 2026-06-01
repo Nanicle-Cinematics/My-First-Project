@@ -62,6 +62,16 @@ test('unauthenticated root redirects to setup on first run', async () => {
   assert.match(r.location, /\/setup/);
 });
 
+test('health and readiness endpoints are available', async () => {
+  const health = await get('/healthz');
+  assert.strictEqual(health.status, 200);
+  assert.deepStrictEqual(JSON.parse(health.body), { status: 'ok' });
+
+  const ready = await get('/readyz');
+  assert.strictEqual(ready.status, 200);
+  assert.deepStrictEqual(JSON.parse(ready.body), { status: 'ready', db: 'ok' });
+});
+
 test('setup form carries a CSRF token and creates the admin', async () => {
   const form = await get('/setup');
   const token = tokenFrom(form.body);
@@ -192,6 +202,12 @@ test('inventory (extracted route module) can add and list an item', async () => 
   const page = await get('/inventory');
   assert.strictEqual(page.status, 200);
   assert.match(page.body, /Inventory/);
+  assert.match(page.body, />Audio-Visual \/ Media<\/option>/);
+  const cat = await post('/inventory/categories', { name: 'Instruments', _csrf: tokenFrom(page.body) });
+  assert.strictEqual(cat.status, 302);
+  const withCategory = await get('/inventory');
+  assert.match(withCategory.body, /Create inventory category/);
+  assert.match(withCategory.body, />Instruments<\/option>/);
   const token = tokenFrom(page.body);
   const created = await post('/inventory', { name: 'Keyboard', quantity: '2', category: 'Instruments', _csrf: token });
   assert.strictEqual(created.status, 302);
@@ -237,9 +253,45 @@ test('events (extracted route module) list/create/detail work', async () => {
   assert.strictEqual(cal.status, 200);
 });
 
+test('broadcasts can target a single selected member', async () => {
+  const memberForm = await get('/members/new');
+  const created = await post('/members', {
+    first_name: 'Solo', last_name: 'Message', membership_status: 'member',
+    mobile_phone: '0244123456', email: 'solo@example.com', gender: 'M',
+    preferred_channel: 'either', _csrf: tokenFrom(memberForm.body),
+  });
+  assert.strictEqual(created.status, 302);
+
+  const members = await get('/members?q=Solo');
+  const m = members.body.match(/href="\/members\/(\d+)">Solo Message/);
+  assert.ok(m, 'new single-recipient member should be listed');
+
+  const broadcast = await get(`/communications/broadcast?member_id=${m[1]}`);
+  assert.strictEqual(broadcast.status, 200);
+  assert.match(broadcast.body, /Single member SMS\/email/);
+  assert.match(broadcast.body, /Solo Message/);
+  assert.match(broadcast.body, /Both \(1 SMS · 1 email\)/);
+
+  const sent = await post('/communications/broadcast', {
+    member_id: m[1], channel: 'both', subject: 'Hello Solo', body: 'Private update',
+    _csrf: tokenFrom(broadcast.body),
+  });
+  assert.strictEqual(sent.status, 302);
+  assert.match(sent.location, /\/communications\/broadcasts\/\d+/);
+
+  const detail = await get(sent.location);
+  assert.strictEqual(detail.status, 200);
+  assert.match(detail.body, /Single member: Solo Message/);
+  assert.match(detail.body, /Private update/);
+  assert.match(detail.body, /solo@example.com/);
+});
+
 test('reports + communications (extracted modules) render and post', async () => {
   assert.strictEqual((await get('/reports')).status, 200);
   assert.strictEqual((await get('/reports/financial')).status, 200);
+  const financialCsv = await get('/reports/financial.csv');
+  assert.strictEqual(financialCsv.status, 200);
+  assert.match(financialCsv.body, /Section,Period\/Month,Income,Expenses,Net/);
   const comms = await get('/communications');
   assert.strictEqual(comms.status, 200);
   assert.strictEqual((await get('/communications/broadcast')).status, 200);
@@ -302,6 +354,14 @@ test('the error handler catches a thrown route error, logs it, shows 500', async
   assert.strictEqual(log.status, 200);
   assert.match(log.body, /Error Log/);
   assert.match(log.body, /\/__throw/);
+});
+
+
+test('owner can review security audit events', async () => {
+  const audit = await get('/security/audit');
+  assert.strictEqual(audit.status, 200);
+  assert.match(audit.body, /Security Audit/);
+  assert.match(audit.body, /login_success|user_created|user_role_changed/);
 });
 
 test('security headers are present', async () => {

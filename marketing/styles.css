@@ -305,6 +305,25 @@ h3 { font-size: 1.15rem; font-weight: 600; }
 }
 .how-step p { color: var(--muted); margin: 0; }
 
+
+/* ---------- Trust / commercial readiness ---------- */
+.trust { padding: 4.5rem 0; background: linear-gradient(135deg, #eef6ff 0%, #fffaf0 100%); }
+.trust h2 { text-align: center; }
+.trust-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem; margin-top: 2rem;
+}
+.trust-card {
+  background: #fff; border: 1px solid var(--border); border-radius: 16px;
+  padding: 1.5rem; box-shadow: var(--shadow);
+}
+.trust-icon {
+  width: 44px; height: 44px; border-radius: 12px; background: var(--blue); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; margin-bottom: 0.75rem;
+}
+.trust-card h3 { margin-bottom: 0.4rem; }
+.trust-card p { color: var(--muted); margin: 0; }
+
 /* ---------- Pricing ---------- */
 .pricing { padding: 5rem 0; }
 .pricing h2 { text-align: center; }

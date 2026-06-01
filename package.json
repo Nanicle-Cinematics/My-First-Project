@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test --test-force-exit",
-    "build-db": "bash build.sh"
+    "build-db": "bash build.sh",
+    "migrate-live-db": "node scripts/migrate-live-db.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

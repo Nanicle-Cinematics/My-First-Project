@@ -17,6 +17,15 @@ const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
 const PUBLIC_URL  = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const PREF_LABELS = { either: 'Both', sms_only: 'SMS only', email_only: 'Email only', none: 'Do not contact' };
 
+function validateEnvironment(env) {
+  const required = ['SESSION_SECRET'];
+  const missing = required.filter((name) => !env[name] || !String(env[name]).trim());
+  if (missing.length && env.NODE_ENV !== 'test') {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+}
+validateEnvironment(process.env);
+
 // ---------- backups ----------
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(path.dirname(DB_PATH), 'backups');
 const BACKUP_KEEP = Number(process.env.BACKUP_KEEP || 12);
@@ -121,6 +130,15 @@ db.exec(`
     kind        TEXT NOT NULL,
     description TEXT NOT NULL,
     link        TEXT
+  );
+  CREATE TABLE IF NOT EXISTS security_audit_log (
+    audit_id    INTEGER PRIMARY KEY,
+    occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actor_id    INTEGER REFERENCES users(user_id),
+    event       TEXT NOT NULL,
+    subject     TEXT,
+    ip          TEXT,
+    user_agent  TEXT
   );
   CREATE TABLE IF NOT EXISTS organizations (
     org_id      INTEGER PRIMARY KEY,
@@ -228,6 +246,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS inventory_items (
   deleted_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_inventory_active ON inventory_items(deleted_at);`);
+// Inventory categories — startup self-heal guard.
+db.exec(`CREATE TABLE IF NOT EXISTS inventory_categories (
+  category_id  INTEGER PRIMARY KEY,
+  name         TEXT NOT NULL UNIQUE,
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_categories_active ON inventory_categories(deleted_at);`);
 
 // Preaching plan: who preaches on which date. The preacher may be a linked
 // member (member_id) or a guest with their own contact details, so reminders
@@ -493,6 +519,24 @@ try {
 const app = express();
 // Trust the reverse proxy in production so secure cookies work behind Fly/Render/etc.
 app.set('trust proxy', 1);
+app.use((req, res, next) => {
+  const started = Date.now();
+  const requestId = req.headers['x-request-id'] || crypto.randomUUID();
+  res.setHeader('x-request-id', requestId);
+  res.on('finish', () => {
+    const entry = {
+      ts: new Date().toISOString(),
+      request_id: requestId,
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      duration_ms: Date.now() - started,
+      user_id: res.locals && res.locals.user ? res.locals.user.user_id : null,
+    };
+    console.log(JSON.stringify(entry));
+  });
+  next();
+});
 
 // Baseline security headers (no external deps). CSP allows inline scripts/styles
 // because the app renders them inline; it still blocks external sources, framing,
@@ -516,6 +560,18 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ extended: false }));
 app.use('/static', express.static(path.join(__dirname, 'public')));
+
+app.get('/healthz', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+app.get('/readyz', (req, res) => {
+  try {
+    db.prepare('SELECT 1 AS ok').get();
+    res.status(200).json({ status: 'ready', db: 'ok' });
+  } catch (error) {
+    res.status(503).json({ status: 'not-ready', db: 'error', error: 'database unavailable' });
+  }
+});
 
 if (!process.env.SESSION_SECRET) {
   console.warn('SESSION_SECRET not set — generating an ephemeral one (logins will be lost on restart).');
@@ -970,6 +1026,15 @@ function logActivity(kind, description, link, userId) {
   } catch (_) { /* table may not exist on very old DBs */ }
 }
 
+function logSecurityEvent(req, event, subject, actorId) {
+  try {
+    db.prepare(
+      `INSERT INTO security_audit_log (actor_id, event, subject, ip, user_agent)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(actorId || null, event, subject || null, req.ip || null, req.headers['user-agent'] || null);
+  } catch (_) { /* table may not exist on very old DBs */ }
+}
+
 // ---------- shared view/component builders (see lib/views.js) ----------
 const {
   flashHtml, pageHero, heroStat, statsRow, filterCard, listCard, table, pager,
@@ -1351,7 +1416,7 @@ app.get('/', (req, res) => {
     title: 'Dashboard',
     subtitle: `Welcome back, ${res.locals.user.display_name || res.locals.user.username}`,
     active: '/',
-    body: `${cards}${quick}${grid}`,
+    body: `<section class="dash-shell">${cards}${quick}${grid}</section>`,
   });
 });
 
@@ -1759,6 +1824,7 @@ app.post('/profile/password', (req, res) => {
   if (np !== next2) return res.redirect('/profile?e=mismatch');
   db.prepare('UPDATE users SET password_hash=? WHERE user_id=?')
     .run(bcrypt.hashSync(np, 12), res.locals.user.user_id);
+  logSecurityEvent(req, 'own_password_changed', `user_id:${res.locals.user.user_id}`, res.locals.user.user_id);
   res.redirect('/profile?ok=1');
 });
 
@@ -1825,9 +1891,10 @@ app.post('/users', requireUserManager, (req, res) => {
   if (!username || !password || password.length < 8) return res.redirect('/users/new');
   const r = ['admin', 'editor', 'viewer'].includes(role) ? role : 'viewer';
   try {
-    db.prepare(
+    const info = db.prepare(
       `INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)`
     ).run(username.trim(), bcrypt.hashSync(password, 12), (display_name || '').trim() || null, r);
+    logSecurityEvent(req, 'user_created', `user_id:${info.lastInsertRowid};role:${r}`, res.locals.user.user_id);
   } catch (e) {
     return res.status(400).send(layout({
       title: 'Could not create user', user: res.locals.user, active: null,
@@ -1852,6 +1919,7 @@ app.post('/users/:id/role', requireOwner, (req, res) => {
     }
   }
   db.prepare(`UPDATE users SET role=? WHERE user_id=?`).run(r, id);
+  logSecurityEvent(req, 'user_role_changed', `user_id:${id};role:${r}`, res.locals.user.user_id);
   res.redirect('/users');
 });
 
@@ -1861,6 +1929,7 @@ app.post('/users/:id/reset', requireUserManager, (req, res) => {
   if (!password || password.length < 8) return res.redirect('/users');
   db.prepare(`UPDATE users SET password_hash=? WHERE user_id=?`)
     .run(bcrypt.hashSync(password, 12), id);
+  logSecurityEvent(req, 'user_password_reset', `user_id:${id}`, res.locals.user.user_id);
   res.redirect('/users');
 });
 
@@ -1871,7 +1940,27 @@ app.post('/users/:id/delete', requireUserManager, (req, res) => {
   const target = db.prepare(`SELECT role FROM users WHERE user_id=?`).get(id);
   if (target && target.role === 'admin' && admins <= 1) return res.redirect('/users');
   db.prepare(`UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE user_id=?`).run(id);
+  logSecurityEvent(req, 'user_deleted', `user_id:${id}`, res.locals.user.user_id);
   res.redirect('/users');
+});
+
+app.get('/security/audit', requireOwner, (req, res) => {
+  const rows = db.prepare(`
+    SELECT sal.occurred_at, sal.event, sal.subject, sal.ip, sal.user_agent,
+           u.username AS actor
+      FROM security_audit_log sal
+      LEFT JOIN users u ON u.user_id=sal.actor_id
+     ORDER BY sal.audit_id DESC LIMIT 100`).all();
+  const body = `
+    <p class="muted-text">Most recent security-sensitive events. Use this after deploys and account changes.</p>
+    ${table(['When', 'Event', 'Actor', 'Subject', 'IP'], rows.map((r) => [
+      esc(r.occurred_at),
+      esc(r.event),
+      esc(r.actor || 'system/anonymous'),
+      esc(r.subject || '—'),
+      esc(r.ip || '—'),
+    ]))}`;
+  res.page({ title: 'Security Audit', active: null, body });
 });
 
 // ---------- auth pages ----------
@@ -1962,6 +2051,7 @@ function noteLoginFail(ip) {
 app.post('/login', (req, res) => {
   const ip = req.ip || 'unknown';
   if (loginBlocked(ip)) {
+    logSecurityEvent(req, 'login_blocked', 'ip-throttle', null);
     return res.status(429).send(authPage('Too many attempts',
       '<p class="error">Too many sign-in attempts. Please wait a few minutes and try again.</p>'
       + '<p><a href="/login">Back to sign in</a></p>'));
@@ -1972,10 +2062,12 @@ app.post('/login', (req, res) => {
   ).get((username || '').trim());
   if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
     noteLoginFail(ip);
+    logSecurityEvent(req, 'login_failed', (username || '').trim() || 'unknown', null);
     return res.redirect('/login?e=1');
   }
   loginHits.delete(ip);
   req.session.userId = user.user_id;
+  logSecurityEvent(req, 'login_success', `user_id:${user.user_id}`, user.user_id);
   res.redirect('/');
 });
 

@@ -8,7 +8,6 @@ dev.db
 *.pre-restore-*
 dev-backups/
 node_modules/
-package-lock.json
 # macOS Finder metadata — never commit
 .DS_Store
 **/.DS_Store

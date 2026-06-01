@@ -28,6 +28,15 @@ function defaultRange(req) {
   const end   = req.query.end   || today.toISOString().slice(0, 10);
   return { start, end };
 }
+function csvEscape(v) {
+  const s = String(v ?? '');
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function sendCsv(res, filename, rows) {
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(rows.map((row) => row.map(csvEscape).join(',')).join('\n') + '\n');
+}
 function rangeForm(action, start, end, extra = '') {
   return `<form class="filters" method="get" action="${action}">
     <label>From <input type="date" name="start" value="${esc(start)}"></label>
@@ -841,6 +850,53 @@ app.get('/reports/expenses', (req, res) => {
 });
 
 // ---------- reports: financial summary ----------
+app.get('/reports/financial.csv', (req, res) => {
+  const { start, end } = defaultRange(req);
+  const year = req.query.year || new Date().getFullYear().toString();
+  const totals = db.prepare(`
+    SELECT
+      (SELECT COALESCE(SUM(total_amount),0) FROM services
+        WHERE deleted_at IS NULL AND service_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(total_collected),0) FROM harvests
+        WHERE deleted_at IS NULL AND COALESCE(harvest_date, harvest_year || '-01-01') BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM special_offerings
+        WHERE deleted_at IS NULL AND offering_date BETWEEN @s AND @e) AS income,
+      (SELECT COALESCE(SUM(amount),0) FROM expenses
+        WHERE spent_on BETWEEN @s AND @e) AS expenses
+  `).get({ s: start, e: end });
+  const cashFlow = db.prepare(`
+    WITH mi AS (
+      SELECT strftime('%Y-%m', service_date) AS ym, SUM(total_amount) AS amt
+        FROM services WHERE deleted_at IS NULL AND strftime('%Y', service_date)=@y
+        GROUP BY ym
+      UNION ALL
+      SELECT strftime('%Y-%m', COALESCE(harvest_date, harvest_year || '-01-01')),
+             SUM(total_collected)
+        FROM harvests WHERE deleted_at IS NULL AND harvest_year=CAST(@y AS INTEGER)
+        GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', offering_date), SUM(amount)
+        FROM special_offerings WHERE deleted_at IS NULL AND strftime('%Y', offering_date)=@y
+        GROUP BY 1
+    ),
+    me AS (
+      SELECT strftime('%Y-%m', spent_on) AS ym, SUM(amount) AS amt
+        FROM expenses WHERE strftime('%Y', spent_on)=@y GROUP BY ym
+    ),
+    months AS (SELECT DISTINCT ym FROM mi UNION SELECT DISTINCT ym FROM me)
+    SELECT m.ym AS year_month,
+           COALESCE((SELECT SUM(amt) FROM mi WHERE mi.ym=m.ym), 0) AS income,
+           COALESCE((SELECT amt FROM me WHERE me.ym=m.ym), 0) AS expenses
+    FROM months m ORDER BY m.ym
+  `).all({ y: year });
+  const rows = [
+    ['Section', 'Period/Month', 'Income', 'Expenses', 'Net'],
+    ['Summary', `${start} to ${end}`, totals.income, totals.expenses, totals.income - totals.expenses],
+    ...cashFlow.map((r) => ['Cash flow', r.year_month, r.income, r.expenses, r.income - r.expenses]),
+  ];
+  sendCsv(res, `financial-summary-${year}.csv`, rows);
+});
+
 app.get('/reports/financial', (req, res) => {
   const { start, end } = defaultRange(req);
   const year = req.query.year || new Date().getFullYear().toString();
@@ -906,6 +962,7 @@ app.get('/reports/financial', (req, res) => {
     ${reportTabs('/reports/financial')}
     ${rangeForm('/reports/financial', start, end,
       `<label>Year for cash flow <input type="number" name="year" value="${esc(year)}" style="width:6rem"></label>`)}
+    <p><a class="btn ghost" href="/reports/financial.csv?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&year=${encodeURIComponent(year)}">Export financial CSV</a></p>
 
     <h2>Income vs Expenses (${esc(start)} → ${esc(end)})</h2>
     <div class="stat-grid">
