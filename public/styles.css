@@ -638,6 +638,23 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
 }
 
 /* ---------- Cards / dashboard grid ---------- */
+.dash-shell {
+  position: relative;
+  isolation: isolate;
+}
+.dash-shell::before {
+  content: '';
+  position: absolute;
+  inset: -18px -12px auto -12px;
+  height: 220px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 10% 10%, rgba(96, 165, 250, 0.22), transparent 55%),
+    radial-gradient(circle at 90% 15%, rgba(139, 92, 246, 0.2), transparent 50%),
+    linear-gradient(120deg, rgba(255, 255, 255, 0.7), rgba(248, 250, 252, 0.35));
+  z-index: -1;
+  pointer-events: none;
+}
 .dash-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -661,6 +678,19 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
   border-radius: var(--radius);
   padding: 1.1rem 1.25rem;
   box-shadow: var(--shadow);
+}
+.dash-shell .card,
+.dash-shell .stat,
+.dash-shell .quick-drop > summary,
+.dash-shell .quick-menu {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: color-mix(in srgb, var(--panel) 88%, #ffffff 12%);
+  backdrop-filter: blur(10px);
+}
+.dash-shell .card:hover {
+  transform: translateY(-2px);
+  transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease);
+  box-shadow: var(--shadow-md);
 }
 .card-head {
   display: flex; align-items: baseline; justify-content: space-between;

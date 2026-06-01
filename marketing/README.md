@@ -43,14 +43,50 @@ filter, auto-replies, integrations with Slack / Google Sheets.
 4. Sign up for a free Netlify account to claim the site + add a custom
    domain (free SSL included)
 
-### Vercel
+### Vercel (recommended now)
 
-1. Push this repo to GitHub
-2. Sign in to [vercel.com](https://vercel.com) with GitHub
-3. Import the repo
-4. Set **Root Directory** to `marketing/`
-5. Set **Framework Preset** to "Other"
-6. Click Deploy. Done.
+Use Vercel for the public landing/demo page if Netlify is unavailable.
+The app itself still runs separately on Fly.io; this is only for the static
+marketing site in `marketing/`.
+
+1. Push this repo to GitHub.
+2. Sign in to [vercel.com](https://vercel.com) with GitHub.
+3. Click **Add New → Project** and import this repo.
+4. Set **Root Directory** to `marketing/`.
+5. Keep the framework as **Other** / static site.
+6. Leave build command empty (or Vercel default) and output directory as `.`.
+7. Click **Deploy**.
+8. Share the generated `*.vercel.app` URL with churches.
+
+This folder includes `vercel.json` so Vercel serves clean URLs and applies
+reasonable cache headers for screenshots and CSS.
+
+After deployment, use two links:
+
+- **Landing/demo page:** your Vercel URL, e.g. `https://church-manager.vercel.app`
+- **Live app demo:** `https://church-management-system.fly.dev`
+
+Only share the live app link during a guided demo or after a church requests access.
+
+
+### Cloudflare Workers & Pages (recommended free option)
+
+This repo includes root Cloudflare config (`wrangler.json` / `wrangler.jsonc`) for Cloudflare Workers builds.
+It tells Wrangler to upload `./marketing` as the static assets directory,
+so Cloudflare does not try to build the Node/Express app.
+
+If the build log says to specify an assets directory or create a
+`wrangler.json` or `wrangler.jsonc` file, make sure your latest commit includes root Cloudflare config with `assets.directory` set to `./marketing`, then retry the deployment.
+
+Recommended Cloudflare settings:
+
+1. Production branch: `main`
+2. Root directory: leave blank / repository root
+3. Build command: leave blank, or use `exit 0`
+4. Deploy command: Cloudflare default / Wrangler
+5. Public URL: share the generated `*.workers.dev` or `*.pages.dev` URL
+
+See `docs/CLOUDFLARE_MARKETING_DEPLOY.md` for the full Cloudflare runbook.
 
 ### GitHub Pages
 

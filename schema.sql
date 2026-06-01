@@ -350,6 +350,14 @@ CREATE TABLE inventory_items (
 );
 CREATE INDEX idx_inventory_active ON inventory_items(deleted_at);
 
+CREATE TABLE inventory_categories (
+    category_id  INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL UNIQUE,
+    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at   TEXT
+);
+CREATE INDEX idx_inventory_categories_active ON inventory_categories(deleted_at);
+
 CREATE TABLE preaching_plan (
     plan_id          INTEGER PRIMARY KEY,
     preach_date      TEXT NOT NULL,

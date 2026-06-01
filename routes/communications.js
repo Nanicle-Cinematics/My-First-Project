@@ -5,7 +5,7 @@ const { table } = require('../lib/views');
 
 module.exports.register = function register(app, ctx) {
   const { db, requireAdmin, logActivity, flash, csrfValid, CHURCH_NAME, PREF_LABELS,
-    loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach,
+    loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, normalizePhoneGH,
     ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS } = ctx;
 
 app.get('/communications', (req, res) => {
@@ -37,7 +37,8 @@ app.get('/communications', (req, res) => {
     : '<p class="muted-text">No announcements yet.</p>';
   const broadcastCta = res.locals.isAdmin
     ? `<p style="margin-bottom:1rem">
-         <a class="btn" href="/communications/broadcast">📣 Send SMS / email broadcast</a>
+         <a class="btn" href="/communications/broadcast">📣 Send SMS/email broadcast</a>
+         <a class="btn ghost" href="/communications/broadcast?member_id=">Send to one member</a>
          <a class="btn ghost" href="/communications/broadcasts">View broadcast history</a>
        </p>` : '';
   res.page({
@@ -86,6 +87,29 @@ function resolveAudience(orgIds) {
   ).all(...orgIds);
 }
 
+function resolveSingleMember(memberId) {
+  if (!memberId) return [];
+  const member = db.prepare(
+    `SELECT m.member_id, m.first_name||' '||m.last_name AS name,
+            m.email, m.mobile_phone, m.preferred_channel, m.unsubscribe_token
+     FROM members m
+     WHERE m.member_id = ?
+       AND m.deleted_at IS NULL`
+  ).get(memberId);
+  return member ? [member] : [];
+}
+
+function loadMemberChoices() {
+  return db.prepare(
+    `SELECT m.member_id, m.first_name||' '||m.last_name AS name,
+            m.email, m.mobile_phone, m.preferred_channel
+     FROM members m
+     WHERE m.deleted_at IS NULL
+     ORDER BY m.last_name, m.first_name
+     LIMIT 500`
+  ).all();
+}
+
 // Decide whether a member can receive a given channel, respecting their preferred_channel.
 function canReceive(member, channel) {
   const pref = (member.preferred_channel || 'none');
@@ -97,14 +121,17 @@ function canReceive(member, channel) {
 
 
 function parseOrgChoice(b) {
-  if (b.all_members === '1') return { allMembers: true, orgIds: [] };
+  const memberId = Number(b.member_id) || null;
+  if (memberId) return { allMembers: false, orgIds: [], memberId };
+  if (b.all_members === '1') return { allMembers: true, orgIds: [], memberId: null };
   let raw = b.org_ids;
-  if (!raw) return { allMembers: false, orgIds: [] };
+  if (!raw) return { allMembers: false, orgIds: [], memberId: null };
   const ids = (Array.isArray(raw) ? raw : [raw]).map((x) => Number(x)).filter(Boolean);
-  return { allMembers: false, orgIds: ids };
+  return { allMembers: false, orgIds: ids, memberId: null };
 }
 
-function audienceLabel(orgs, choice) {
+function audienceLabel(orgs, choice, recipients = []) {
+  if (choice.memberId) return recipients[0] ? `Single member: ${recipients[0].name}` : 'Single member';
   if (choice.allMembers) return 'All members';
   if (!choice.orgIds.length) return 'None';
   const names = orgs.filter((o) => choice.orgIds.includes(o.org_id)).map((o) => o.name);
@@ -113,9 +140,12 @@ function audienceLabel(orgs, choice) {
 
 app.get('/communications/broadcast', requireAdmin, (req, res) => {
   const orgs = loadOrganizations();
+  const memberChoices = loadMemberChoices();
   const choice = parseOrgChoice(req.query);
-  const audienceChosen = choice.allMembers || choice.orgIds.length > 0;
-  const recipients = audienceChosen ? resolveAudience(choice.allMembers ? [] : choice.orgIds) : [];
+  const audienceChosen = choice.allMembers || choice.orgIds.length > 0 || !!choice.memberId;
+  const recipients = audienceChosen
+    ? (choice.memberId ? resolveSingleMember(choice.memberId) : resolveAudience(choice.allMembers ? [] : choice.orgIds))
+    : [];
 
   // Channel breakdown — already respects preferred_channel.
   let bothCount = 0, smsOnlyCount = 0, emailOnlyCount = 0, noneCount = 0, excludedPref = 0;
@@ -146,6 +176,17 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
         <input type="checkbox" name="all_members" value="1" ${choice.allMembers ? 'checked' : ''}>
         <strong>All members</strong> <span class="muted-text">(every active member)</span>
       </label>
+      <label>Single member SMS/email
+        <select name="member_id">
+          <option value="">Choose one member…</option>
+          ${memberChoices.map((m) => `
+            <option value="${m.member_id}" ${choice.memberId === m.member_id ? 'selected' : ''}>
+              ${esc(m.name)}${m.mobile_phone ? ` · ${esc(m.mobile_phone)}` : ''}${m.email ? ` · ${esc(m.email)}` : ''}
+            </option>`).join('')}
+        </select>
+        <span class="hint">Choose one member to send an individual SMS/email instead of a group broadcast.</span>
+      </label>
+      <p class="muted-text" style="margin:0.5rem 0">Or choose organization audiences:</p>
       <div class="check-grid" style="opacity:${choice.allMembers ? '0.5' : '1'}">
         ${orgs.map((o) => `
           <label class="check">
@@ -188,9 +229,11 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
   ` : '';
 
   // Hidden inputs to preserve audience selection in the compose form POST.
-  const audienceHidden = (choice.allMembers
-    ? `<input type="hidden" name="all_members" value="1">`
-    : choice.orgIds.map((id) => `<input type="hidden" name="org_ids" value="${id}">`).join(''));
+  const audienceHidden = choice.memberId
+    ? `<input type="hidden" name="member_id" value="${choice.memberId}">`
+    : (choice.allMembers
+      ? `<input type="hidden" name="all_members" value="1">`
+      : choice.orgIds.map((id) => `<input type="hidden" name="org_ids" value="${id}">`).join(''));
 
   const composeForm = audienceChosen && recipients.length ? `
     <h2>Compose message</h2>
@@ -265,14 +308,14 @@ app.post('/communications/broadcast', requireAdmin, async (req, res) => {
     audienceLbl = `Test send (${[phone, email].filter(Boolean).join(' / ')})`;
     orgIdForRow = null;
   } else {
-    if (!choice.allMembers && choice.orgIds.length === 0) {
+    if (!choice.memberId && !choice.allMembers && choice.orgIds.length === 0) {
       return res.redirect('/communications/broadcast');
     }
-    audience = resolveAudience(choice.allMembers ? [] : choice.orgIds);
+    audience = choice.memberId ? resolveSingleMember(choice.memberId) : resolveAudience(choice.allMembers ? [] : choice.orgIds);
     if (!audience.length) return res.redirect('/communications/broadcast');
-    audienceLbl = audienceLabel(orgs, choice);
+    audienceLbl = audienceLabel(orgs, choice, audience);
     // Only set org_id when exactly one org is selected (schema is single-FK).
-    orgIdForRow = (!choice.allMembers && choice.orgIds.length === 1) ? choice.orgIds[0] : null;
+    orgIdForRow = (!choice.memberId && !choice.allMembers && choice.orgIds.length === 1) ? choice.orgIds[0] : null;
   }
 
   // Create the broadcast row.
