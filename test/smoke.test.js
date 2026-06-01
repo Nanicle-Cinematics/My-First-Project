@@ -84,6 +84,12 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   const home = await get('/');
   assert.strictEqual(home.status, 200);
   assert.match(home.body, /Dashboard/);
+  assert.match(home.body, /class="stat stat-link" href="\/members"/);
+  assert.match(home.body, /class="stat stat-link" href="\/attendance"/);
+  assert.match(home.body, /class="stat stat-link" href="\/finance"/);
+  assert.match(home.body, /class="stat stat-link" href="\/members\?status=visitor"/);
+  assert.match(home.body, /class="card dash-card-link" data-href="\/events"/);
+  assert.match(home.body, /class="card dash-card-link" data-href="\/reports\/financial"/);
 });
 
 test('state-changing POST without a CSRF token is rejected (403)', async () => {

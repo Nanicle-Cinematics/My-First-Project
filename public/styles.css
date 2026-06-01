@@ -1539,3 +1539,121 @@ body::before {
     background: var(--panel);
   }
 }
+
+/* ---------- Stronger liquid-glass dashboard cards + obvious click affordance ---------- */
+.dash-shell {
+  padding: 0.25rem;
+}
+.dash-shell::after {
+  content: '';
+  position: absolute;
+  right: clamp(-90px, -8vw, -28px);
+  top: 86px;
+  width: 260px;
+  height: 260px;
+  border-radius: 45% 55% 58% 42%;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255,255,255,0.9), transparent 22%),
+    radial-gradient(circle at 62% 68%, rgba(96, 165, 250, 0.26), transparent 46%),
+    linear-gradient(135deg, rgba(255,255,255,0.42), rgba(124, 92, 252, 0.14));
+  filter: blur(2px);
+  opacity: 0.72;
+  z-index: -1;
+  pointer-events: none;
+}
+.dash-shell .stat,
+.dash-shell .card {
+  border: 1px solid rgba(255,255,255,0.72);
+  background:
+    linear-gradient(145deg, rgba(255,255,255,0.72), rgba(255,255,255,0.34) 48%, rgba(255,255,255,0.20)),
+    radial-gradient(circle at 18% 0%, rgba(255,255,255,0.92), transparent 38%),
+    rgba(255,255,255,0.46);
+  box-shadow:
+    0 24px 80px rgba(31, 41, 71, 0.16),
+    0 2px 10px rgba(255,255,255,0.35) inset,
+    0 -14px 34px rgba(96, 165, 250, 0.08) inset;
+  backdrop-filter: blur(30px) saturate(1.85);
+  -webkit-backdrop-filter: blur(30px) saturate(1.85);
+}
+:root[data-theme="dark"] .dash-shell .stat,
+:root[data-theme="dark"] .dash-shell .card {
+  border-color: rgba(255,255,255,0.13);
+  background:
+    linear-gradient(145deg, rgba(30,41,59,0.82), rgba(15,23,42,0.46) 55%, rgba(15,23,42,0.30)),
+    radial-gradient(circle at 18% 0%, rgba(255,255,255,0.10), transparent 38%),
+    rgba(15,23,42,0.58);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.30),
+    0 1px 0 rgba(255,255,255,0.10) inset,
+    0 -14px 34px rgba(96, 165, 250, 0.05) inset;
+}
+.dash-shell .stat::after,
+.dash-shell .card::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: calc(var(--radius) - 1px);
+  background:
+    linear-gradient(125deg, rgba(255,255,255,0.68) 0 10%, transparent 11% 42%, rgba(255,255,255,0.22) 43% 45%, transparent 46%),
+    radial-gradient(circle at 82% 16%, rgba(255,255,255,0.42), transparent 18%);
+  opacity: 0.62;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+.dash-shell .stat > *,
+.dash-shell .card > * {
+  position: relative;
+  z-index: 1;
+}
+.stat-link {
+  min-height: 156px;
+}
+.stat-arrow {
+  opacity: 1;
+  transform: translateX(0);
+  background: rgba(255,255,255,0.64);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.82), 0 8px 20px rgba(31,41,71,0.10);
+}
+.dash-card-link {
+  cursor: pointer;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.dash-card-link:hover,
+.dash-card-link:focus-visible {
+  transform: translateY(-5px) scale(1.006);
+  border-color: rgba(255,255,255,0.88);
+  box-shadow:
+    0 32px 90px rgba(31, 41, 71, 0.20),
+    0 2px 12px rgba(255,255,255,0.45) inset,
+    0 -14px 34px rgba(96, 165, 250, 0.10) inset;
+  outline: none;
+}
+.dash-card-link:focus-visible {
+  outline: 3px solid rgba(124, 92, 252, 0.42);
+  outline-offset: 4px;
+}
+.dash-card-cta,
+.card-head a.dash-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.72rem;
+  border-radius: 999px;
+  color: var(--purple-dark);
+  font-weight: 750;
+  background: rgba(255,255,255,0.62);
+  border: 1px solid rgba(255,255,255,0.72);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.86), 0 8px 20px rgba(31,41,71,0.08);
+  text-decoration: none;
+}
+.dash-card-link:hover .dash-card-cta,
+.card-head a.dash-card-cta:hover {
+  background: rgba(255,255,255,0.88);
+  text-decoration: none;
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dash-shell .stat,
+  .dash-shell .card {
+    background: rgba(255,255,255,0.92);
+  }
+}

@@ -1271,7 +1271,7 @@ app.get('/', (req, res) => {
     event_created: '📅', user_added: '🔑',
   };
   const activityCard = `
-    <div class="card">
+    <section class="card dash-card-link" data-href="/reports" role="link" tabindex="0" aria-label="Open recent activity reports">
       <details class="collapse-card" open>
         <summary class="card-head">
           <h2>Recent Activities <span class="card-count">${recentActivity.length}</span></h2>
@@ -1285,7 +1285,7 @@ app.get('/', (req, res) => {
           </li>`).join('')}</ul>
         <a class="view-all" href="/reports">View all →</a>` : '<p class="muted-text">No recent activity yet.</p>'}
       </details>
-    </div>`;
+    </section>`;
 
   const givingPoints = months.map((ym, i) => ({ label: monthLabel(ym), value: givingSeries[i] }));
   const givingLegendRows = givingLegend.map((g) => {
@@ -1298,13 +1298,13 @@ app.get('/', (req, res) => {
     </div>`;
   }).join('');
   const givingCard = `
-    <div class="card">
-      <div class="card-head"><h2>Giving Overview</h2><span class="meta">This month</span></div>
+    <section class="card dash-card-link" data-href="/reports/financial" role="link" tabindex="0" aria-label="Open financial reports">
+      <div class="card-head"><h2>Giving Overview</h2><a class="dash-card-cta" href="/reports/financial">Open →</a></div>
       <div class="big-figure">${fmtMoney(givingTotal)}</div>
       <div class="big-sub">Total giving ${trendDelta(offeringsDelta) || '<span class="trend">this month</span>'}</div>
       ${sparkline(givingPoints)}
       <div class="legend">${givingLegendRows}</div>
-    </div>`;
+    </section>`;
 
   const attLegendRows = attSegments.map((s) => {
     const pct = attTotal > 0 ? Math.round((s.value / attTotal) * 100) : 0;
@@ -1316,13 +1316,13 @@ app.get('/', (req, res) => {
     </div>`;
   }).join('');
   const attendanceCard = `
-    <div class="card">
-      <div class="card-head"><h2>Attendance Overview</h2><span class="meta">Last 30 days</span></div>
+    <section class="card dash-card-link" data-href="/attendance" role="link" tabindex="0" aria-label="Open attendance">
+      <div class="card-head"><h2>Attendance Overview</h2><a class="dash-card-cta" href="/attendance">Open →</a></div>
       <div class="donut-wrap">
         ${donut(attSegments, 'Avg / type', attAvg)}
         <div class="legend">${attLegendRows || '<p class="muted-text">No attendance recorded yet.</p>'}</div>
       </div>
-    </div>`;
+    </section>`;
 
   const ministryTile = (icon, cls, value, label) => `
     <div class="m-tile">
@@ -1331,23 +1331,23 @@ app.get('/', (req, res) => {
       <div class="m-label">${label}</div>
     </div>`;
   const ministryCard = `
-    <div class="card">
-      <div class="card-head"><h2>Ministry Overview</h2><a href="/organizations">View all</a></div>
+    <section class="card dash-card-link" data-href="/organizations" role="link" tabindex="0" aria-label="Open organizations">
+      <div class="card-head"><h2>Ministry Overview</h2><a class="dash-card-cta" href="/organizations">Open →</a></div>
       <div class="m-grid">
         ${ministryTile('👥', 'purple', ministryCount, 'Ministries')}
         ${ministryTile('🙋', 'green', volunteerCount, 'Volunteers')}
         ${ministryTile('♫', 'amber', orgCount, 'Organizations')}
         ${ministryTile('❤', 'blue', peopleInvolved, 'People Involved')}
       </div>
-    </div>`;
+    </section>`;
 
   const netBalance = offeringsThisMonth + harvestsMonth - monthExpenses;
   const specialRows = specialByCat.slice(0, 3).map((s) =>
     `<div class="fin-row"><span class="lbl"><span class="dot">✨</span> ${esc(s.name)}</span>
        <span class="val">${fmtMoney(s.t)}</span></div>`).join('');
   const financeCard = `
-    <div class="card">
-      <div class="card-head"><h2>Finance Summary</h2><span class="meta">This month</span></div>
+    <section class="card dash-card-link" data-href="/finance" role="link" tabindex="0" aria-label="Open finance">
+      <div class="card-head"><h2>Finance Summary</h2><a class="dash-card-cta" href="/finance">Open →</a></div>
       <div class="fin-row"><span class="lbl"><span class="dot">₵</span> Service Offerings</span>
         <span class="val">${fmtMoney(servicesMonth)}</span></div>
       <div class="fin-row"><span class="lbl"><span class="dot">🌾</span> Harvests</span>
@@ -1357,11 +1357,11 @@ app.get('/', (req, res) => {
         <span class="val neg">${fmtMoney(monthExpenses)}</span></div>
       <div class="fin-row total"><span class="lbl">Net Balance</span>
         <span class="val">${fmtMoney(netBalance)}</span></div>
-    </div>`;
+    </section>`;
 
   const upcomingCard = `
-    <div class="card">
-      <div class="card-head"><h2>Upcoming Events</h2><a href="/events">View all</a></div>
+    <section class="card dash-card-link" data-href="/events" role="link" tabindex="0" aria-label="Open events">
+      <div class="card-head"><h2>Upcoming Events</h2><a class="dash-card-cta" href="/events">Open →</a></div>
       ${upcoming.length ? upcoming.map((e) => {
         const d = new Date(e.starts_at);
         const m = d.toLocaleString('en', { month: 'short' });
@@ -1376,11 +1376,11 @@ app.get('/', (req, res) => {
           </div>
         </div>`;
       }).join('') : '<p class="muted-text">No upcoming events.</p>'}
-    </div>`;
+    </section>`;
 
   const birthdaysCard = `
-    <div class="card">
-      <div class="card-head"><h2>Birthdays This Week</h2><a href="/members">View all</a></div>
+    <section class="card dash-card-link" data-href="/members" role="link" tabindex="0" aria-label="Open members with birthdays">
+      <div class="card-head"><h2>Birthdays This Week</h2><a class="dash-card-cta" href="/members">Open →</a></div>
       ${birthdays.length ? birthdays.map((b) => {
         const day = new Date(b.date_of_birth);
         const when = day.toLocaleString('en', { month: 'short', day: '2-digit' });
@@ -1390,16 +1390,16 @@ app.get('/', (req, res) => {
           <div class="when">${esc(when)}</div>
         </div>`;
       }).join('') : '<p class="muted-text">No birthdays this week.</p>'}
-    </div>`;
+    </section>`;
 
   const followupsCard = `
-    <div class="card">
-      <div class="card-head"><h2>Pending Follow-ups</h2><a href="/reports">View all</a></div>
+    <section class="card dash-card-link" data-href="/reports" role="link" tabindex="0" aria-label="Open follow-up reports">
+      <div class="card-head"><h2>Pending Follow-ups</h2><a class="dash-card-cta" href="/reports">Open →</a></div>
       <div class="fu-row"><div class="lbl"><div class="ico">🚶</div> Visitors to follow up</div><div class="count">${followups.visitors}</div></div>
       <div class="fu-row"><div class="lbl"><div class="ico">⚠</div> Members absent &gt; 3 weeks</div><div class="count">${followups.absentees}</div></div>
       <div class="fu-row"><div class="lbl"><div class="ico">📖</div> Members without a Bible class</div><div class="count">${followups.noClass}</div></div>
       <div class="fu-row"><div class="lbl"><div class="ico">✓</div> Pending membership approvals</div><div class="count">${followups.pending}</div></div>
-    </div>`;
+    </section>`;
 
   const grid = `
     <div class="dash-grid">
