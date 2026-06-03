@@ -2132,6 +2132,17 @@ app.use((err, req, res, next) => {
   }));
 });
 
+// Safety net: log unhandled async rejections to the error log instead of
+// letting them crash the whole process (Express 4 doesn't auto-catch them).
+process.on('unhandledRejection', (reason) => {
+  const msg = (reason && reason.message) || String(reason);
+  console.error('Unhandled promise rejection:', msg);
+  try {
+    db.prepare(`INSERT INTO error_log (method, path, message, stack) VALUES ('', '(unhandledRejection)', ?, ?)`)
+      .run(String(msg).slice(0, 500), String((reason && reason.stack) || '').slice(0, 4000));
+  } catch (_) { /* never let logging throw */ }
+});
+
 // ---------- start ----------
 if (require.main === module) {
   app.listen(PORT, () => {

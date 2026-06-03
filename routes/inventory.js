@@ -154,7 +154,7 @@ module.exports.register = function register(app, ctx) {
       FROM inventory_categories
       WHERE deleted_at IS NULL
       ORDER BY name`).all();
-    const categories = [...new Set([
+        const categories = [...new Set([
       ...RECOMMENDED_CATEGORIES,
       ...savedCategories.map((c) => c.name),
     ])].sort((a, b) => a.localeCompare(b));
