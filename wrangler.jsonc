@@ -1,3 +1,18 @@
+cloudflare/workers-autoconfig
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "my-first-project",
+  "compatibility_date": "2026-05-24",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "."
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+=======
 // Cloudflare Workers config for the marketing landing page.
 // The Express server (server.js) is NOT deployed here — that lives on Fly.io.
 // This config tells Cloudflare to serve the static files in ./marketing as a
@@ -9,4 +24,5 @@
     "directory": "./marketing",
     "not_found_handling": "404-page"
   }
+main
 }

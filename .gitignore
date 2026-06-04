@@ -1,3 +1,11 @@
+cloudflare/workers-autoconfig
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
+=======
 church.db
 demo.db
 dev.db
@@ -18,3 +26,4 @@ deploys/
 backups/
 photos/
 photos/
+main
