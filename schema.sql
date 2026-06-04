@@ -358,7 +358,6 @@ CREATE TABLE inventory_categories (
 );
 CREATE INDEX idx_inventory_categories_active ON inventory_categories(deleted_at);
 
-
 CREATE TABLE preaching_plan (
     plan_id          INTEGER PRIMARY KEY,
     preach_date      TEXT NOT NULL,
