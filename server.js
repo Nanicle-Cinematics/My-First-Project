@@ -1259,15 +1259,13 @@ app.get('/', (req, res) => {
   const welcomeName = res.locals.user.display_name || res.locals.user.username;
   const todayLabel = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' });
   const hero = `
-    <div class="dash-hero" aria-label="Dashboard overview">
-      <div class="dash-orb dash-orb-blue" aria-hidden="true"></div>
-      <div class="dash-orb dash-orb-purple" aria-hidden="true"></div>
-      <div class="dash-orb dash-orb-gold" aria-hidden="true"></div>
-      <div class="dash-hero-copy">
+    <div class="dashboard-header" aria-label="Dashboard overview">
+      <div>
+        <p class="section-kicker">Overview</p>
         <h1>Dashboard</h1>
-        <p>Welcome back, <strong>${esc(welcomeName)}</strong></p>
+        <p>Welcome back, <strong>${esc(welcomeName)}</strong>. Here is what needs your attention today.</p>
       </div>
-      <div class="dash-hero-date"><span class="pulse-dot"></span>${esc(todayLabel)}</div>
+      <div class="dashboard-date">${esc(todayLabel)}</div>
     </div>`;
 
   const isAdmin = res.locals.isAdmin;
