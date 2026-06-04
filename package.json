@@ -1,0 +1,26 @@
+{
+  "name": "church-management",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Church management web UI backed by SQLite.",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test --test-force-exit",
+    "build-db": "bash build.sh",
+    "migrate-live-db": "node scripts/migrate-live-db.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "better-sqlite3-session-store": "^0.1.0",
+    "express": "^4.21.0",
+    "express-session": "^1.18.0",
+    "multer": "^2.0.0",
+    "nodemailer": "^8.0.10",
+    "qrcode": "^1.5.4"
+  }
+}

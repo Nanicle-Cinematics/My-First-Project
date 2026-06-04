@@ -1,0 +1,36 @@
+# Don't ship local node_modules into the Docker image — they're compiled
+# for whatever host you're on (Mac), but the container is Linux.
+# Native modules like better-sqlite3 will throw "invalid ELF header" if
+# Mac-compiled binaries get loaded by Linux. The Dockerfile runs
+# `npm install` inside the build, so node_modules will be rebuilt fresh
+# with Linux binaries — but only if the host's node_modules isn't COPY'd
+# in over the top of them.
+node_modules
+npm-debug.log
+
+# Local state and databases — never ship into the image. The real DB
+# lives on the Fly volume at /data/church.db, separate from the image.
+*.db
+*.db-journal
+demo.db
+church.db
+backups/
+photos/
+
+# Build/dev artifacts
+.git
+.gitignore
+.env
+.env.*
+.DS_Store
+**/.DS_Store
+.vscode
+.idea
+
+# Per-church deployment configs — operator-specific, not part of the image
+deploys/
+deploy/churches/
+
+# Docs and dev-only files (image doesn't need them)
+README.md
+marketing/

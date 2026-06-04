@@ -1,6 +1,29 @@
+cloudflare/workers-autoconfig
 # wrangler files
 .wrangler
 .dev.vars*
 !.dev.vars.example
 .env*
 !.env.example
+=======
+church.db
+demo.db
+dev.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.restore-pending
+*.pre-restore-*
+dev-backups/
+node_modules/
+# macOS Finder metadata — never commit
+.DS_Store
+**/.DS_Store
+# Per-church deployment configs are operator-specific (contain app names + region).
+# Optionally commit these if you want to track them.
+deploys/
+# DB backups should never be committed — push to S3/Backblaze instead.
+backups/
+photos/
+photos/
+main
