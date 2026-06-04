@@ -2986,3 +2986,415 @@ body:has(.dash-shell) .page {
   .dash-shell .stat-grid,
   .dash-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- FaithWay clean professional interface v3 ---------- */
+:root {
+  --fw-purple: #6f42e8;
+  --fw-purple-2: #7c4dff;
+  --fw-text: #111827;
+  --fw-muted: #667085;
+  --fw-line: #e6e9f2;
+  --fw-page: #fbfbfe;
+  --fw-card: #ffffff;
+  --fw-green: #21bf73;
+  --fw-blue: #3678ff;
+  --fw-orange: #f59e0b;
+}
+
+body {
+  background: var(--fw-page);
+  color: var(--fw-text);
+}
+
+.app {
+  grid-template-columns: 264px minmax(0, 1fr);
+  background: var(--fw-page);
+}
+
+.sidebar {
+  background: #fff !important;
+  color: #344054 !important;
+  border-right: 1px solid var(--fw-line) !important;
+  box-shadow: none !important;
+  padding: 1.55rem 1rem !important;
+  gap: 1.25rem !important;
+}
+
+.sidebar .brand {
+  border: 0 !important;
+  padding: 0 0.55rem 1.25rem !important;
+  gap: 0.72rem !important;
+}
+
+.sidebar .brand .logo {
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 12px !important;
+  color: #fff !important;
+  background: linear-gradient(135deg, #7c4dff, #5b2ed6) !important;
+  box-shadow: 0 10px 24px rgba(124, 77, 255, 0.18) !important;
+}
+
+.sidebar .brand .name {
+  color: #111827 !important;
+  font-size: 1.18rem !important;
+  line-height: 1.05 !important;
+  letter-spacing: -0.03em !important;
+  font-weight: 850 !important;
+}
+
+.sidebar .brand .tag {
+  color: #667085 !important;
+  font-size: 0.72rem !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+
+.sidebar nav {
+  gap: 0.35rem !important;
+}
+
+.sidebar nav a {
+  min-height: 46px !important;
+  padding: 0.68rem 0.9rem !important;
+  border: 0 !important;
+  border-radius: 9px !important;
+  color: #344054 !important;
+  font-weight: 600 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.sidebar nav a .ico {
+  color: #667085 !important;
+  opacity: 1 !important;
+}
+
+.sidebar nav a:hover,
+.sidebar nav a.active {
+  color: #fff !important;
+  background: linear-gradient(135deg, var(--fw-purple), var(--fw-purple-2)) !important;
+  box-shadow: 0 14px 28px rgba(111, 66, 232, 0.18) !important;
+  text-decoration: none !important;
+}
+
+.sidebar nav a:hover .ico,
+.sidebar nav a.active .ico {
+  color: #fff !important;
+}
+
+.sidebar .scripture {
+  margin-top: auto !important;
+  border: 0 !important;
+  border-radius: 14px !important;
+  padding: 1.2rem !important;
+  color: #fff !important;
+  background: linear-gradient(145deg, #3f2ca8, #6f42e8) !important;
+  box-shadow: 0 20px 45px rgba(63, 44, 168, 0.2) !important;
+}
+
+.drawer-signout { display: none !important; }
+
+.main {
+  background: var(--fw-page) !important;
+}
+
+.topbar {
+  height: 84px !important;
+  margin: 0 !important;
+  padding: 0 1.8rem !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--fw-line) !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+  box-shadow: none !important;
+  display: grid !important;
+  grid-template-columns: 36px max-content 1fr auto !important;
+  align-items: center !important;
+  gap: 1.25rem !important;
+}
+
+.topbar::before {
+  content: 'Dashboard';
+  grid-column: 2;
+  color: #111827;
+  font-size: 1.25rem;
+  font-weight: 820;
+  letter-spacing: -0.035em;
+}
+
+.nav-toggle { grid-column: 1; }
+
+.topbar .search {
+  grid-column: 3;
+  justify-self: center;
+  width: min(430px, 40vw) !important;
+  min-height: 42px !important;
+  border: 1px solid var(--fw-line) !important;
+  border-radius: 8px !important;
+  background: #f8f9fc !important;
+  box-shadow: none !important;
+}
+
+.topbar .search span,
+.topbar .search input,
+.topbar .search input::placeholder {
+  color: #667085 !important;
+}
+
+.topbar .right {
+  grid-column: 4;
+  gap: 1rem !important;
+  margin-left: 0 !important;
+}
+
+.topbar .theme-toggle,
+.topbar .bell {
+  width: 40px !important;
+  height: 40px !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #344054 !important;
+}
+
+.topbar .who {
+  gap: 0.72rem !important;
+  min-height: 52px !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #111827 !important;
+  padding: 0 !important;
+}
+
+.topbar .avatar {
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 50% !important;
+  background: linear-gradient(135deg, #111827, #475467) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+
+.topbar .who .name { color: #111827 !important; font-weight: 750 !important; }
+.topbar .who .role { color: #667085 !important; }
+.topbar .sign-out { display: none !important; }
+
+body:has(.dash-shell) .page {
+  padding: 1.55rem 1.55rem 2rem !important;
+  background: var(--fw-page) !important;
+}
+
+.dash-shell {
+  padding: 0 !important;
+  display: grid !important;
+  gap: 1.25rem !important;
+  color: #111827 !important;
+}
+
+.dash-shell::before,
+.dash-shell::after,
+.dash-shell .stat::before,
+.dash-shell .stat::after,
+.dash-shell .card::before,
+.dash-shell .card::after {
+  display: none !important;
+  content: none !important;
+}
+
+.dashboard-header {
+  display: none !important;
+}
+
+.dash-shell > .quick-drop {
+  display: none !important;
+}
+
+.dash-shell .stat-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(190px, 1fr)) !important;
+  gap: 1rem !important;
+  margin: 0 !important;
+}
+
+.dash-shell .stat,
+.dash-shell .card {
+  border: 1px solid var(--fw-line) !important;
+  border-radius: 14px !important;
+  background: #fff !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03) !important;
+  color: #111827 !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.dash-shell .stat {
+  min-height: 136px !important;
+  padding: 1.15rem !important;
+}
+
+.dash-shell .stat-top {
+  gap: 0.95rem !important;
+  align-items: flex-start !important;
+}
+
+.dash-shell .stat .ico {
+  width: 56px !important;
+  height: 56px !important;
+  border-radius: 13px !important;
+  font-size: 1.45rem !important;
+  box-shadow: none !important;
+}
+
+.dash-shell .ico.purple { background: #efe9ff !important; color: #6f42e8 !important; }
+.dash-shell .ico.green { background: #e7f8ef !important; color: var(--fw-green) !important; }
+.dash-shell .ico.amber { background: #fff3dc !important; color: var(--fw-orange) !important; }
+.dash-shell .ico.blue { background: #e9f0ff !important; color: var(--fw-blue) !important; }
+
+.dash-shell .stat .label {
+  color: #344054 !important;
+  font-size: 0.82rem !important;
+  font-weight: 650 !important;
+}
+
+.dash-shell .stat .value {
+  margin: 0.35rem 0 0.32rem !important;
+  color: #111827 !important;
+  font-size: 1.48rem !important;
+  font-weight: 820 !important;
+}
+
+.dash-shell .stat .trend { color: #12a66a !important; font-size: 0.78rem !important; }
+.dash-shell .stat .trend.warm { color: #f79009 !important; }
+.dash-shell .stat .trend.down { color: #d92d20 !important; }
+.dash-shell .stat-arrow { display: none !important; }
+.dash-shell .stat .spark .mini { height: 42px !important; }
+.dash-shell svg path,
+.dash-shell svg polyline,
+.dash-shell svg circle { filter: none !important; }
+
+.dash-grid {
+  display: grid !important;
+  grid-template-columns: minmax(360px, 1.08fr) minmax(320px, 0.92fr) minmax(320px, 0.92fr) !important;
+  grid-auto-flow: row dense !important;
+  gap: 1rem !important;
+  margin: 0 !important;
+}
+
+.dash-shell .card {
+  padding: 1.25rem !important;
+  min-height: 0 !important;
+}
+
+.dash-shell .card h2,
+.dash-shell .card h3,
+.dash-shell .card-head h2,
+.dash-shell .big-figure,
+.dash-shell .m-value,
+.dash-shell .count,
+.dash-shell .fin-row .val,
+.dash-shell .event-title,
+.dash-shell .activity-title,
+.dash-shell .announcement-title {
+  color: #111827 !important;
+}
+
+.dash-shell .card h2,
+.dash-shell .card-head h2 {
+  font-size: 1rem !important;
+  font-weight: 780 !important;
+}
+
+.dash-shell .muted,
+.dash-shell .meta,
+.dash-shell .muted-text,
+.dash-shell .when,
+.dash-shell .big-sub,
+.dash-shell .m-label,
+.dash-shell .legend-label,
+.dash-shell .legend-pct,
+.dash-shell .fin-row .lbl,
+.dash-shell .activity-desc,
+.dash-shell .announcement-body {
+  color: #667085 !important;
+}
+
+.dash-shell a,
+.dash-shell .dash-card-cta,
+.dash-shell .view-all,
+.dash-shell .card-head a {
+  color: #4f2bd8 !important;
+  font-weight: 650 !important;
+}
+
+.dash-shell .event-row,
+.dash-shell .activity-row,
+.dash-shell .announcement-row,
+.dash-shell .legend-row,
+.dash-shell .fin-row,
+.dash-shell .bd-row,
+.dash-shell .fu-row {
+  border-color: #eef0f5 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.dash-shell .event-row .date,
+.dash-shell .m-tile,
+.dash-shell .quick-shortcut,
+.dash-shell .qa {
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #f7f8fb !important;
+  box-shadow: none !important;
+}
+
+.dash-shell .stat:hover,
+.dash-shell .dash-card-link:hover,
+.dash-shell .qa:hover,
+.dash-shell .quick-shortcut:hover {
+  transform: translateY(-1px) !important;
+  border-color: #d8dce8 !important;
+  box-shadow: 0 8px 20px rgba(16, 24, 40, 0.06) !important;
+  text-decoration: none !important;
+}
+
+.attendance-card { grid-column: span 2 !important; }
+.quick-shortcuts-card { grid-column: span 3 !important; }
+.announcements-card { min-height: 0 !important; }
+
+.attendance-chart {
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: #fbfcff !important;
+}
+
+.attendance-bar {
+  background: linear-gradient(180deg, #7c4dff, #3678ff) !important;
+  box-shadow: none !important;
+}
+
+.m-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+
+@media (max-width: 1180px) {
+  .app { grid-template-columns: 1fr !important; }
+  .sidebar { position: static !important; height: auto !important; }
+  .topbar { display: flex !important; height: auto !important; flex-wrap: wrap !important; padding: 1rem !important; }
+  .topbar::before { display: none !important; }
+  .topbar .search { width: 100% !important; order: 3; margin-left: 0 !important; }
+  .dash-shell .stat-grid,
+  .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .attendance-card,
+  .quick-shortcuts-card { grid-column: auto !important; }
+}
+
+@media (max-width: 720px) {
+  body:has(.dash-shell) .page { padding: 1rem !important; }
+  .dash-shell .stat-grid,
+  .dash-grid,
+  .m-grid { grid-template-columns: 1fr !important; }
+}
+
