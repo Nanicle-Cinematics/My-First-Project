@@ -1110,6 +1110,12 @@ app.get('/', (req, res) => {
     ORDER BY occurred_at DESC LIMIT 5
   `).all();
 
+  const announcements = db.prepare(`
+    SELECT title, body, posted_at
+    FROM announcements
+    ORDER BY posted_at DESC LIMIT 3
+  `).all();
+
   const upcoming = db.prepare(`
     SELECT event_id, title, event_type, starts_at, location
     FROM events WHERE starts_at >= datetime('now','-1 day')
@@ -1249,6 +1255,20 @@ app.get('/', (req, res) => {
         `<div class="trend">↑ ${visitorsThisWeek} new this week</div>`, visitorSeries, 'var(--blue)')}
     </div>`;
 
+  const welcomeName = res.locals.user.display_name || res.locals.user.username;
+  const todayLabel = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' });
+  const hero = `
+    <div class="dash-hero" aria-label="Dashboard overview">
+      <div class="dash-orb dash-orb-blue" aria-hidden="true"></div>
+      <div class="dash-orb dash-orb-purple" aria-hidden="true"></div>
+      <div class="dash-orb dash-orb-gold" aria-hidden="true"></div>
+      <div class="dash-hero-copy">
+        <h1>Dashboard</h1>
+        <p>Welcome back, <strong>${esc(welcomeName)}</strong></p>
+      </div>
+      <div class="dash-hero-date"><span class="pulse-dot"></span>${esc(todayLabel)}</div>
+    </div>`;
+
   const isAdmin = res.locals.isAdmin;
   const qaLink = (href, icon, label) =>
     `<a class="qa" href="${href}"><span class="ico">${icon}</span> ${label}</a>`;
@@ -1264,6 +1284,17 @@ app.get('/', (req, res) => {
         ${qaLink('/reports',           '📊',  'Generate Report')}
       </div>
     </details>` : '';
+
+  const shortcutCard = isAdmin ? `
+    <section class="card quick-shortcuts-card" aria-label="Quick shortcuts">
+      <div class="card-head"><h2>⚡ Quick Shortcuts</h2></div>
+      <div class="shortcut-grid">
+        ${qaLink('/members/new', '👥+', 'Add Member')}
+        ${qaLink('/events', '✅', 'Add Attendance')}
+        ${qaLink('/finance/new', '₵', 'Record Offering')}
+        ${qaLink('/events/new', '📅', 'Create Event')}
+      </div>
+    </section>` : '';
 
   const activityIcons = {
     member_added: '👤', attendance_recorded: '✓', contribution_recorded: '₵',
@@ -1285,6 +1316,20 @@ app.get('/', (req, res) => {
           </li>`).join('')}</ul>
         <a class="view-all" href="/reports">View all →</a>` : '<p class="muted-text">No recent activity yet.</p>'}
       </details>
+    </section>`;
+
+  const announcementDots = ['purple', 'blue', 'green'];
+  const announcementsCard = `
+    <section class="card announcements-card" aria-label="Announcements">
+      <div class="card-head"><h2>📣 Announcements</h2><a class="dash-card-cta" href="/communications">View all</a></div>
+      ${announcements.length ? announcements.map((a, i) => {
+        const when = a.posted_at ? new Date(a.posted_at).toLocaleString('en', { day: 'numeric', month: 'short' }) : '';
+        return `<div class="announce-row">
+          <span class="announce-dot ${announcementDots[i % announcementDots.length]}"></span>
+          <div><strong>${esc(a.title)}</strong><p>${esc((a.body || '').slice(0, 86))}${(a.body || '').length > 86 ? '…' : ''}</p></div>
+          <span class="when">${esc(when)}</span>
+        </div>`;
+      }).join('') : '<p class="muted-text">No announcements yet.</p>'}
     </section>`;
 
   const givingPoints = months.map((ym, i) => ({ label: monthLabel(ym), value: givingSeries[i] }));
@@ -1315,12 +1360,21 @@ app.get('/', (req, res) => {
       <span class="legend-val">${s.value} ppl</span>
     </div>`;
   }).join('');
+  const attendanceMax = Math.max(1, ...trendPts.map((p) => p.value));
+  const attendanceBars = trendPts.length ? trendPts.map((p, i) => `
+    <div class="attendance-bar" style="--bar:${Math.max(8, Math.round((p.value / attendanceMax) * 100))}%; --i:${i}">
+      <span class="bar-value">${p.value}</span>
+      <span class="bar-fill"></span>
+      <span class="bar-label">${esc(p.label)}</span>
+    </div>`).join('') : '<p class="muted-text">No attendance recorded yet.</p>';
   const attendanceCard = `
-    <section class="card dash-card-link" data-href="/attendance" role="link" tabindex="0" aria-label="Open attendance">
-      <div class="card-head"><h2>Attendance Overview</h2><a class="dash-card-cta" href="/attendance">Open →</a></div>
-      <div class="donut-wrap">
-        ${donut(attSegments, 'Avg / type', attAvg)}
-        <div class="legend">${attLegendRows || '<p class="muted-text">No attendance recorded yet.</p>'}</div>
+    <section class="card dash-card-link dash-card-wide attendance-card" data-href="/attendance" role="link" tabindex="0" aria-label="Open attendance">
+      <div class="card-head"><h2>📊 Attendance Overview</h2><a class="dash-card-cta" href="/attendance">This Month ▾</a></div>
+      <div class="attendance-chart">${attendanceBars}</div>
+      <div class="attendance-summary">
+        <div><span class="mini-label">This Month Average</span><strong>${attAvg}</strong></div>
+        <div><span class="mini-label">Highest Attendance</span><strong>${attendanceMax}</strong></div>
+        <div><span class="mini-label">Total Services</span><strong>${trendPts.length}</strong></div>
       </div>
     </section>`;
 
@@ -1403,21 +1457,23 @@ app.get('/', (req, res) => {
 
   const grid = `
     <div class="dash-grid">
-      ${upcomingCard}
-      ${givingCard}
-      ${activityCard}
-      <div class="col-2">${ministryCard}</div>
       ${attendanceCard}
+      ${announcementsCard}
+      ${shortcutCard}
+      ${givingCard}
       ${financeCard}
+      ${upcomingCard}
+      ${ministryCard}
       ${birthdaysCard}
       ${followupsCard}
+      ${activityCard}
     </div>`;
 
   res.page({
     title: 'Dashboard',
     subtitle: `Welcome back, ${res.locals.user.display_name || res.locals.user.username}`,
     active: '/',
-    body: `<section class="dash-shell">${cards}${quick}${grid}</section>`,
+    body: `<section class="dash-shell">${hero}${quick}${cards}${grid}</section>`,
   });
 });
 
