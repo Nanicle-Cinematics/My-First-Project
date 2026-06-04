@@ -88,9 +88,9 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /<h1>Dashboard<\/h1>/);
   assert.match(home.body, /class="dash-hero-date"/);
   assert.match(home.body, /class="stat stat-link" href="\/members"/);
-  assert.match(home.body, /class="stat stat-link" href="\/attendance"/);
+  assert.match(home.body, /class="stat stat-link" href="\/organizations"/);
   assert.match(home.body, /class="stat stat-link" href="\/finance"/);
-  assert.match(home.body, /class="stat stat-link" href="\/members\?status=visitor"/);
+  assert.match(home.body, /class="stat stat-link" href="\/events"/);
   assert.match(home.body, /class="card dash-card-link" data-href="\/events"/);
   assert.match(home.body, /class="card dash-card-link" data-href="\/reports\/financial"/);
 });
