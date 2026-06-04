@@ -1243,16 +1243,17 @@ app.get('/', (req, res) => {
       </div>
       <div class="spark">${miniSpark(spark, color)}</div>
     </a>`;
+  const activeGroups = ministryCount + orgCount;
   const cards = `
     <div class="stat-grid">
       ${statCard('/members', 'purple', '👥', 'Total Members', totalMembers.toLocaleString(),
         `<div class="trend">↑ ${newMembersThisMonth} this month</div>`, memberSeries, 'var(--purple)')}
-      ${statCard('/attendance', 'green', '✓', 'Sunday Attendance', sundayAttendance,
-        trendDelta(attendanceDelta), attendanceSpark, 'var(--green)')}
-      ${statCard('/finance', 'amber', '₵', 'Offerings This Month', fmtMoney(offeringsThisMonth),
-        trendDelta(offeringsDelta), givingSeries, 'var(--gold)')}
-      ${statCard('/members?status=visitor', 'blue', '🚶', 'Visitors This Month', visitorsThisMonth,
-        `<div class="trend">↑ ${visitorsThisWeek} new this week</div>`, visitorSeries, 'var(--blue)')}
+      ${statCard('/organizations', 'green', '👤', 'Active Groups', activeGroups.toLocaleString(),
+        `<div class="trend">↑ ${orgCount} organizations active</div>`, attendanceSpark, 'var(--green)')}
+      ${statCard('/events', 'amber', '📅', 'Upcoming Events', upcoming.length.toLocaleString(),
+        `<div class="trend warm">${upcoming.length} happening this week</div>`, visitorSeries, 'var(--gold)')}
+      ${statCard('/finance', 'blue', '💙', 'Total Giving (This Month)', fmtMoney(givingTotal),
+        trendDelta(offeringsDelta), givingSeries, 'var(--blue)')}
     </div>`;
 
   const welcomeName = res.locals.user.display_name || res.locals.user.username;
