@@ -1456,16 +1456,16 @@ app.get('/', (req, res) => {
 
   const grid = `
     <div class="dash-grid">
-      ${attendanceCard}
-      ${announcementsCard}
-      ${shortcutCard}
-      ${givingCard}
-      ${financeCard}
       ${upcomingCard}
+      ${givingCard}
+      ${activityCard}
       ${ministryCard}
+      ${attendanceCard}
+      ${shortcutCard}
+      ${announcementsCard}
+      ${financeCard}
       ${birthdaysCard}
       ${followupsCard}
-      ${activityCard}
     </div>`;
 
   res.page({
