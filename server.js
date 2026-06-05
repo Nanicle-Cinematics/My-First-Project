@@ -1243,27 +1243,28 @@ app.get('/', (req, res) => {
       </div>
       <div class="spark">${miniSpark(spark, color)}</div>
     </a>`;
-  const activeGroups = ministryCount + orgCount;
   const cards = `
     <div class="stat-grid">
       ${statCard('/members', 'purple', '👥', 'Total Members', totalMembers.toLocaleString(),
         `<div class="trend">↑ ${newMembersThisMonth} this month</div>`, memberSeries, 'var(--purple)')}
-      ${statCard('/organizations', 'green', '👤', 'Active Groups', activeGroups.toLocaleString(),
-        `<div class="trend">↑ ${orgCount} organizations active</div>`, attendanceSpark, 'var(--green)')}
+      ${statCard('/attendance', 'green', '✓', 'Today’s Attendance', sundayAttendance.toLocaleString(),
+        `<div class="trend">↑ ${sundayAttendance} checked in today</div>`, attendanceSpark, 'var(--green)')}
       ${statCard('/events', 'amber', '📅', 'Upcoming Events', upcoming.length.toLocaleString(),
         `<div class="trend warm">${upcoming.length} happening this week</div>`, visitorSeries, 'var(--gold)')}
-      ${statCard('/finance', 'blue', '💙', 'Total Giving (This Month)', fmtMoney(givingTotal),
+      ${statCard('/finance', 'blue', '💙', 'Total Offerings', fmtMoney(givingTotal),
         trendDelta(offeringsDelta), givingSeries, 'var(--blue)')}
     </div>`;
 
   const welcomeName = res.locals.user.display_name || res.locals.user.username;
   const todayLabel = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' });
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : (hour < 18 ? 'Good afternoon' : 'Good evening');
   const hero = `
     <div class="dashboard-header" aria-label="Dashboard overview">
       <div>
-        <p class="section-kicker">Overview</p>
-        <h1>Dashboard</h1>
-        <p>Welcome back, <strong>${esc(welcomeName)}</strong>. Here is what needs your attention today.</p>
+        <p class="section-kicker">Church Command Center</p>
+        <h1>${esc(greeting)}, ${esc(welcomeName)} 👋</h1>
+        <p>Here’s what’s happening in your church today.</p>
       </div>
       <div class="dashboard-date">${esc(todayLabel)}</div>
     </div>`;
