@@ -5,6 +5,7 @@ const { table } = require('../lib/views');
 
 module.exports.register = function register(app, ctx) {
   const { db, requireAdmin, logActivity, flash, csrfValid, CHURCH_NAME, PREF_LABELS,
+    pageHero, statsRow,
     loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, normalizePhoneGH,
     ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS } = ctx;
 
@@ -35,6 +36,12 @@ app.get('/communications', (req, res) => {
           <p class="muted-text">— ${esc(a.display_name || a.username || 'system')} · audience: ${esc(a.audience)}</p>
         </div>`).join('')
     : '<p class="muted-text">No announcements yet.</p>';
+  const stats = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM announcements) AS announcements,
+      (SELECT COUNT(*) FROM broadcasts) AS broadcasts,
+      (SELECT COUNT(*) FROM members WHERE deleted_at IS NULL AND preferred_channel != 'none') AS contactable
+  `).get();
   const broadcastCta = res.locals.isAdmin
     ? `<p style="margin-bottom:1rem">
          <a class="btn" href="/communications/broadcast">📣 Send SMS/email broadcast</a>
@@ -42,8 +49,14 @@ app.get('/communications', (req, res) => {
          <a class="btn ghost" href="/communications/broadcasts">View broadcast history</a>
        </p>` : '';
   res.page({
-    title: 'Communications', active: '/communications',
-    body: `${broadcastCta}${newForm}<h2>Recent announcements</h2>${list}`,
+    title: 'Communications', active: '/communications', noHeader: true,
+    body: `${pageHero('Communications', 'Announcements, broadcast history and member messaging readiness.')}
+      ${statsRow([
+        { cls: 'gold', icon: '✉', value: Number(stats.announcements).toLocaleString(), label: 'Announcements' },
+        { cls: 'green', icon: '📣', value: Number(stats.broadcasts).toLocaleString(), label: 'Broadcasts' },
+        { cls: 'blue', icon: '✓', value: Number(stats.contactable).toLocaleString(), label: 'Contactable Members' },
+      ])}
+      ${broadcastCta}${newForm}<h2>Recent announcements</h2>${list}`,
   });
 });
 

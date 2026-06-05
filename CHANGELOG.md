@@ -9,10 +9,13 @@ All notable changes to this project are documented here.
 - Security audit log for login and user-management events, with owner review page at `/security/audit`.
 - Financial summary CSV export at `/reports/financial.csv`.
 - Production sanity helper script: `scripts/prod-sanity.sh`.
+- Authorization matrix documentation in `docs/AUTHORIZATION_MATRIX.md`.
+- Enterprise command-center headers across operational pages, including dashboard, members, finance, events, communications, inventory, preaching, sacraments, backups, errors, users, profile and settings.
 
 ### Changed
 
 - Release/security docs now include audit review and production sanity checks.
+- Fresh database schema and live migration helper now both create the security audit index used by owner review.
 
 ## v1.1.0 - 2026-05-28
 
