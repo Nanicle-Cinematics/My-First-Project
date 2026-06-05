@@ -212,6 +212,8 @@ test('editor role can edit content but is blocked from owner areas', async () =>
   assert.strictEqual(newMember.status, 200);           // editor can edit content
   const backups = await get('/backups');
   assert.strictEqual(backups.status, 403);             // but not owner-only areas
+  const operations = await get('/operations');
+  assert.strictEqual(operations.status, 403);
   cookie = owner;
 });
 
@@ -393,6 +395,7 @@ test('operational command centers render for core owner and ministry pages', asy
     '/finance',
     '/preaching',
     '/sacraments',
+    '/operations',
     '/users',
     '/profile',
     '/settings',
@@ -402,6 +405,17 @@ test('operational command centers render for core owner and ministry pages', asy
     assert.strictEqual(r.status, 200, `${path} should render`);
     assert.match(r.body, /Command Center/, `${path} should use the command center shell`);
   }
+});
+
+test('operations page summarizes production readiness signals', async () => {
+  const page = await get('/operations');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Operations/);
+  assert.match(page.body, /Operational Checks/);
+  assert.match(page.body, /Database readiness/);
+  assert.match(page.body, /Backup verification/);
+  assert.match(page.body, /Off-site backup upload/);
+  assert.match(page.body, /docs\/OPERATIONS_RUNBOOK.md/);
 });
 
 test('security headers are present', async () => {
