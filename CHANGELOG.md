@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## v1.3.0 - 2026-06-05
+
+### Added
+
+- Phase 3 production-hardening plan and operations runbook.
+- In-app backup verification from `/backups`, including SQLite integrity checks and expected table checks.
+- Backup create/delete/verify/restore staging events in the security audit log.
+
+### Changed
+
+- Backup verification and restore drill scripts now run `PRAGMA integrity_check` and validate expected core tables.
+
 ## v1.2.0 - 2026-05-28
 
 ### Added

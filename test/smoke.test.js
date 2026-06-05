@@ -175,6 +175,14 @@ test('backups page renders and a backup can be created', async () => {
   assert.strictEqual(r.status, 302);
   const after = await get('/backups');
   assert.match(after.body, /church-\d+\.db/);
+  assert.match(after.body, /Off-site Upload/);
+  assert.match(after.body, />Verify<\/button>/);
+  const m = after.body.match(/\/backups\/(church-\d+\.db)\/verify/);
+  assert.ok(m, 'backup list should expose a verify action');
+  const verified = await post(`/backups/${m[1]}/verify`, { _csrf: tokenFrom(after.body) });
+  assert.strictEqual(verified.status, 302);
+  const verifiedPage = await get('/backups');
+  assert.match(verifiedPage.body, /Backup verified:/);
 });
 
 test('events calendar renders', async () => {
@@ -376,6 +384,7 @@ test('owner can review security audit events', async () => {
   assert.match(audit.body, /Security Audit/);
   assert.match(audit.body, /Command Center/);
   assert.match(audit.body, /login_success|user_created|user_role_changed/);
+  assert.match(audit.body, /backup_created|backup_verified/);
 });
 
 test('operational command centers render for core owner and ministry pages', async () => {

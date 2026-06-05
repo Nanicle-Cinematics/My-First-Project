@@ -13,10 +13,19 @@ node -e "
 const Database=require('better-sqlite3');
 const file=process.argv[1];
 const db=new Database(file, { readonly:true });
-const row=db.prepare('SELECT COUNT(*) AS c FROM sqlite_master WHERE type = ?').get('table');
-if (!row || typeof row.c !== 'number' || row.c < 1) {
-  throw new Error('No tables found in backup');
+const integrityRow=db.prepare('PRAGMA integrity_check').get();
+const integrity=integrityRow && Object.values(integrityRow)[0];
+if (integrity !== 'ok') {
+  throw new Error('SQLite integrity_check returned: ' + (integrity || 'unknown'));
 }
-console.log('✓ Backup verified:', file, '- tables:', row.c);
+const required=['members','users','events','inventory_items'];
+const placeholders=required.map(() => '?').join(',');
+const found=new Set(db.prepare('SELECT name FROM sqlite_master WHERE type = ? AND name IN (' + placeholders + ')').all('table', ...required).map((r) => r.name));
+const missing=required.filter((name) => !found.has(name));
+if (missing.length) {
+  throw new Error('Missing expected table(s): ' + missing.join(', '));
+}
+const row=db.prepare('SELECT COUNT(*) AS c FROM sqlite_master WHERE type = ?').get('table');
+console.log('✓ Backup verified:', file, '- tables:', row.c, '- integrity:', integrity);
 db.close();
 " "$BACKUP_FILE"
