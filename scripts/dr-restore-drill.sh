@@ -20,10 +20,13 @@ echo "Running restore drill on: $TMP_RESTORE"
 node -e "
 const Database=require('better-sqlite3');
 const db=new Database(process.argv[1], { readonly:true });
+const integrityRow=db.prepare('PRAGMA integrity_check').get();
+const integrity=integrityRow && Object.values(integrityRow)[0];
+if (integrity !== 'ok') throw new Error('SQLite integrity_check returned: ' + (integrity || 'unknown'));
 const tables=db.prepare(\"SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table'\").get().c;
 if (!tables || tables < 1) throw new Error('No tables found in restored backup');
 const hasMembers=db.prepare(\"SELECT 1 FROM sqlite_master WHERE type='table' AND name='members'\").get();
-console.log('✓ restore drill passed:', { tables, has_members: !!hasMembers });
+console.log('✓ restore drill passed:', { tables, has_members: !!hasMembers, integrity });
 db.close();
 " "$TMP_RESTORE"
 

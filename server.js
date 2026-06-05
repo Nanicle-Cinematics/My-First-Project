@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
+const Database = require('better-sqlite3');
 const SqliteStore = require('better-sqlite3-session-store')(session);
 const { db, DB_PATH, RESTORE_PENDING } = require('./lib/db');
 const {
@@ -1611,10 +1612,29 @@ function backupName(req) {
   return listBackups().some((b) => b.name === name) ? name : null;
 }
 
+function verifyBackupFile(filePath) {
+  const backupDb = new Database(filePath, { readonly: true, fileMustExist: true });
+  try {
+    const integrity = backupDb.prepare(`PRAGMA integrity_check`).get();
+    const result = integrity && Object.values(integrity)[0];
+    if (result !== 'ok') throw new Error(`SQLite integrity_check returned: ${result || 'unknown'}`);
+    const required = ['members', 'users', 'events', 'inventory_items'];
+    const found = new Set(backupDb.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name IN (${required.map(() => '?').join(',')})`
+    ).all(...required).map((r) => r.name));
+    const missing = required.filter((name) => !found.has(name));
+    if (missing.length) throw new Error(`Missing expected table(s): ${missing.join(', ')}`);
+    return { ok: true, tables: backupDb.prepare(`SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table'`).get().c };
+  } finally {
+    backupDb.close();
+  }
+}
+
 app.get('/backups', requireOwner, (req, res) => {
   const backups = listBackups();
   const totalSize = backups.reduce((s, b) => s + b.size, 0);
   const latest = backups[0] ? backups[0].mtime.toLocaleString('en-GB') : 'never';
+  const offsite = process.env.BACKUP_UPLOAD_URL ? 'configured' : 'not configured';
   const rows = backups.length
     ? `<table class="data-table members-table">
         <thead><tr><th>Backup</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead>
@@ -1624,6 +1644,8 @@ app.get('/backups', requireOwner, (req, res) => {
           <td data-label="Created">${b.mtime.toLocaleString('en-GB')}</td>
           <td data-label="Actions"><div class="row-actions" style="gap:0.5rem">
             <a class="btn ghost" href="/backups/${encodeURIComponent(b.name)}/download">⬇ Download</a>
+            <form method="post" action="/backups/${encodeURIComponent(b.name)}/verify">
+              <button class="btn ghost" type="submit">Verify</button></form>
             <form method="post" action="/backups/${encodeURIComponent(b.name)}/restore"
                   onsubmit="return confirm('Restore from ${esc(b.name)}? The current database is copied aside and replaced when the app next restarts. This cannot be undone.')">
               <button class="btn" type="submit">♻ Restore</button></form>
@@ -1656,6 +1678,7 @@ app.get('/backups', requireOwner, (req, res) => {
         { cls: 'gold', icon: '💾', value: backups.length.toLocaleString(), label: 'Backups Kept' },
         { cls: 'green', icon: '🕒', value: latest, label: 'Latest Backup' },
         { cls: 'blue', icon: '#', value: fmtBytes(totalSize), label: 'Total Size' },
+        { cls: process.env.BACKUP_UPLOAD_URL ? 'green' : 'orange', icon: '↗', value: offsite, label: 'Off-site Upload' },
       ])}
       ${tools}
       ${listCard({ title: '💾 Available Backups', count: backups.length, countLabel: 'files', inner: rows })}`,
@@ -1663,7 +1686,11 @@ app.get('/backups', requireOwner, (req, res) => {
 });
 
 app.post('/backups/create', requireOwner, async (req, res) => {
-  try { const name = await createBackup(); flash(req, `Backup created: ${name}`, 'success'); }
+  try {
+    const name = await createBackup();
+    logSecurityEvent(req, 'backup_created', name, res.locals.user.user_id);
+    flash(req, `Backup created: ${name}`, 'success');
+  }
   catch (e) { flash(req, `Backup failed: ${e.message}`); }
   res.redirect('/backups');
 });
@@ -1677,8 +1704,26 @@ app.get('/backups/:name/download', requireOwner, (req, res) => {
 app.post('/backups/:name/delete', requireOwner, (req, res) => {
   const name = backupName(req);
   if (!name) { flash(req, 'Backup not found.'); return res.redirect('/backups'); }
-  try { fs.unlinkSync(path.join(BACKUP_DIR, name)); flash(req, `Deleted ${name}.`, 'success'); }
+  try {
+    fs.unlinkSync(path.join(BACKUP_DIR, name));
+    logSecurityEvent(req, 'backup_deleted', name, res.locals.user.user_id);
+    flash(req, `Deleted ${name}.`, 'success');
+  }
   catch (e) { flash(req, `Could not delete: ${e.message}`); }
+  res.redirect('/backups');
+});
+
+app.post('/backups/:name/verify', requireOwner, (req, res) => {
+  const name = backupName(req);
+  if (!name) { flash(req, 'Backup not found.'); return res.redirect('/backups'); }
+  try {
+    const result = verifyBackupFile(path.join(BACKUP_DIR, name));
+    logSecurityEvent(req, 'backup_verified', `${name};tables:${result.tables}`, res.locals.user.user_id);
+    flash(req, `Backup verified: ${name} (${result.tables} tables, integrity ok).`, 'success');
+  } catch (e) {
+    logSecurityEvent(req, 'backup_verify_failed', `${name};${e.message}`, res.locals.user.user_id);
+    flash(req, `Backup verification failed: ${e.message}`);
+  }
   res.redirect('/backups');
 });
 
@@ -1686,7 +1731,9 @@ app.post('/backups/:name/restore', requireOwner, (req, res) => {
   const name = backupName(req);
   if (!name) { flash(req, 'Backup not found.'); return res.redirect('/backups'); }
   try {
+    verifyBackupFile(path.join(BACKUP_DIR, name));
     fs.copyFileSync(path.join(BACKUP_DIR, name), RESTORE_PENDING);
+    logSecurityEvent(req, 'backup_restore_staged', name, res.locals.user.user_id);
     flash(req, `Restore from ${name} is staged. Restart the app to apply it.`, 'info');
   } catch (e) { flash(req, `Could not stage restore: ${e.message}`); }
   res.redirect('/backups');
@@ -1697,8 +1744,13 @@ app.post('/backups/restore-upload', requireOwner, dbUpload.single('backup'), (re
   if (!req.file || !isSqliteBuffer(req.file.buffer)) { flash(req, 'That file is not a valid SQLite database.'); return res.redirect('/backups'); }
   try {
     fs.writeFileSync(RESTORE_PENDING, req.file.buffer);
+    verifyBackupFile(RESTORE_PENDING);
+    logSecurityEvent(req, 'backup_upload_restore_staged', req.file.originalname || 'uploaded backup', res.locals.user.user_id);
     flash(req, 'Uploaded database is staged for restore. Restart the app to apply it.', 'info');
-  } catch (e) { flash(req, `Could not stage restore: ${e.message}`); }
+  } catch (e) {
+    try { fs.unlinkSync(RESTORE_PENDING); } catch (_) {}
+    flash(req, `Could not stage restore: ${e.message}`);
+  }
   res.redirect('/backups');
 });
 
