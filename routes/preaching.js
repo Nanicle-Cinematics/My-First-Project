@@ -1,7 +1,8 @@
 'use strict';
 // Preaching-plan routes + reminders. register(app, ctx).
 module.exports.register = function register(app, ctx) {
-  const { db, esc, fmtDate, fmtPreachDate, requireAdmin, logActivity, preacherContact, sendPreachingReminder } = ctx;
+  const { db, esc, fmtDate, fmtPreachDate, pageHero, statsRow,
+    requireAdmin, logActivity, preacherContact, sendPreachingReminder } = ctx;
 
   function preachingMemberOptions(selectedId) {
     const members = db.prepare(
@@ -75,6 +76,8 @@ module.exports.register = function register(app, ctx) {
     }[req.query.reminder];
 
     const next = upcoming[0];
+    const assigned = upcoming.filter((p) => !!(p.member_id || p.preacher_name)).length;
+    const contactReady = upcoming.filter((p) => preachingHasContact(p)).length;
     const nextCard = next
       ? `<section class="card" style="margin-bottom:1rem;border-left:4px solid var(--accent)">
            <div class="card-head"><h2>Next up</h2><span class="meta">${esc(fmtPreachDate(next.preach_date))}</span></div>
@@ -130,8 +133,15 @@ module.exports.register = function register(app, ctx) {
       title: 'Preaching Plan',
       subtitle: 'Schedule of preaching appointments. Send a reminder to whoever is next.',
       active: '/preaching',
+      noHeader: true,
       flash: reminderFlash,
-      body: `${nextCard}${newForm}${upcomingTable}${pastTable}`,
+      body: `${pageHero('Preaching Plan', 'Upcoming preaching assignments, guest contacts and reminder readiness.')}
+        ${statsRow([
+          { cls: 'gold', icon: '🎤', value: upcoming.length.toLocaleString(), label: 'Upcoming' },
+          { cls: 'green', icon: '✓', value: assigned.toLocaleString(), label: 'Assigned' },
+          { cls: 'blue', icon: '✉', value: contactReady.toLocaleString(), label: 'Reminder Ready' },
+        ])}
+        ${nextCard}${newForm}${upcomingTable}${pastTable}`,
     });
   });
 

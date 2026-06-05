@@ -221,6 +221,18 @@ CREATE TABLE activity_log (
 );
 CREATE INDEX idx_activity_recent ON activity_log(occurred_at DESC);
 
+-- Security-sensitive action log for owner review.
+CREATE TABLE security_audit_log (
+    audit_id    INTEGER PRIMARY KEY,
+    occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actor_id    INTEGER REFERENCES users(user_id),
+    event       TEXT NOT NULL,
+    subject     TEXT,
+    ip          TEXT,
+    user_agent  TEXT
+);
+CREATE INDEX idx_security_audit_recent ON security_audit_log(occurred_at DESC);
+
 -- Login accounts. role is 'admin' (full access) or 'viewer' (read-only).
 CREATE TABLE IF NOT EXISTS users (
     user_id       INTEGER PRIMARY KEY,

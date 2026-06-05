@@ -35,6 +35,8 @@ try {
       ip          TEXT,
       user_agent  TEXT
     );
+    CREATE INDEX IF NOT EXISTS idx_security_audit_recent
+      ON security_audit_log(occurred_at DESC);
   `);
 
   console.log(`✓ Live DB migrations applied successfully: ${dbPath}`);

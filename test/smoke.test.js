@@ -91,6 +91,7 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /Visitors This Month/);
   assert.match(home.body, /class="quick-drop"/);
   assert.match(home.body, /class="dash-grid"/);
+  assert.match(home.body, /data-command-center="true"/);
 });
 
 test('state-changing POST without a CSRF token is rejected (403)', async () => {
@@ -168,6 +169,7 @@ test('backups page renders and a backup can be created', async () => {
   const page = await get('/backups');
   assert.strictEqual(page.status, 200);
   assert.match(page.body, /Backups &amp; Restore/);
+  assert.match(page.body, /Command Center/);
   const token = tokenFrom(page.body);
   const r = await post('/backups/create', { _csrf: token });
   assert.strictEqual(r.status, 302);
@@ -209,6 +211,7 @@ test('inventory (extracted route module) can add and list an item', async () => 
   const page = await get('/inventory');
   assert.strictEqual(page.status, 200);
   assert.match(page.body, /Inventory/);
+  assert.match(page.body, /Command Center/);
   assert.match(page.body, />Audio-Visual \/ Media<\/option>/);
   const cat = await post('/inventory/categories', { name: 'Instruments', _csrf: tokenFrom(page.body) });
   assert.strictEqual(cat.status, 302);
@@ -256,6 +259,7 @@ test('events (extracted route module) list/create/detail work', async () => {
   const list = await get('/events');
   assert.strictEqual(list.status, 200);            // regression guard: list uses ICON_EYE
   assert.match(list.body, /Sunday Service/);
+  assert.match(list.body, /Command Center/);
   const cal = await get('/events/calendar');
   assert.strictEqual(cal.status, 200);
 });
@@ -301,6 +305,7 @@ test('reports + communications (extracted modules) render and post', async () =>
   assert.match(financialCsv.body, /Section,Period\/Month,Income,Expenses,Net/);
   const comms = await get('/communications');
   assert.strictEqual(comms.status, 200);
+  assert.match(comms.body, /Command Center/);
   assert.strictEqual((await get('/communications/broadcast')).status, 200);
   const posted = await post('/communications', { title: 'Welcome', body: 'Service 9am', audience: 'all', _csrf: tokenFrom(comms.body) });
   assert.strictEqual(posted.status, 302);
@@ -360,6 +365,7 @@ test('the error handler catches a thrown route error, logs it, shows 500', async
   const log = await get('/errors');
   assert.strictEqual(log.status, 200);
   assert.match(log.body, /Error Log/);
+  assert.match(log.body, /Command Center/);
   assert.match(log.body, /\/__throw/);
 });
 
@@ -368,7 +374,25 @@ test('owner can review security audit events', async () => {
   const audit = await get('/security/audit');
   assert.strictEqual(audit.status, 200);
   assert.match(audit.body, /Security Audit/);
+  assert.match(audit.body, /Command Center/);
   assert.match(audit.body, /login_success|user_created|user_role_changed/);
+});
+
+test('operational command centers render for core owner and ministry pages', async () => {
+  const pages = [
+    '/members',
+    '/finance',
+    '/preaching',
+    '/sacraments',
+    '/users',
+    '/profile',
+    '/settings',
+  ];
+  for (const path of pages) {
+    const r = await get(path);
+    assert.strictEqual(r.status, 200, `${path} should render`);
+    assert.match(r.body, /Command Center/, `${path} should use the command center shell`);
+  }
 });
 
 test('security headers are present', async () => {

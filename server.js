@@ -722,10 +722,13 @@ const NAV = [
   ['/inventory',       'Inventory',      '📦'],
   ['/events',          'Events',         '📅'],
   ['/preaching',       'Preaching Plan', '🎤'],
+  ['/sacraments',      'Sacraments',     '⛪'],
   ['/communications',  'Communications', '✉'],
   ['/reports',         'Reports',        '📊'],
   ['/users',           'Users & Roles',  '🔑', 'admin'],
+  ['/security/audit',  'Security Audit', '🛡', 'admin'],
   ['/backups',         'Backups',        '💾', 'admin'],
+  ['/errors',          'Error Log',      '⚠', 'admin'],
   ['/settings',        'Settings',       '⚙'],
 ];
 
@@ -1416,7 +1419,7 @@ app.get('/', (req, res) => {
     title: 'Dashboard',
     subtitle: `Welcome back, ${res.locals.user.display_name || res.locals.user.username}`,
     active: '/',
-    body: `<section class="dash-shell">${cards}${quick}${grid}</section>`,
+    body: `<section class="dash-shell command-center" data-command-center="true">${cards}${quick}${grid}</section>`,
   });
 });
 
@@ -1466,12 +1469,14 @@ require('./routes/inventory').register(app, {
 // ---------- preaching plan (who preaches when + reminders) ----------
 // ---------- preaching plan ----------
 require('./routes/preaching').register(app, {
-  db, esc, fmtDate, fmtPreachDate, requireAdmin, logActivity, preacherContact, sendPreachingReminder,
+  db, esc, fmtDate, fmtPreachDate, pageHero, statsRow,
+  requireAdmin, logActivity, preacherContact, sendPreachingReminder,
 });
 
 // ---------- communications ----------
 require('./routes/communications').register(app, {
   db, requireAdmin, logActivity, flash, csrfValid, CHURCH_NAME, PREF_LABELS,
+  pageHero, statsRow,
   loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, normalizePhoneGH,
   ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS,
 });
@@ -1580,13 +1585,14 @@ app.get('/sacraments', (req, res) => {
           <div class="value">${c.c}</div></div></div>`).join('')}
     </div>`;
   const body = `
+    ${pageHero('Sacraments', 'Reference register for baptisms, confirmations, marriages, funerals and dedications.')}
     ${stats}
     ${table(['Type', 'Date', 'Member', 'Spouse', 'Location'],
       rows.map((r) => [esc(r.sacrament_type), esc(r.occurred_on),
         r.member_id ? `<a href="/members/${r.member_id}">${esc(r.member)}</a>` : '—',
         r.spouse_id ? `<a href="/members/${r.spouse_id}">${esc(r.spouse)}</a>` : '—',
         esc(r.location)]))}`;
-  res.page({ title: 'Sacraments', active: '/sacraments', body });
+  res.page({ title: 'Sacraments', active: '/sacraments', noHeader: true, body });
 });
 
 // ---------- settings ----------
@@ -1698,6 +1704,7 @@ app.post('/backups/restore-upload', requireOwner, dbUpload.single('backup'), (re
 
 app.get('/settings', requireOwner, (req, res) => {
   const body = `
+    ${pageHero('Settings', 'Owner-only controls for integrations, automation and runtime configuration.')}
     <div class="card">
       <h2>Application</h2>
       <dl class="stats">
@@ -1763,7 +1770,7 @@ app.get('/settings', requireOwner, (req, res) => {
       <p>Your database file is at <code>${esc(DB_PATH)}</code>. To back it up while running on Fly:</p>
       <pre>flyctl ssh sftp get ${esc(DB_PATH)} ./church-backup.db</pre>
     </div>`;
-  res.page({ title: 'Settings', active: '/settings', body });
+  res.page({ title: 'Settings', active: '/settings', noHeader: true, body });
 });
 
 app.post('/settings/test-sms', requireOwner, async (req, res) => {
@@ -1804,6 +1811,7 @@ app.get('/profile', (req, res) => {
     bad: 'Current password is incorrect.',
   }[req.query.e] : null;
   const body = `
+    ${pageHero('Profile', 'Account controls for your signed-in user.')}
     <p>Signed in as <strong>${esc(u.username)}</strong> (${esc(u.role)}).</p>
     <h2>Change password</h2>
     ${error ? `<p class="error">${esc(error)}</p>` : ''}
@@ -1813,7 +1821,7 @@ app.get('/profile', (req, res) => {
       <label class="wide">Confirm new password<input type="password" name="next2" required></label>
       <div class="actions"><button type="submit">Update password</button></div>
     </form>`;
-  res.page({ title: 'Profile', body, flash });
+  res.page({ title: 'Profile', noHeader: true, body, flash });
 });
 
 app.post('/profile/password', (req, res) => {
@@ -1861,12 +1869,13 @@ app.get('/users', requireOwner, (req, res) => {
        : ''}`,
   ]);
   const body = `
+    ${pageHero('Users & Roles', 'Owner-only access control for staff and ministry administrators.')}
     <p class="muted-text">Any administrator can set a user's access level (read/write jurisdiction):
       <strong>Admin</strong> = full read &amp; write; <strong>Viewer</strong> = read-only.
       Only the main administrator (<strong>dunwelladmin</strong>) can add or delete user accounts and reset passwords.</p>
     ${res.locals.isUserManager ? '<p><a class="btn" href="/users/new">+ New user</a></p>' : ''}
     ${table(['Username', 'Display name', 'Role', 'Created', 'Actions'], rows)}`;
-  res.page({ title: 'Users', body });
+  res.page({ title: 'Users', active: '/users', noHeader: true, body });
 });
 
 app.get('/users/new', requireUserManager, (req, res) => {
@@ -1952,6 +1961,7 @@ app.get('/security/audit', requireOwner, (req, res) => {
       LEFT JOIN users u ON u.user_id=sal.actor_id
      ORDER BY sal.audit_id DESC LIMIT 100`).all();
   const body = `
+    ${pageHero('Security Audit', 'Owner-only review of login, password and role events.')}
     <p class="muted-text">Most recent security-sensitive events. Use this after deploys and account changes.</p>
     ${table(['When', 'Event', 'Actor', 'Subject', 'IP'], rows.map((r) => [
       esc(r.occurred_at),
@@ -1960,7 +1970,7 @@ app.get('/security/audit', requireOwner, (req, res) => {
       esc(r.subject || '—'),
       esc(r.ip || '—'),
     ]))}`;
-  res.page({ title: 'Security Audit', active: null, body });
+  res.page({ title: 'Security Audit', active: '/security/audit', noHeader: true, body });
 });
 
 // ---------- auth pages ----------
@@ -1992,6 +2002,7 @@ app.post('/setup', (req, res) => {
   const info = db.prepare(
     `INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)`
   ).run(username.trim(), hash, (display_name || '').trim() || null);
+  logSecurityEvent(req, 'first_admin_created', `user_id:${info.lastInsertRowid}`, info.lastInsertRowid);
   req.session.userId = info.lastInsertRowid;
   res.redirect('/');
 });
