@@ -726,6 +726,7 @@ const NAV = [
   ['/sacraments',      'Sacraments',     '⛪'],
   ['/communications',  'Communications', '✉'],
   ['/reports',         'Reports',        '📊'],
+  ['/operations',      'Operations',     '◎', 'admin'],
   ['/users',           'Users & Roles',  '🔑', 'admin'],
   ['/security/audit',  'Security Audit', '🛡', 'admin'],
   ['/backups',         'Backups',        '💾', 'admin'],
@@ -1225,6 +1226,21 @@ app.get('/', (req, res) => {
       SELECT member_id FROM ministry_memberships WHERE left_date IS NULL
       UNION SELECT member_id FROM organization_memberships)`).get().c;
 
+  const akanByDay = {
+    Monday: { names: 'Adwoa / Kwadwo', leader: 'Group steward pending' },
+    Tuesday: { names: 'Abena / Kwabena', leader: 'Group steward pending' },
+    Wednesday: { names: 'Akua / Kwaku', leader: 'Group steward pending' },
+    Thursday: { names: 'Yaa / Yaw', leader: 'Group steward pending' },
+    Friday: { names: 'Afia / Kofi', leader: 'Group steward pending' },
+    Saturday: { names: 'Ama / Kwame', leader: 'Group steward pending' },
+    Sunday: { names: 'Akosua / Kwasi', leader: 'Group steward pending' },
+  };
+  const dayCounts = new Map(db.prepare(`
+    SELECT day_born, COUNT(*) c
+    FROM members
+    WHERE deleted_at IS NULL AND day_born IS NOT NULL AND day_born <> ''
+    GROUP BY day_born`).all().map((r) => [r.day_born, r.c]));
+
   const trendDelta = (n) => n == null ? '' :
     `<div class="trend ${n < 0 ? 'down' : ''}">${n >= 0 ? '↑' : '↓'} ${Math.abs(n)}% from last period</div>`;
 
@@ -1344,6 +1360,29 @@ app.get('/', (req, res) => {
       </div>
     </div>`;
 
+  const dayBornCard = `
+    <div class="card">
+      <div class="card-head"><h2>Day-born Groups</h2><span class="meta">Akan fellowship view</span></div>
+      <div class="day-born-grid">
+        ${Object.keys(akanByDay).map((day) => {
+          const info = akanByDay[day];
+          const count = dayCounts.get(day) || 0;
+          return `<div class="day-card" title="Akan Names: ${esc(info.names)}">
+            <div class="day-card-head">
+              <strong>${esc(day)}</strong>
+              <span>${esc(info.names)}</span>
+            </div>
+            <div class="day-card-body">
+              <div class="day-count">${count.toLocaleString()}</div>
+              <div class="day-meta">Members</div>
+              <div class="day-meta">Leader: ${esc(info.leader)}</div>
+              <div class="day-meta">Last meeting: Not recorded</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
   const netBalance = offeringsThisMonth + harvestsMonth - monthExpenses;
   const specialRows = specialByCat.slice(0, 3).map((s) =>
     `<div class="fin-row"><span class="lbl"><span class="dot">✨</span> ${esc(s.name)}</span>
@@ -1411,6 +1450,7 @@ app.get('/', (req, res) => {
       ${activityCard}
       <div class="col-2">${ministryCard}</div>
       ${attendanceCard}
+      <div class="col-2">${dayBornCard}</div>
       ${financeCard}
       ${birthdaysCard}
       ${followupsCard}
@@ -2023,6 +2063,74 @@ app.get('/security/audit', requireOwner, (req, res) => {
       esc(r.ip || '—'),
     ]))}`;
   res.page({ title: 'Security Audit', active: '/security/audit', noHeader: true, body });
+});
+
+app.get('/operations', requireOwner, (req, res) => {
+  const backups = listBackups();
+  const latestBackup = backups[0] || null;
+  const backupVerified = db.prepare(`
+    SELECT occurred_at, subject
+    FROM security_audit_log
+    WHERE event='backup_verified'
+    ORDER BY audit_id DESC LIMIT 1`).get();
+  const recentErrors = db.prepare(`
+    SELECT COUNT(*) AS c
+    FROM error_log
+    WHERE occurred_at >= datetime('now','-24 hours')`).get().c;
+  const lastAudit = db.prepare(`
+    SELECT occurred_at, event
+    FROM security_audit_log
+    ORDER BY audit_id DESC LIMIT 1`).get();
+  const activeUsers = db.prepare(`
+    SELECT COUNT(*) AS c
+    FROM users
+    WHERE deleted_at IS NULL`).get().c;
+
+  let dbStatus = 'ready';
+  try { db.prepare('SELECT 1').get(); } catch (_) { dbStatus = 'not ready'; }
+
+  const checks = [
+    ['Database readiness', dbStatus, dbStatus === 'ready' ? 'SELECT 1 succeeded' : 'Database query failed', '/readyz'],
+    ['Latest backup', latestBackup ? 'available' : 'missing', latestBackup ? `${latestBackup.name} · ${fmtBytes(latestBackup.size)}` : 'No backup files are retained', '/backups'],
+    ['Backup verification', backupVerified ? 'verified' : 'pending', backupVerified ? `${backupVerified.occurred_at} · ${backupVerified.subject}` : 'Verify the latest backup from Backups', '/backups'],
+    ['Error log', recentErrors ? 'attention' : 'clear', `${recentErrors} error${recentErrors === 1 ? '' : 's'} in the last 24 hours`, '/errors'],
+    ['Security audit', lastAudit ? 'active' : 'empty', lastAudit ? `${lastAudit.occurred_at} · ${lastAudit.event}` : 'No audit events yet', '/security/audit'],
+    ['Off-site backup upload', process.env.BACKUP_UPLOAD_URL ? 'configured' : 'not configured',
+      process.env.BACKUP_UPLOAD_URL ? 'BACKUP_UPLOAD_URL is set' : 'Set BACKUP_UPLOAD_URL for off-site copies', '/settings'],
+    ['SMS provider', ARKESEL_API_KEY ? 'configured' : 'dry-run', ARKESEL_API_KEY ? 'Arkesel key is set' : 'ARKESEL_API_KEY is not set', '/settings'],
+    ['Email provider', SMTP_HOST && SMTP_USER && SMTP_PASS ? 'configured' : 'dry-run',
+      SMTP_HOST && SMTP_USER && SMTP_PASS ? `${SMTP_HOST}:${SMTP_PORT}` : 'SMTP settings are incomplete', '/settings'],
+  ];
+
+  const pillClass = (status) => {
+    if (['ready', 'available', 'verified', 'clear', 'active', 'configured'].includes(status)) return 'sent';
+    if (['pending', 'dry-run', 'not configured'].includes(status)) return 'dry_run';
+    return 'failed';
+  };
+  const rows = checks.map(([name, status, detail, href]) => [
+    esc(name),
+    `<span class="pill pill-${pillClass(status)}">${esc(status)}</span>`,
+    esc(detail),
+    `<a href="${esc(href)}">Open</a>`,
+  ]);
+
+  res.page({
+    title: 'Operations',
+    active: '/operations',
+    noHeader: true,
+    body: `${pageHero('Operations', 'Owner command center for production health, backups, audit and integration readiness.')}
+      ${statsRow([
+        { cls: dbStatus === 'ready' ? 'green' : 'orange', icon: '✓', value: esc(dbStatus), label: 'Database' },
+        { cls: latestBackup ? 'gold' : 'orange', icon: '💾', value: latestBackup ? latestBackup.mtime.toLocaleString('en-GB') : 'none', label: 'Latest Backup' },
+        { cls: recentErrors ? 'orange' : 'green', icon: '⚠', value: Number(recentErrors).toLocaleString(), label: 'Errors (24h)' },
+        { cls: 'blue', icon: '🔑', value: Number(activeUsers).toLocaleString(), label: 'Active Users' },
+      ])}
+      ${listCard({ title: 'Operational Checks', count: checks.length, countLabel: 'checks', inner: table(['Check', 'Status', 'Detail', 'Link'], rows) })}
+      <div class="card">
+        <div class="card-head"><h2>Runbook</h2></div>
+        <p>Use <code>docs/OPERATIONS_RUNBOOK.md</code> for deploy checks, monthly restore drills and rollback steps.</p>
+      </div>`,
+  });
 });
 
 // ---------- auth pages ----------

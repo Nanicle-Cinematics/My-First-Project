@@ -39,7 +39,7 @@ function selectMembers(filters) {
   const { clause, params } = memberWhere(filters);
   let sql = `
     SELECT m.member_id, m.external_id, m.first_name, m.last_name, m.email, m.mobile_phone,
-           m.membership_status, m.photo_filename, mn.name AS bible_class
+           m.membership_status, m.photo_filename, m.day_born, mn.name AS bible_class
     FROM members m LEFT JOIN ministries mn ON mn.ministry_id = m.bible_class_id
     WHERE ${clause}
     ORDER BY m.last_name, m.first_name`;
@@ -59,6 +59,15 @@ function countMembers(filters) {
 const MEMBER_STATUS_LABELS = {
   visitor: 'Visitor', regular: 'Regular', member: 'Member', inactive: 'Inactive',
   transferred: 'Transferred', deceased: 'Deceased', other: 'Other',
+};
+const AKAN_NAMES = {
+  Sunday: 'Akosua / Kwasi',
+  Monday: 'Adwoa / Kwadwo',
+  Tuesday: 'Abena / Kwabena',
+  Wednesday: 'Akua / Kwaku',
+  Thursday: 'Yaa / Yaw',
+  Friday: 'Afia / Kofi',
+  Saturday: 'Ama / Kwame',
 };
 const MEMBERS_PER_PAGE = 25;
 app.get('/members', (req, res) => {
@@ -131,9 +140,13 @@ app.get('/members', (req, res) => {
         <div class="m-contact">
           ${phone ? `<div><span class="ci">📞</span> <a href="tel:${phone}">${phone}</a></div>` : '<div class="muted-text">No phone</div>'}
           ${email ? `<div><span class="ci">✉</span> <a href="mailto:${email}">${email}</a></div>` : ''}
+          ${phone ? '<span class="momo-badge">MoMo ready</span>' : ''}
         </div>
       </td>
-      <td data-label="Bible class">${esc(r.bible_class) || '—'}</td>
+      <td data-label="Day Name">${r.day_born
+        ? `<span class="pill pill-day" title="Akan Names: ${esc(AKAN_NAMES[r.day_born] || r.day_born)}">${esc(r.day_born)}</span>`
+        : '—'}</td>
+      <td data-label="Group">${esc(r.bible_class) || '—'}</td>
       <td data-label="Status"><span class="pill pill-${esc(r.membership_status)}">${esc(MEMBER_STATUS_LABELS[r.membership_status] || r.membership_status)}</span></td>
       <td data-label="Actions">${actions}</td>
     </tr>`;
@@ -157,7 +170,7 @@ app.get('/members', (req, res) => {
     title: '👥 Members List', count: matched, countLabel: 'members',
     note: 'Results update as you search and filter',
     inner: rows.length ? `${bulkBar}<table class="data-table members-table"${isAdmin ? ' data-bulk' : ''}>
-        <thead><tr>${isAdmin ? '<th class="bulk-cell"><input type="checkbox" class="bulk-all" aria-label="Select all"></th>' : ''}<th>Name</th><th>Contact</th><th>Bible class</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr>${isAdmin ? '<th class="bulk-cell"><input type="checkbox" class="bulk-all" aria-label="Select all"></th>' : ''}<th>Name</th><th>Contact</th><th>Day Name</th><th>Group</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
       </table>
       ${pager('/members', { q, status, class: classId }, page, pages)}` : `<div class="empty-state">

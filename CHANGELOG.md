@@ -9,6 +9,7 @@ All notable changes to this project are documented here.
 - Phase 3 production-hardening plan and operations runbook.
 - In-app backup verification from `/backups`, including SQLite integrity checks and expected table checks.
 - Backup create/delete/verify/restore staging events in the security audit log.
+- Owner-only Operations page at `/operations` for readiness, backup, error, audit and integration status.
 
 ### Changed
 

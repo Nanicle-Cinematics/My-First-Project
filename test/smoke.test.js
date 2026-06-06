@@ -92,6 +92,8 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /class="quick-drop"/);
   assert.match(home.body, /class="dash-grid"/);
   assert.match(home.body, /data-command-center="true"/);
+  assert.match(home.body, /Day-born Groups/);
+  assert.match(home.body, /Akan fellowship view/);
 });
 
 test('state-changing POST without a CSRF token is rejected (403)', async () => {
@@ -105,12 +107,15 @@ test('a member can be created and shows in the directory', async () => {
   assert.ok(token);
   const created = await post('/members', {
     first_name: 'Grace', last_name: 'Tester', membership_status: 'member',
-    mobile_phone: '0200000000', gender: 'F', preferred_channel: 'none', _csrf: token,
+    mobile_phone: '0200000000', day_born: 'Friday', gender: 'F', preferred_channel: 'none', _csrf: token,
   });
   assert.strictEqual(created.status, 302);
   const list = await get('/members');
   assert.match(list.body, /Grace<\/a>|Grace Tester|Grace/);
   assert.match(list.body, /Members Directory/);
+  assert.match(list.body, /Day Name/);
+  assert.match(list.body, /Akan Names: Afia \/ Kofi/);
+  assert.match(list.body, /MoMo ready/);
 });
 
 test('invalid member submission is rejected with a flash message', async () => {
@@ -212,6 +217,8 @@ test('editor role can edit content but is blocked from owner areas', async () =>
   assert.strictEqual(newMember.status, 200);           // editor can edit content
   const backups = await get('/backups');
   assert.strictEqual(backups.status, 403);             // but not owner-only areas
+  const operations = await get('/operations');
+  assert.strictEqual(operations.status, 403);
   cookie = owner;
 });
 
@@ -393,6 +400,7 @@ test('operational command centers render for core owner and ministry pages', asy
     '/finance',
     '/preaching',
     '/sacraments',
+    '/operations',
     '/users',
     '/profile',
     '/settings',
@@ -402,6 +410,17 @@ test('operational command centers render for core owner and ministry pages', asy
     assert.strictEqual(r.status, 200, `${path} should render`);
     assert.match(r.body, /Command Center/, `${path} should use the command center shell`);
   }
+});
+
+test('operations page summarizes production readiness signals', async () => {
+  const page = await get('/operations');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Operations/);
+  assert.match(page.body, /Operational Checks/);
+  assert.match(page.body, /Database readiness/);
+  assert.match(page.body, /Backup verification/);
+  assert.match(page.body, /Off-site backup upload/);
+  assert.match(page.body, /docs\/OPERATIONS_RUNBOOK.md/);
 });
 
 test('security headers are present', async () => {

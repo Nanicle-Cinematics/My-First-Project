@@ -27,6 +27,7 @@ CREATE TABLE members (
     preferred_name   TEXT,
     gender           TEXT    CHECK (gender IN ('M','F','O') OR gender IS NULL),
     date_of_birth    TEXT,
+    day_born         TEXT,
     email            TEXT,
     mobile_phone     TEXT,
     marital_status   TEXT    CHECK (marital_status IN
