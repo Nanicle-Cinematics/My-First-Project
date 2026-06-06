@@ -2615,6 +2615,30 @@ table.data-table thead,
   text-shadow: 0 1px 1px rgba(15, 23, 42, 0.34);
 }
 
+.page-hero {
+  background:
+    radial-gradient(circle at 8% 18%, rgba(245, 158, 11, 0.24), transparent 34%),
+    linear-gradient(135deg, #1e1b4b 0%, #4f46e5 55%, #7c3aed 100%);
+  border-color: rgba(199, 210, 254, 0.28);
+  color: #ffffff;
+}
+
+.page-hero h1,
+.page-hero .hero-kicker {
+  color: #ffffff;
+}
+
+.page-hero p {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.page-hero .hero-kicker {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 0.22rem 0.55rem;
+  width: fit-content;
+}
+
 @media (max-width: 800px) {
   .dashboard-row-split {
     grid-template-columns: 1fr;
