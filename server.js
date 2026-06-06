@@ -202,6 +202,37 @@ db.exec(`CREATE TABLE IF NOT EXISTS app_state (
   value TEXT
 );`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS email_settings (
+  setting_id          INTEGER PRIMARY KEY CHECK (setting_id = 1),
+  provider            TEXT NOT NULL DEFAULT 'smtp' CHECK (provider IN ('smtp', 'resend')),
+  sender_name         TEXT NOT NULL DEFAULT '',
+  sender_email        TEXT NOT NULL DEFAULT '',
+  reply_to_email      TEXT NOT NULL DEFAULT '',
+  test_recipient_email TEXT NOT NULL DEFAULT '',
+  created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`);
+db.exec(`CREATE TABLE IF NOT EXISTS email_logs (
+  email_log_id   INTEGER PRIMARY KEY,
+  occurred_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  recipient      TEXT NOT NULL,
+  subject        TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  sent_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  error_message  TEXT,
+  provider       TEXT,
+  sender_name    TEXT,
+  sender_email   TEXT,
+  reply_to_email TEXT
+);`);
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_email_logs_recent ON email_logs(occurred_at DESC)`); } catch (_) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_email_logs_status ON email_logs(status)`); } catch (_) {}
+db.prepare(`
+  INSERT OR IGNORE INTO email_settings
+    (setting_id, provider, sender_name, sender_email, reply_to_email, test_recipient_email)
+  VALUES (1, 'smtp', ?, ?, ?, ?)
+`).run(CHURCH_NAME, process.env.SMTP_USER || '', process.env.SMTP_USER || '', '');
+
 // Per-member tithes — distinct from general offerings (services) and
 // special offerings, lets us track an individual's giving over time.
 db.exec(`CREATE TABLE IF NOT EXISTS tithes (
@@ -762,18 +793,82 @@ const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM = process.env.SMTP_FROM || (SMTP_USER ? `Church <${SMTP_USER}>` : '');
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESEND_API_URL = 'https://api.resend.com/emails';
 
-let mailTransporter = null;
+let smtpTransporter = null;
 function getMailer() {
-  if (mailTransporter || !SMTP_HOST || !SMTP_USER || !SMTP_PASS) return mailTransporter;
+  if (smtpTransporter || !SMTP_HOST || !SMTP_USER || !SMTP_PASS) return smtpTransporter;
   const nodemailer = require('nodemailer');
-  mailTransporter = nodemailer.createTransport({
+  smtpTransporter = nodemailer.createTransport({
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
-  return mailTransporter;
+  return smtpTransporter;
+}
+
+function loadEmailSettings() {
+  const row = db.prepare(`SELECT * FROM email_settings WHERE setting_id=1`).get();
+  return row || {
+    setting_id: 1,
+    provider: 'smtp',
+    sender_name: CHURCH_NAME,
+    sender_email: SMTP_USER || '',
+    reply_to_email: SMTP_USER || '',
+    test_recipient_email: '',
+  };
+}
+
+function emailSenderHeader(settings) {
+  const senderName = (settings && settings.sender_name ? String(settings.sender_name) : CHURCH_NAME).trim() || CHURCH_NAME;
+  const senderEmail = (settings && settings.sender_email ? String(settings.sender_email) : SMTP_USER).trim();
+  return senderEmail ? `${senderName} <${senderEmail}>` : senderName;
+}
+
+function emailDeliveryInfo(settings = loadEmailSettings()) {
+  const provider = String((settings && settings.provider) || 'smtp').toLowerCase();
+  if (provider === 'resend') {
+    return {
+      provider: 'resend',
+      ready: !!RESEND_API_KEY,
+      secretLabel: 'RESEND_API_KEY',
+      senderHeader: emailSenderHeader(settings),
+      senderName: (settings && settings.sender_name ? String(settings.sender_name) : CHURCH_NAME).trim() || CHURCH_NAME,
+      senderEmail: (settings && settings.sender_email ? String(settings.sender_email) : SMTP_USER).trim(),
+      replyToEmail: (settings && settings.reply_to_email ? String(settings.reply_to_email) : SMTP_USER).trim(),
+    };
+  }
+  return {
+    provider: 'smtp',
+    ready: !!(SMTP_HOST && SMTP_USER && SMTP_PASS),
+    secretLabel: 'SMTP_HOST / SMTP_USER / SMTP_PASS',
+    senderHeader: emailSenderHeader(settings),
+    senderName: (settings && settings.sender_name ? String(settings.sender_name) : CHURCH_NAME).trim() || CHURCH_NAME,
+    senderEmail: (settings && settings.sender_email ? String(settings.sender_email) : SMTP_USER).trim(),
+    replyToEmail: (settings && settings.reply_to_email ? String(settings.reply_to_email) : SMTP_USER).trim(),
+  };
+}
+
+function logEmailAttempt({ recipient, subject, status, sentAt, errorMessage, provider, senderName, senderEmail, replyToEmail }) {
+  try {
+    db.prepare(`
+      INSERT INTO email_logs
+        (recipient, subject, status, sent_at, error_message, provider, sender_name, sender_email, reply_to_email)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      recipient || '',
+      subject || '',
+      status || 'failed',
+      sentAt || new Date().toISOString(),
+      errorMessage || null,
+      provider || null,
+      senderName || null,
+      senderEmail || null,
+      replyToEmail || null
+    );
+  } catch (_) {}
 }
 
 // Normalize Ghana phone numbers to E.164 (+233XXXXXXXXX).
@@ -906,8 +1001,27 @@ setTimeout(tickBirthdayScheduler, 30 * 1000);
 
 // Send one personalized email per recipient. Each gets its own unsubscribe link.
 async function sendEmailEach(recipients, subject, body, opts = {}) {
-  const mailer = getMailer();
-  if (!mailer) return { ok: false, dryRun: true, total: recipients.length };
+  const settings = opts.settings || loadEmailSettings();
+  const delivery = emailDeliveryInfo(settings);
+  const senderHeader = opts.from || delivery.senderHeader || SMTP_FROM;
+  const replyTo = opts.replyTo || delivery.replyToEmail || '';
+  const now = new Date().toISOString();
+  if (!delivery.ready) {
+    for (const r of recipients) {
+      logEmailAttempt({
+        recipient: r.addr,
+        subject,
+        status: 'dry_run',
+        sentAt: now,
+        errorMessage: `Email provider not configured (${delivery.secretLabel})`,
+        provider: delivery.provider,
+        senderName: delivery.senderName,
+        senderEmail: delivery.senderEmail,
+        replyToEmail: replyTo || null,
+      });
+    }
+    return { ok: false, dryRun: true, total: recipients.length, provider: delivery.provider };
+  }
   if (!recipients.length) return { ok: true, sent: 0, failed: 0 };
   let sent = 0, failed = 0;
   const errors = [];
@@ -918,15 +1032,62 @@ async function sendEmailEach(recipients, subject, body, opts = {}) {
           : `\n\n— ${CHURCH_NAME}\nTo stop receiving messages, contact the church office.`)
       : '';
     try {
-      await mailer.sendMail({
-        from: SMTP_FROM, to: r.addr, subject, text: body + footer,
-      });
+      if (delivery.provider === 'resend') {
+        const payload = {
+          from: senderHeader,
+          to: r.addr,
+          subject,
+          text: body + footer,
+        };
+        if (replyTo) payload.reply_to = replyTo;
+        const res = await fetch(RESEND_API_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+        const raw = await res.text();
+        if (!res.ok) throw new Error(raw || `HTTP ${res.status}`);
+      } else {
+        const mailer = getMailer();
+        if (!mailer) throw new Error('SMTP transporter unavailable');
+        await mailer.sendMail({
+          from: senderHeader,
+          to: r.addr,
+          subject,
+          text: body + footer,
+          replyTo: replyTo || undefined,
+        });
+      }
       sent++;
+      logEmailAttempt({
+        recipient: r.addr,
+        subject,
+        status: 'sent',
+        sentAt: new Date().toISOString(),
+        provider: delivery.provider,
+        senderName: delivery.senderName,
+        senderEmail: delivery.senderEmail,
+        replyToEmail: replyTo || null,
+      });
     } catch (e) {
       failed++; errors.push(e.message);
+      logEmailAttempt({
+        recipient: r.addr,
+        subject,
+        status: 'failed',
+        sentAt: new Date().toISOString(),
+        errorMessage: e.message,
+        provider: delivery.provider,
+        senderName: delivery.senderName,
+        senderEmail: delivery.senderEmail,
+        replyToEmail: replyTo || null,
+      });
     }
   }
-  return { ok: failed === 0, sent, failed, errors };
+  return { ok: failed === 0, sent, failed, errors, provider: delivery.provider };
 }
 
 // Resolve a preaching appointment's preacher contact: a linked member's details
@@ -1531,7 +1692,7 @@ require('./routes/communications').register(app, {
   db, requireAdmin, logActivity, flash, csrfValid, CHURCH_NAME, PREF_LABELS,
   pageHero, statsRow,
   loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, normalizePhoneGH,
-  ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS,
+  ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS, isEmailish,
 });
 
 // ---------- members ----------
@@ -1833,6 +1994,7 @@ app.get('/settings', requireOwner, (req, res) => {
         <dt>SMTP host</dt><dd>${SMTP_HOST ? `<code>${esc(SMTP_HOST)}:${SMTP_PORT}</code> <span class="pill pill-${SMTP_USER && SMTP_PASS ? 'sent' : 'dry_run'}">${SMTP_USER && SMTP_PASS ? 'configured' : 'dry-run'}</span>` : '<span class="pill pill-dry_run">not configured</span>'}</dd>
         <dt>From address</dt><dd>${esc(SMTP_FROM) || '<span class="muted-text">unset</span>'}</dd>
       </dl>
+      <p class="muted-text">Manage sender identity, provider choice and email logs on <a href="/communications/email-settings">Communications &rarr; Email Settings</a>.</p>
       <h3>Configure on Fly</h3>
       <pre>flyctl secrets set \\
   ARKESEL_API_KEY="your-arkesel-api-key" \\
