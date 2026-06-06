@@ -220,6 +220,8 @@ test('editor role can edit content but is blocked from owner areas', async () =>
   assert.strictEqual(li.status, 302);
   const newMember = await get('/members/new');
   assert.strictEqual(newMember.status, 200);           // editor can edit content
+  const emailSettings = await get('/communications/email-settings');
+  assert.strictEqual(emailSettings.status, 403);       // but not admin-only email settings
   const backups = await get('/backups');
   assert.strictEqual(backups.status, 403);             // but not owner-only areas
   const operations = await get('/operations');
@@ -361,6 +363,34 @@ test('settings test-send tools report dry-run when SMS/email unconfigured', asyn
   const email = await post('/settings/test-email', { to: 'a@b.com', _csrf: token });
   assert.strictEqual(email.status, 302);
   assert.match((await get('/settings')).body, /dry-run mode/);
+});
+
+test('email settings page saves non-sensitive config and records test sends', async () => {
+  const page = await get('/communications/email-settings');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Email Settings/);
+  assert.match(page.body, /Send Test Email/);
+  const token = tokenFrom(page.body);
+  const saved = await post('/communications/email-settings', {
+    provider: 'smtp',
+    sender_name: 'Dunwell Methodist',
+    sender_email: 'noreply@example.com',
+    reply_to_email: 'reply@example.com',
+    test_recipient_email: 'test@example.com',
+    _csrf: token,
+  });
+  assert.strictEqual(saved.status, 302);
+  const afterSave = await get('/communications/email-settings');
+  assert.match(afterSave.body, /noreply@example.com/);
+  assert.match(afterSave.body, /test@example.com/);
+  const sent = await post('/communications/email-settings/test', {
+    recipient: 'test@example.com',
+    _csrf: tokenFrom(afterSave.body),
+  });
+  assert.strictEqual(sent.status, 302);
+  const afterSend = await get('/communications/email-settings');
+  assert.match(afterSend.body, /test@example.com/);
+  assert.match(afterSend.body, /dry run/);
 });
 
 test('SMS broadcast send path works (dry-run, all members)', async () => {

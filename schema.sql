@@ -234,6 +234,33 @@ CREATE TABLE security_audit_log (
 );
 CREATE INDEX idx_security_audit_recent ON security_audit_log(occurred_at DESC);
 
+CREATE TABLE IF NOT EXISTS email_settings (
+    setting_id           INTEGER PRIMARY KEY CHECK (setting_id = 1),
+    provider             TEXT NOT NULL DEFAULT 'smtp' CHECK (provider IN ('smtp', 'resend')),
+    sender_name          TEXT NOT NULL DEFAULT '',
+    sender_email         TEXT NOT NULL DEFAULT '',
+    reply_to_email       TEXT NOT NULL DEFAULT '',
+    test_recipient_email TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS email_logs (
+    email_log_id   INTEGER PRIMARY KEY,
+    occurred_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    recipient      TEXT NOT NULL,
+    subject        TEXT NOT NULL,
+    status         TEXT NOT NULL,
+    sent_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    error_message  TEXT,
+    provider       TEXT,
+    sender_name    TEXT,
+    sender_email   TEXT,
+    reply_to_email TEXT
+);
+CREATE INDEX idx_email_logs_recent ON email_logs(occurred_at DESC);
+CREATE INDEX idx_email_logs_status ON email_logs(status);
+
 -- Login accounts. role is 'admin' (full access) or 'viewer' (read-only).
 CREATE TABLE IF NOT EXISTS users (
     user_id       INTEGER PRIMARY KEY,

@@ -7,7 +7,66 @@ module.exports.register = function register(app, ctx) {
   const { db, requireAdmin, logActivity, flash, csrfValid, CHURCH_NAME, PREF_LABELS,
     pageHero, statsRow,
     loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, normalizePhoneGH,
-    ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS } = ctx;
+    ARKESEL_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS, isEmailish } = ctx;
+
+  function requireEmailAdmin(req, res, next) {
+    if (res.locals.isOwner) return next();
+    res.status(403);
+    return res.page({
+      title: 'Administrators only',
+      active: '/communications',
+      body: '<p>Email settings are reserved for administrators.</p><p><a href="/communications">Back to communications</a></p>',
+    });
+  }
+
+  function loadEmailSettings() {
+    return db.prepare(`SELECT * FROM email_settings WHERE setting_id=1`).get() || {
+      setting_id: 1,
+      provider: 'smtp',
+      sender_name: CHURCH_NAME,
+      sender_email: SMTP_USER || '',
+      reply_to_email: SMTP_USER || '',
+      test_recipient_email: '',
+    };
+  }
+
+  function providerLabel(provider) {
+    return ({ smtp: 'SMTP', resend: 'Resend API' }[provider] || 'SMTP');
+  }
+
+  function providerReady(provider) {
+    return provider === 'resend'
+      ? !!process.env.RESEND_API_KEY
+      : !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
+  }
+
+  function saveEmailSettings(body) {
+    const provider = String(body.provider || 'smtp').toLowerCase();
+    const senderName = String(body.sender_name || '').trim();
+    const senderEmail = String(body.sender_email || '').trim();
+    const replyToEmail = String(body.reply_to_email || '').trim();
+    const testRecipientEmail = String(body.test_recipient_email || '').trim();
+    const errors = [];
+    if (!['smtp', 'resend'].includes(provider)) errors.push('Choose a valid email provider.');
+    if (!senderName) errors.push('Sender name is required.');
+    if (!isEmailish(senderEmail)) errors.push('Sender email must be a valid email address.');
+    if (replyToEmail && !isEmailish(replyToEmail)) errors.push('Reply-to email must be valid.');
+    if (testRecipientEmail && !isEmailish(testRecipientEmail)) errors.push('Test recipient email must be valid.');
+    if (errors.length) return { ok: false, errors };
+    db.prepare(`
+      INSERT INTO email_settings
+        (setting_id, provider, sender_name, sender_email, reply_to_email, test_recipient_email, created_at, updated_at)
+      VALUES (1, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(setting_id) DO UPDATE SET
+        provider=excluded.provider,
+        sender_name=excluded.sender_name,
+        sender_email=excluded.sender_email,
+        reply_to_email=excluded.reply_to_email,
+        test_recipient_email=excluded.test_recipient_email,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(provider, senderName, senderEmail, replyToEmail, testRecipientEmail);
+    return { ok: true };
+  }
 
 app.get('/communications', (req, res) => {
   const rows = db.prepare(`
@@ -47,6 +106,7 @@ app.get('/communications', (req, res) => {
          <a class="btn" href="/communications/broadcast">📣 Send SMS/email broadcast</a>
          <a class="btn ghost" href="/communications/broadcast?member_id=">Send to one member</a>
          <a class="btn ghost" href="/communications/broadcasts">View broadcast history</a>
+         ${res.locals.isOwner ? '<a class="btn ghost" href="/communications/email-settings">Email settings</a>' : ''}
        </p>` : '';
   res.page({
     title: 'Communications', active: '/communications', noHeader: true,
@@ -169,6 +229,7 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
   const recipients = audienceChosen
     ? (choice.memberId ? resolveSingleMember(choice.memberId) : resolveAudience(choice.allMembers ? [] : choice.orgIds))
     : [];
+  const emailSettings = loadEmailSettings();
 
   // Channel breakdown — already respects preferred_channel.
   let bothCount = 0, smsOnlyCount = 0, emailOnlyCount = 0, noneCount = 0, excludedPref = 0;
@@ -185,11 +246,12 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
   const reachableEmail = bothCount + emailOnlyCount;
 
   const smsReady    = !!ARKESEL_API_KEY;
-  const emailReady  = !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
+  const emailReady  = providerReady(emailSettings.provider);
+  const emailLabel  = providerLabel(emailSettings.provider);
   const statusBanner = (smsReady && emailReady) ? '' :
     `<div class="flash">
        ${smsReady ? '' : '<strong>SMS dry-run mode.</strong> ARKESEL_API_KEY is not set — messages will be logged but not actually sent. '}
-       ${emailReady ? '' : '<strong>Email dry-run mode.</strong> SMTP env vars are not configured.'}
+       ${emailReady ? '' : `<strong>Email dry-run mode.</strong> ${esc(emailLabel)} secret is not configured.`}
      </div>`;
 
   const audienceForm = `
@@ -304,6 +366,116 @@ app.get('/communications/broadcast', requireAdmin, (req, res) => {
     <p style="margin-top:1.5rem"><a href="/communications/broadcasts">View broadcast history →</a></p>
   `;
   res.page({ title: 'Send broadcast', active: '/communications', body });
+});
+
+app.get('/communications/email-settings', requireEmailAdmin, (req, res) => {
+  const settings = loadEmailSettings();
+  const deliveryReady = providerReady(settings.provider);
+  const logs = db.prepare(`
+    SELECT recipient, subject, status, sent_at, error_message
+    FROM email_logs
+    ORDER BY email_log_id DESC
+    LIMIT 100
+  `).all();
+  const body = `
+    <div class="dashboard-row dashboard-row-split">
+      <div class="card">
+        <h2>Delivery profile</h2>
+        <dl class="stats">
+          <dt>Provider</dt><dd>${providerLabel(settings.provider)} <span class="pill pill-${deliveryReady ? 'sent' : 'dry_run'}">${deliveryReady ? 'ready' : 'missing secret'}</span></dd>
+          <dt>Sender</dt><dd>${esc(settings.sender_name || CHURCH_NAME)} &lt;${esc(settings.sender_email || '')}&gt;</dd>
+          <dt>Reply-to</dt><dd>${esc(settings.reply_to_email || '—')}</dd>
+          <dt>Test recipient</dt><dd>${esc(settings.test_recipient_email || '—')}</dd>
+        </dl>
+        <p class="muted-text">Only non-sensitive delivery details are stored in the database. API keys and SMTP passwords stay in environment secrets.</p>
+      </div>
+      <div class="card">
+        <h2>Secret setup</h2>
+        <dl class="stats">
+          <dt>SMTP secret</dt><dd><span class="pill pill-${SMTP_HOST && SMTP_USER && SMTP_PASS ? 'sent' : 'dry_run'}">${SMTP_HOST && SMTP_USER && SMTP_PASS ? 'configured' : 'missing'}</span></dd>
+          <dt>Resend key</dt><dd><span class="pill pill-${process.env.RESEND_API_KEY ? 'sent' : 'dry_run'}">${process.env.RESEND_API_KEY ? 'configured' : 'missing'}</span></dd>
+        </dl>
+        <pre>flyctl secrets set \\
+  SMTP_HOST="smtp.gmail.com" \\
+  SMTP_PORT="465" \\
+  SMTP_USER="your.address@gmail.com" \\
+  SMTP_PASS="your-app-password" \\
+  RESEND_API_KEY="..."</pre>
+        <p class="muted-text">Choose SMTP when your mail server uses username/password. Choose Resend when your deployment uses an API key.</p>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Configure email</h2>
+      <form class="form" method="post" action="/communications/email-settings">
+        <label>Email provider
+          <select name="provider" required>
+            <option value="smtp"${settings.provider === 'smtp' ? ' selected' : ''}>SMTP</option>
+            <option value="resend"${settings.provider === 'resend' ? ' selected' : ''}>Resend API</option>
+          </select>
+        </label>
+        <label>Sender name<input name="sender_name" value="${esc(settings.sender_name || CHURCH_NAME)}" required></label>
+        <label>Sender email<input type="email" name="sender_email" value="${esc(settings.sender_email || '')}" required></label>
+        <label>Reply-to email<input type="email" name="reply_to_email" value="${esc(settings.reply_to_email || '')}" placeholder="Optional"></label>
+        <label>Test recipient email<input type="email" name="test_recipient_email" value="${esc(settings.test_recipient_email || '')}" placeholder="Optional"></label>
+        <p class="muted-text wide">This page stores display and routing details only. Secret values remain in Fly / environment variables.</p>
+        <div class="actions">
+          <button type="submit">Save settings</button>
+        </div>
+      </form>
+      <form method="post" action="/communications/email-settings/test" class="filter-bar" data-no-confirm="1" style="margin-top:0.8rem">
+        <input type="email" name="recipient" value="${esc(settings.test_recipient_email || '')}" placeholder="Send test to…" required style="flex:1;min-width:220px">
+        <button type="submit">Send Test Email</button>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Email logs</h2>
+      ${logs.length ? table(['Recipient', 'Subject', 'Status', 'Sent date', 'Error'], logs.map((row) => [
+        esc(row.recipient),
+        esc(row.subject),
+        `<span class="pill pill-${esc(row.status)}">${esc(row.status.replace(/_/g, ' '))}</span>`,
+        esc(row.sent_at),
+        esc(row.error_message || '—'),
+      ])) : '<p class="muted-text">No email sends yet.</p>'}
+    </div>
+  `;
+  res.page({ title: 'Email Settings', active: '/communications', body });
+});
+
+app.post('/communications/email-settings', requireEmailAdmin, (req, res) => {
+  const result = saveEmailSettings(req.body || {});
+  if (!result.ok) {
+    flash(req, result.errors.join(' '));
+    return res.redirect('/communications/email-settings');
+  }
+  logActivity('settings', 'Updated email settings', '/communications/email-settings', res.locals.user.user_id);
+  flash(req, 'Email settings saved.', 'success');
+  res.redirect('/communications/email-settings');
+});
+
+app.post('/communications/email-settings/test', requireEmailAdmin, async (req, res) => {
+  const settings = loadEmailSettings();
+  const recipient = (req.body.recipient || settings.test_recipient_email || '').trim();
+  if (!isEmailish(recipient)) {
+    flash(req, 'Enter a valid test recipient email address.');
+    return res.redirect('/communications/email-settings');
+  }
+  try {
+    const result = await sendEmailEach(
+      [{ addr: recipient, token: null }],
+      `Test email — ${CHURCH_NAME}`,
+      `This is a test email from ${CHURCH_NAME}. If you received it, email delivery is configured correctly.`,
+      {
+        withFooter: false,
+        settings,
+      }
+    );
+    if (result.dryRun) flash(req, 'Email is in dry-run mode because the selected provider secret is missing.', 'info');
+    else if (result.ok) flash(req, `Test email sent to ${recipient}.`, 'success');
+    else flash(req, `Email send failed: ${(result.errors && result.errors[0]) || 'unknown error'}`.slice(0, 300));
+  } catch (e) {
+    flash(req, `Email error: ${e.message}`);
+  }
+  res.redirect('/communications/email-settings');
 });
 
 app.post('/communications/broadcast', requireAdmin, async (req, res) => {
