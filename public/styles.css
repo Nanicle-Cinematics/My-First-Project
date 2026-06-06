@@ -188,8 +188,6 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; gap: 1rem;
   padding: 0.9rem 1.5rem;
   background: var(--topbar-bg);
-  backdrop-filter: saturate(1.6) blur(12px);
-  -webkit-backdrop-filter: saturate(1.6) blur(12px);
   border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 10;
 }
@@ -685,7 +683,6 @@ fieldset legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
 .dash-shell .quick-menu {
   border-color: rgba(148, 163, 184, 0.24);
   background: color-mix(in srgb, var(--panel) 88%, #ffffff 12%);
-  backdrop-filter: blur(10px);
 }
 .dash-shell .card:hover {
   transform: translateY(-2px);
@@ -2498,7 +2495,7 @@ tbody tr:hover td {
   }
 }
 
-/* ---------- Dashboard paired row and liquid glass polish ---------- */
+/* ---------- Dashboard paired row and subtle transparency polish ---------- */
 .dashboard-row {
   grid-column: 1 / -1;
   display: grid;
@@ -2512,21 +2509,19 @@ tbody tr:hover td {
 }
 
 :root {
-  --glass-surface: rgba(255, 255, 255, 0.7);
-  --glass-surface-strong: rgba(255, 255, 255, 0.78);
-  --glass-border: rgba(255, 255, 255, 0.36);
-  --glass-shadow: 0 18px 42px rgba(15, 23, 42, 0.1);
-  --glass-sidebar: rgba(30, 27, 75, 0.9);
-  --glass-sidebar-deep: rgba(17, 16, 58, 0.9);
-  --glass-menu: rgba(255, 255, 255, 0.1);
-  --glass-menu-border: rgba(255, 255, 255, 0.14);
+  --surface-translucent: rgba(255, 255, 255, 0.94);
+  --surface-translucent-strong: rgba(255, 255, 255, 0.97);
+  --surface-translucent-muted: rgba(255, 255, 255, 0.88);
+  --surface-translucent-border: rgba(148, 163, 184, 0.24);
+  --sidebar-translucent: rgba(30, 27, 75, 0.97);
+  --sidebar-translucent-deep: rgba(17, 16, 58, 0.97);
 }
 
 :root[data-theme="dark"] {
-  --glass-surface: rgba(15, 23, 42, 0.7);
-  --glass-surface-strong: rgba(30, 41, 59, 0.76);
-  --glass-border: rgba(148, 163, 184, 0.2);
-  --glass-shadow: 0 20px 44px rgba(0, 0, 0, 0.32);
+  --surface-translucent: rgba(15, 23, 42, 0.94);
+  --surface-translucent-strong: rgba(30, 41, 59, 0.96);
+  --surface-translucent-muted: rgba(30, 41, 59, 0.88);
+  --surface-translucent-border: rgba(148, 163, 184, 0.2);
 }
 
 .topbar,
@@ -2551,11 +2546,8 @@ select,
 textarea,
 .search-field,
 .topbar .search {
-  background: var(--glass-surface);
-  border-color: var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(18px) saturate(1.35);
-  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  background: var(--surface-translucent);
+  border-color: var(--surface-translucent-border);
 }
 
 .dash-shell .card,
@@ -2564,7 +2556,7 @@ textarea,
 .dash-shell .quick-menu,
 .auth-card,
 .topbar {
-  background: var(--glass-surface-strong);
+  background: var(--surface-translucent-strong);
 }
 
 .data-table thead,
@@ -2578,54 +2570,32 @@ table.data-table thead,
 .error-card,
 .user-row,
 .activity-card .item {
-  background: color-mix(in srgb, var(--glass-surface) 82%, transparent);
-  backdrop-filter: blur(12px) saturate(1.22);
-  -webkit-backdrop-filter: blur(12px) saturate(1.22);
+  background: var(--surface-translucent-muted);
 }
 
 .sidebar {
   background:
-    linear-gradient(180deg, var(--glass-sidebar), var(--glass-sidebar-deep)),
+    linear-gradient(180deg, var(--sidebar-translucent), var(--sidebar-translucent-deep)),
     var(--sidebar-bg);
   border-right-color: rgba(255, 255, 255, 0.1);
-  box-shadow: 12px 0 38px rgba(15, 23, 42, 0.16);
-  backdrop-filter: blur(10px) saturate(1.2);
-  -webkit-backdrop-filter: blur(10px) saturate(1.2);
 }
 
 .sidebar nav a,
 .sidebar-user,
 .scripture,
 .drawer-signout button {
-  background: var(--glass-menu);
-  border-color: var(--glass-menu-border);
-  backdrop-filter: blur(8px) saturate(1.15);
-  -webkit-backdrop-filter: blur(8px) saturate(1.15);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .sidebar nav a:hover,
 .drawer-signout button:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.13);
 }
 
 .sidebar nav a.active {
   background: rgba(199, 210, 254, 0.2);
   border-left-color: var(--accent);
-}
-
-.btn,
-.pill,
-.badge,
-.status,
-.trend,
-.role-badge,
-.momo,
-.stat .ico,
-.hs-ico,
-.day-card .day-head,
-.donut .seg {
-  backdrop-filter: saturate(1.16);
-  -webkit-backdrop-filter: saturate(1.16);
 }
 
 @media (max-width: 800px) {
