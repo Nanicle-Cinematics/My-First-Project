@@ -334,6 +334,8 @@ test('login page links to /forgot, which renders without auth', async () => {
   // sign out to an anonymous session
   const saved = cookie; cookie = undefined;
   const login = await get('/login');
+  assert.match(login.body, /class="auth-layout"/);
+  assert.match(login.body, /Refined Ministry Operations/);
   assert.match(login.body, /href="\/forgot"/);
   assert.match(login.body, /Forgot password\?/);
   const forgot = await get('/forgot');
