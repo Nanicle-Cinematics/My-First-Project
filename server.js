@@ -1451,14 +1451,16 @@ app.get('/', (req, res) => {
 
   const grid = `
     <div class="dash-grid">
-      ${upcomingCard}
+      <div class="dashboard-row dashboard-row-split">
+        ${upcomingCard}
+        ${birthdaysCard}
+      </div>
       <div class="col-3">${givingCard}</div>
       <div class="col-3">${activityCard}</div>
       <div class="col-2">${ministryCard}</div>
       ${attendanceCard}
       <div class="col-2">${dayBornCard}</div>
       ${financeCard}
-      ${birthdaysCard}
       ${followupsCard}
     </div>`;
   const dashboardDate = new Date().toLocaleDateString('en-GB', {

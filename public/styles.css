@@ -2497,3 +2497,139 @@ tbody tr:hover td {
     border-radius: 14px;
   }
 }
+
+/* ---------- Dashboard paired row and liquid glass polish ---------- */
+.dashboard-row {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 1.1rem;
+}
+.dashboard-row-split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.dashboard-row > .card {
+  min-height: 100%;
+}
+
+:root {
+  --glass-surface: rgba(255, 255, 255, 0.7);
+  --glass-surface-strong: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.36);
+  --glass-shadow: 0 18px 42px rgba(15, 23, 42, 0.1);
+  --glass-sidebar: rgba(30, 27, 75, 0.9);
+  --glass-sidebar-deep: rgba(17, 16, 58, 0.9);
+  --glass-menu: rgba(255, 255, 255, 0.1);
+  --glass-menu-border: rgba(255, 255, 255, 0.14);
+}
+
+:root[data-theme="dark"] {
+  --glass-surface: rgba(15, 23, 42, 0.7);
+  --glass-surface-strong: rgba(30, 41, 59, 0.76);
+  --glass-border: rgba(148, 163, 184, 0.2);
+  --glass-shadow: 0 20px 44px rgba(0, 0, 0, 0.32);
+}
+
+.topbar,
+.card,
+.stat,
+.hero-stat,
+.page-hero,
+.filters-card,
+.filter-card,
+.list-card,
+.panel,
+.table-wrap,
+.auth-layout,
+.auth-card,
+.quick-drop > summary,
+.quick-menu,
+.toast,
+.flash,
+details.export,
+input,
+select,
+textarea,
+.search-field,
+.topbar .search {
+  background: var(--glass-surface);
+  border-color: var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(18px) saturate(1.35);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+}
+
+.dash-shell .card,
+.dash-shell .stat,
+.dash-shell .quick-drop > summary,
+.dash-shell .quick-menu,
+.auth-card,
+.topbar {
+  background: var(--glass-surface-strong);
+}
+
+.data-table thead,
+table.data-table thead,
+.collapse-card,
+.event-row,
+.bd-row,
+.fu-row,
+.comm-item,
+.backup-row,
+.error-card,
+.user-row,
+.activity-card .item {
+  background: color-mix(in srgb, var(--glass-surface) 82%, transparent);
+  backdrop-filter: blur(12px) saturate(1.22);
+  -webkit-backdrop-filter: blur(12px) saturate(1.22);
+}
+
+.sidebar {
+  background:
+    linear-gradient(180deg, var(--glass-sidebar), var(--glass-sidebar-deep)),
+    var(--sidebar-bg);
+  border-right-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 12px 0 38px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+}
+
+.sidebar nav a,
+.sidebar-user,
+.scripture,
+.drawer-signout button {
+  background: var(--glass-menu);
+  border-color: var(--glass-menu-border);
+  backdrop-filter: blur(8px) saturate(1.15);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15);
+}
+
+.sidebar nav a:hover,
+.drawer-signout button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.sidebar nav a.active {
+  background: rgba(199, 210, 254, 0.2);
+  border-left-color: var(--accent);
+}
+
+.btn,
+.pill,
+.badge,
+.status,
+.trend,
+.role-badge,
+.momo,
+.stat .ico,
+.hs-ico,
+.day-card .day-head,
+.donut .seg {
+  backdrop-filter: saturate(1.16);
+  -webkit-backdrop-filter: saturate(1.16);
+}
+
+@media (max-width: 800px) {
+  .dashboard-row-split {
+    grid-template-columns: 1fr;
+  }
+}

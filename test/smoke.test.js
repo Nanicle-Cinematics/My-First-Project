@@ -91,6 +91,8 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /Visitors This Month/);
   assert.match(home.body, /class="quick-drop"/);
   assert.match(home.body, /class="dash-grid"/);
+  assert.match(home.body, /class="dashboard-row dashboard-row-split"/);
+  assert.ok(home.body.indexOf('Upcoming Events') < home.body.indexOf('Birthdays This Week'));
   assert.match(home.body, /data-command-center="true"/);
   assert.match(home.body, /class="page-date"/);
   assert.match(home.body, /data-card-href="\/finance"/);
