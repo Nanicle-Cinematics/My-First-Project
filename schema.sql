@@ -76,6 +76,20 @@ CREATE TABLE organizations (
     active      INTEGER NOT NULL DEFAULT 1
 );
 
+INSERT INTO organizations (name) VALUES
+ ('Church Choir'),
+ ('Singing Band'),
+ ('Gospel Band'),
+ ('Guild'),
+ ('Boy''s Brigade'),
+ ('Girl''s Brigade'),
+ ('Men''s Fellowship'),
+ ('Women''s Fellowship'),
+ ('Girl''s Fellowship'),
+ ('Ushers'),
+ ('Sunday School'),
+ ('Youth Ministry');
+
 CREATE TABLE organization_memberships (
     org_id      INTEGER NOT NULL REFERENCES organizations(org_id) ON DELETE CASCADE,
     member_id   INTEGER NOT NULL REFERENCES members(member_id)    ON DELETE CASCADE,
@@ -383,6 +397,7 @@ CREATE TABLE inventory_items (
     name        TEXT NOT NULL,
     quantity    INTEGER NOT NULL DEFAULT 0,
     category    TEXT,
+    acquired_on TEXT,
     notes       TEXT,
     created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  TEXT,
@@ -419,6 +434,7 @@ CREATE INDEX idx_preaching_date ON preaching_plan(preach_date);
 INSERT INTO service_types (type_name, description) VALUES
  ('Sunday Service',    'Regular Sunday worship service'),
  ('Wednesday Service', 'Midweek service'),
+ ('Friday Service',    'Friday evening service'),
  ('Wedding Service',   'Wedding ceremony offering'),
  ('Funeral Service',   'Funeral / memorial service offering');
 

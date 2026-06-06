@@ -32,7 +32,7 @@ module.exports.register = function register(app, ctx) {
       ...savedCategories.map((c) => c.name),
     ])].sort((a, b) => a.localeCompare(b));
     const items = db.prepare(`
-      SELECT item_id, name, quantity, category, notes
+      SELECT item_id, name, quantity, category, acquired_on, notes
       FROM inventory_items
       WHERE deleted_at IS NULL ${q ? 'AND name LIKE @q' : ''}
       ORDER BY COALESCE(category, 'zzz'), name`).all(q ? { q: `%${q}%` } : {});
@@ -60,6 +60,7 @@ module.exports.register = function register(app, ctx) {
                  ${categories.map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join('')}
                </select>
              </label>
+             <label>Date of purchase/Donated<input type="date" name="acquired_on"></label>
              <label class="wide-cell">Notes<textarea name="notes" rows="2"></textarea></label>
              <div class="actions"><button type="submit">Add item</button></div>
            </form>
@@ -81,6 +82,7 @@ module.exports.register = function register(app, ctx) {
             <tr>
               <td>${esc(it.name)}</td>
               <td>${esc(String(it.quantity))}</td>
+              <td>${it.acquired_on ? esc(it.acquired_on) : '—'}</td>
               <td>${it.notes ? esc(it.notes) : '—'}</td>
               ${res.locals.isAdmin ? `<td style="white-space:nowrap">
                 <a href="/inventory/${it.item_id}/edit" class="link">Edit</a>
@@ -94,7 +96,7 @@ module.exports.register = function register(app, ctx) {
             <div class="card-head"><h2>${esc(c)}</h2>
               <span class="meta">${grouped[c].length} item${grouped[c].length === 1 ? '' : 's'}</span></div>
             <table>
-              <thead><tr><th>Name</th><th>Qty</th><th>Notes</th>${res.locals.isAdmin ? '<th></th>' : ''}</tr></thead>
+              <thead><tr><th>Name</th><th>Qty</th><th>Purchase / Donation Date</th><th>Notes</th>${res.locals.isAdmin ? '<th></th>' : ''}</tr></thead>
               <tbody>${rows}</tbody>
             </table>
           </section>`;
@@ -138,10 +140,11 @@ module.exports.register = function register(app, ctx) {
     if (!name) return res.redirect('/inventory');
     const qty = Math.max(0, Number(b.quantity) || 0);
     const category = (b.category || '').trim() || null;
+    const acquiredOn = (b.acquired_on || '').trim() || null;
     const notes = (b.notes || '').trim() || null;
     db.prepare(`
-      INSERT INTO inventory_items (name, quantity, category, notes)
-      VALUES (?, ?, ?, ?)`).run(name, qty, category, notes);
+      INSERT INTO inventory_items (name, quantity, category, acquired_on, notes)
+      VALUES (?, ?, ?, ?, ?)`).run(name, qty, category, acquiredOn, notes);
     logActivity('inventory_added',
       `Added inventory item: ${name} (qty ${qty})`,
       '/inventory', res.locals.user.user_id);
@@ -174,6 +177,7 @@ module.exports.register = function register(app, ctx) {
               ${categories.map((name) => `<option value="${esc(name)}"${(it.category || '') === name ? ' selected' : ''}>${esc(name)}</option>`).join('')}
             </select>
           </label>
+          <label>Date of purchase/Donated<input type="date" name="acquired_on" value="${esc(it.acquired_on || '')}"></label>
           <label class="wide-cell">Notes<textarea name="notes" rows="3">${esc(it.notes || '')}</textarea></label>
           <div class="actions">
             <button type="submit">Save changes</button>
@@ -190,12 +194,13 @@ module.exports.register = function register(app, ctx) {
     if (!name) return res.redirect(`/inventory/${id}/edit`);
     const qty = Math.max(0, Number(b.quantity) || 0);
     const category = (b.category || '').trim() || null;
+    const acquiredOn = (b.acquired_on || '').trim() || null;
     const notes = (b.notes || '').trim() || null;
     db.prepare(`
       UPDATE inventory_items
-         SET name=?, quantity=?, category=?, notes=?, updated_at=CURRENT_TIMESTAMP
+         SET name=?, quantity=?, category=?, acquired_on=?, notes=?, updated_at=CURRENT_TIMESTAMP
        WHERE item_id=? AND deleted_at IS NULL`)
-      .run(name, qty, category, notes, id);
+      .run(name, qty, category, acquiredOn, notes, id);
     logActivity('inventory_updated',
       `Updated inventory item: ${name} (qty ${qty})`,
       '/inventory', res.locals.user.user_id);

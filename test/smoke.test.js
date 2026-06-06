@@ -235,6 +235,7 @@ test('inventory (extracted route module) can add and list an item', async () => 
   assert.match(page.body, /Inventory/);
   assert.match(page.body, /Command Center/);
   assert.match(page.body, />Audio-Visual \/ Media<\/option>/);
+  assert.match(page.body, /Date of purchase\/Donated/);
   const cat = await post('/inventory/categories', { name: 'Instruments', _csrf: tokenFrom(page.body) });
   assert.strictEqual(cat.status, 302);
   const withCategory = await get('/inventory');
@@ -246,6 +247,7 @@ test('inventory (extracted route module) can add and list an item', async () => 
   const after = await get('/inventory');
   assert.match(after.body, /Keyboard/);
   assert.match(after.body, /Instruments/);
+  assert.match(after.body, /Purchase \/ Donation Date/);
 });
 
 test('bible classes (extracted route module) can add and list a class', async () => {
@@ -263,6 +265,8 @@ test('organizations (extracted route module) lists, creates, and shows detail', 
   assert.strictEqual(page.status, 200);
   assert.match(page.body, /Organizations/);
   assert.match(page.body, /Church Choir/);            // seeded default org
+  assert.match(page.body, /Girl&#39;s Fellowship/);
+  assert.match(page.body, /Ushers/);
   const created = await post('/organizations', { name: 'Prayer Tower', _csrf: tokenFrom(page.body) });
   assert.strictEqual(created.status, 302);
   const after = await get('/organizations');
@@ -270,6 +274,12 @@ test('organizations (extracted route module) lists, creates, and shows detail', 
   const detail = await get('/organizations/1');
   assert.strictEqual(detail.status, 200);
   assert.match(detail.body, /Roster/);
+});
+
+test('finance services includes Friday Service', async () => {
+  const page = await get('/finance/services');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Friday Service/);
 });
 
 test('events (extracted route module) list/create/detail work', async () => {
@@ -332,6 +342,13 @@ test('reports + communications (extracted modules) render and post', async () =>
   const posted = await post('/communications', { title: 'Welcome', body: 'Service 9am', audience: 'all', _csrf: tokenFrom(comms.body) });
   assert.strictEqual(posted.status, 302);
   assert.match((await get('/communications')).body, /Welcome/);
+});
+
+test('sacraments page shows improved register summary', async () => {
+  const page = await get('/sacraments');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Sacrament guide/);
+  assert.match(page.body, /Register summary/);
 });
 
 test('login page links to /forgot, which renders without auth', async () => {
