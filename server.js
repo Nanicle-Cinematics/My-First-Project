@@ -177,6 +177,7 @@ addColumnIfMissing('expenses', 'receipt_attached', `receipt_attached INTEGER NOT
 addColumnIfMissing('expenses', 'reference_number', `reference_number TEXT`);
 addColumnIfMissing('expenses', 'expense_cat_id',   `expense_cat_id INTEGER REFERENCES expense_categories(expense_cat_id)`);
 addColumnIfMissing('expenses', 'notes',            `notes TEXT`);
+addColumnIfMissing('inventory_items', 'acquired_on',`acquired_on TEXT`);
 addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NULL DEFAULT 'none'`);
 addColumnIfMissing('members', 'unsubscribe_token',`unsubscribe_token TEXT`);
 addColumnIfMissing('events',  'checkin_token',    `checkin_token TEXT`);
@@ -272,6 +273,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS inventory_items (
   name        TEXT NOT NULL,
   quantity    INTEGER NOT NULL DEFAULT 0,
   category    TEXT,
+  acquired_on TEXT,
   notes       TEXT,
   created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at  TEXT,
@@ -449,6 +451,7 @@ const insertServiceType = db.prepare(`INSERT OR IGNORE INTO service_types (type_
 [
   ['Sunday Service',    'Regular Sunday worship service'],
   ['Wednesday Service', 'Midweek service'],
+  ['Friday Service',    'Friday evening service'],
   ['Wedding Service',   'Wedding ceremony offering'],
   ['Funeral Service',   'Funeral / memorial service offering'],
   ['Other',             'Other service offering'],
@@ -486,6 +489,8 @@ const DEFAULT_ORGS = [
   "Girl's Brigade",
   "Men's Fellowship",
   "Women's Fellowship",
+  "Girl's Fellowship",
+  "Ushers",
   "Sunday School",
   "Youth Ministry",
 ];
@@ -1789,23 +1794,46 @@ app.get('/sacraments', (req, res) => {
     LEFT JOIN members m  ON m.member_id  = s.member_id
     LEFT JOIN members sp ON sp.member_id = s.spouse_id
     ORDER BY s.occurred_on DESC LIMIT 100`).all();
-  const stats = `
-    <div class="stat-grid">
-      <div class="stat"><div class="ico purple">⛪</div><div>
-        <div class="label">Total recorded</div><div class="value">${total}</div></div></div>
-      ${counts.map((c) => `
-        <div class="stat"><div class="ico green">✓</div><div>
-          <div class="label">${esc(c.t)}</div>
-          <div class="value">${c.c}</div></div></div>`).join('')}
-    </div>`;
+  const typeChips = [
+    ['baptism', 'Baptisms'],
+    ['dedication', 'Dedications'],
+    ['confirmation', 'Confirmations'],
+    ['marriage', 'Marriages'],
+    ['funeral', 'Funerals'],
+  ].map(([value, label]) => {
+    const row = counts.find((c) => c.t === value);
+    const style = value === 'funeral'
+      ? 'background:var(--danger-soft);color:var(--danger);'
+      : value === 'marriage'
+        ? 'background:var(--purple-soft);color:var(--purple-dark);'
+        : 'background:var(--gold-soft);color:var(--gold-dark);';
+    return `<span class="chip" style="display:inline-flex;align-items:center;padding:0.35rem 0.7rem;${style}">${esc(label)} · ${row ? row.c : 0}</span>`;
+  }).join('');
   const body = `
     ${pageHero('Sacraments', 'Reference register for baptisms, confirmations, marriages, funerals and dedications.')}
-    ${stats}
-    ${table(['Type', 'Date', 'Member', 'Spouse', 'Location'],
-      rows.map((r) => [esc(r.sacrament_type), esc(r.occurred_on),
-        r.member_id ? `<a href="/members/${r.member_id}">${esc(r.member)}</a>` : '—',
-        r.spouse_id ? `<a href="/members/${r.spouse_id}">${esc(r.spouse)}</a>` : '—',
-        esc(r.location)]))}`;
+    <div class="dashboard-row dashboard-row-split" style="margin-bottom:1rem">
+      <div class="card">
+        <div class="card-head"><h2>Register summary</h2><span class="meta">Current records</span></div>
+        <dl class="stats">
+          <dt>Total recorded</dt><dd><strong>${total}</strong></dd>
+          <dt>Most recent type</dt><dd>${rows[0] ? esc(rows[0].sacrament_type) : '—'}</dd>
+          <dt>Latest date</dt><dd>${rows[0] ? esc(rows[0].occurred_on) : '—'}</dd>
+        </dl>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Sacrament guide</h2><span class="meta">Quick reference</span></div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem">${typeChips}</div>
+        <p class="muted-text" style="margin-top:0.75rem">Use this register for life events that need an official church record. The list below is sorted with the newest entry first.</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Records</h2><span class="meta">${rows.length} entries shown</span></div>
+      ${table(['Type', 'Date', 'Member', 'Spouse', 'Location'],
+        rows.map((r) => [esc(r.sacrament_type), esc(r.occurred_on),
+          r.member_id ? `<a href="/members/${r.member_id}">${esc(r.member)}</a>` : '—',
+          r.spouse_id ? `<a href="/members/${r.spouse_id}">${esc(r.spouse)}</a>` : '—',
+          esc(r.location)]))}
+    </div>`;
   res.page({ title: 'Sacraments', active: '/sacraments', noHeader: true, body });
 });
 
