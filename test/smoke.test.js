@@ -84,7 +84,7 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   const home = await get('/');
   assert.strictEqual(home.status, 200);
   assert.match(home.body, /Dashboard/);
-  assert.match(home.body, /class="stat"/);
+  assert.match(home.body, /class="stat dashboard-clickable"/);
   assert.match(home.body, /Total Members/);
   assert.match(home.body, /Sunday Attendance/);
   assert.match(home.body, /Offerings This Month/);
@@ -92,6 +92,9 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /class="quick-drop"/);
   assert.match(home.body, /class="dash-grid"/);
   assert.match(home.body, /data-command-center="true"/);
+  assert.match(home.body, /class="page-date"/);
+  assert.match(home.body, /data-card-href="\/finance"/);
+  assert.match(home.body, /data-card-href="\/reports"/);
   assert.match(home.body, /Day-born Groups/);
   assert.match(home.body, /Akan fellowship view/);
 });

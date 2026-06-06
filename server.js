@@ -1244,8 +1244,10 @@ app.get('/', (req, res) => {
   const trendDelta = (n) => n == null ? '' :
     `<div class="trend ${n < 0 ? 'down' : ''}">${n >= 0 ? '↑' : '↓'} ${Math.abs(n)}% from last period</div>`;
 
-  const statCard = (cls, icon, label, value, trend, spark, color) => `
-    <div class="stat">
+  const cardAttrs = (href, label) =>
+    `data-card-href="${esc(href)}" aria-label="${esc(label)}"`;
+  const statCard = (cls, icon, label, value, trend, spark, color, href) => `
+    <div class="stat dashboard-clickable" ${cardAttrs(href, label)}>
       <div class="stat-top">
         <div class="ico ${cls}">${icon}</div>
         <div class="stat-body">
@@ -1259,13 +1261,13 @@ app.get('/', (req, res) => {
   const cards = `
     <div class="stat-grid">
       ${statCard('purple', '👥', 'Total Members', totalMembers.toLocaleString(),
-        `<div class="trend">↑ ${newMembersThisMonth} this month</div>`, memberSeries, 'var(--purple)')}
+        `<div class="trend">↑ ${newMembersThisMonth} this month</div>`, memberSeries, 'var(--purple)', '/members')}
       ${statCard('green', '✓', 'Sunday Attendance', sundayAttendance,
-        trendDelta(attendanceDelta), attendanceSpark, 'var(--green)')}
+        trendDelta(attendanceDelta), attendanceSpark, 'var(--green)', '/attendance')}
       ${statCard('amber', '₵', 'Offerings This Month', fmtMoney(offeringsThisMonth),
-        trendDelta(offeringsDelta), givingSeries, 'var(--gold)')}
+        trendDelta(offeringsDelta), givingSeries, 'var(--gold)', '/finance')}
       ${statCard('blue', '🚶', 'Visitors This Month', visitorsThisMonth,
-        `<div class="trend">↑ ${visitorsThisWeek} new this week</div>`, visitorSeries, 'var(--blue)')}
+        `<div class="trend">↑ ${visitorsThisWeek} new this week</div>`, visitorSeries, 'var(--blue)', '/members?status=visitor')}
     </div>`;
 
   const isAdmin = res.locals.isAdmin;
@@ -1290,7 +1292,7 @@ app.get('/', (req, res) => {
     event_created: '📅', user_added: '🔑',
   };
   const activityCard = `
-    <div class="card">
+    <div class="card landscape-card activity-card dashboard-clickable" ${cardAttrs('/reports', 'Recent Activities')}>
       <details class="collapse-card" open>
         <summary class="card-head">
           <h2>Recent Activities <span class="card-count">${recentActivity.length}</span></h2>
@@ -1317,12 +1319,16 @@ app.get('/', (req, res) => {
     </div>`;
   }).join('');
   const givingCard = `
-    <div class="card">
+    <div class="card landscape-card giving-overview-card dashboard-clickable" ${cardAttrs('/finance', 'Giving Overview')}>
       <div class="card-head"><h2>Giving Overview</h2><span class="meta">This month</span></div>
-      <div class="big-figure">${fmtMoney(givingTotal)}</div>
-      <div class="big-sub">Total giving ${trendDelta(offeringsDelta) || '<span class="trend">this month</span>'}</div>
-      ${sparkline(givingPoints)}
-      <div class="legend">${givingLegendRows}</div>
+      <div class="giving-landscape">
+        <div class="giving-primary">
+          <div class="big-figure">${fmtMoney(givingTotal)}</div>
+          <div class="big-sub">Total giving ${trendDelta(offeringsDelta) || '<span class="trend">this month</span>'}</div>
+        </div>
+        <div class="giving-chart">${sparkline(givingPoints)}</div>
+        <div class="legend">${givingLegendRows}</div>
+      </div>
     </div>`;
 
   const attLegendRows = attSegments.map((s) => {
@@ -1335,7 +1341,7 @@ app.get('/', (req, res) => {
     </div>`;
   }).join('');
   const attendanceCard = `
-    <div class="card">
+    <div class="card dashboard-clickable" ${cardAttrs('/attendance', 'Attendance Overview')}>
       <div class="card-head"><h2>Attendance Overview</h2><span class="meta">Last 30 days</span></div>
       <div class="donut-wrap">
         ${donut(attSegments, 'Avg / type', attAvg)}
@@ -1350,7 +1356,7 @@ app.get('/', (req, res) => {
       <div class="m-label">${label}</div>
     </div>`;
   const ministryCard = `
-    <div class="card">
+    <div class="card dashboard-clickable" ${cardAttrs('/organizations', 'Ministry Overview')}>
       <div class="card-head"><h2>Ministry Overview</h2><a href="/organizations">View all</a></div>
       <div class="m-grid">
         ${ministryTile('👥', 'purple', ministryCount, 'Ministries')}
@@ -1361,13 +1367,13 @@ app.get('/', (req, res) => {
     </div>`;
 
   const dayBornCard = `
-    <div class="card">
+    <div class="card dashboard-clickable" ${cardAttrs('/members', 'Day-born Groups')}>
       <div class="card-head"><h2>Day-born Groups</h2><span class="meta">Akan fellowship view</span></div>
       <div class="day-born-grid">
         ${Object.keys(akanByDay).map((day) => {
           const info = akanByDay[day];
           const count = dayCounts.get(day) || 0;
-          return `<div class="day-card" title="Akan Names: ${esc(info.names)}">
+          return `<div class="day-card" data-card-href="/members" title="Akan Names: ${esc(info.names)}" aria-label="${esc(day)} day-born members">
             <div class="day-card-head">
               <strong>${esc(day)}</strong>
               <span>${esc(info.names)}</span>
@@ -1388,7 +1394,7 @@ app.get('/', (req, res) => {
     `<div class="fin-row"><span class="lbl"><span class="dot">✨</span> ${esc(s.name)}</span>
        <span class="val">${fmtMoney(s.t)}</span></div>`).join('');
   const financeCard = `
-    <div class="card">
+    <div class="card dashboard-clickable" ${cardAttrs('/finance', 'Finance Summary')}>
       <div class="card-head"><h2>Finance Summary</h2><span class="meta">This month</span></div>
       <div class="fin-row"><span class="lbl"><span class="dot">₵</span> Service Offerings</span>
         <span class="val">${fmtMoney(servicesMonth)}</span></div>
@@ -1402,7 +1408,7 @@ app.get('/', (req, res) => {
     </div>`;
 
   const upcomingCard = `
-    <div class="card">
+    <div class="card dashboard-clickable" ${cardAttrs('/events', 'Upcoming Events')}>
       <div class="card-head"><h2>Upcoming Events</h2><a href="/events">View all</a></div>
       ${upcoming.length ? upcoming.map((e) => {
         const d = new Date(e.starts_at);
@@ -1421,7 +1427,7 @@ app.get('/', (req, res) => {
     </div>`;
 
   const birthdaysCard = `
-    <div class="card">
+    <div class="card dashboard-clickable" ${cardAttrs('/members', 'Birthdays This Week')}>
       <div class="card-head"><h2>Birthdays This Week</h2><a href="/members">View all</a></div>
       ${birthdays.length ? birthdays.map((b) => {
         const day = new Date(b.date_of_birth);
@@ -1435,7 +1441,7 @@ app.get('/', (req, res) => {
     </div>`;
 
   const followupsCard = `
-    <div class="card">
+    <div class="card dashboard-clickable" ${cardAttrs('/reports', 'Pending Follow-ups')}>
       <div class="card-head"><h2>Pending Follow-ups</h2><a href="/reports">View all</a></div>
       <div class="fu-row"><div class="lbl"><div class="ico">🚶</div> Visitors to follow up</div><div class="count">${followups.visitors}</div></div>
       <div class="fu-row"><div class="lbl"><div class="ico">⚠</div> Members absent &gt; 3 weeks</div><div class="count">${followups.absentees}</div></div>
@@ -1446,8 +1452,8 @@ app.get('/', (req, res) => {
   const grid = `
     <div class="dash-grid">
       ${upcomingCard}
-      ${givingCard}
-      ${activityCard}
+      <div class="col-3">${givingCard}</div>
+      <div class="col-3">${activityCard}</div>
       <div class="col-2">${ministryCard}</div>
       ${attendanceCard}
       <div class="col-2">${dayBornCard}</div>
@@ -1455,10 +1461,14 @@ app.get('/', (req, res) => {
       ${birthdaysCard}
       ${followupsCard}
     </div>`;
+  const dashboardDate = new Date().toLocaleDateString('en-GB', {
+    weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Africa/Accra',
+  });
+  const dashboardUser = res.locals.user.display_name || res.locals.user.username;
 
   res.page({
     title: 'Dashboard',
-    subtitle: `Welcome back, ${res.locals.user.display_name || res.locals.user.username}`,
+    subtitleHtml: `<span>Welcome back, ${esc(dashboardUser)}</span><span class="page-date">${esc(dashboardDate)}</span>`,
     active: '/',
     body: `<section class="dash-shell command-center" data-command-center="true">${cards}${quick}${grid}</section>`,
   });

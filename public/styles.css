@@ -1698,8 +1698,8 @@ tbody tr:hover td {
 
 /* ---------- Phase 3 refined ministry interface ---------- */
 :root {
-  --font-display: "Playfair Display", "Cormorant Garamond", Georgia, serif;
-  --font-body: "DM Sans", "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Aptos Display", "Inter", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-body: "Aptos", "Inter", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 
   --sidebar-bg: #1e1b4b;
@@ -1933,8 +1933,11 @@ pre {
   line-height: 1.2;
 }
 .topbar .search {
-  border-radius: 8px;
+  border-radius: 999px;
   max-width: 460px;
+}
+.search-field {
+  border-radius: 999px;
 }
 .topbar .bell,
 .topbar .theme-toggle,
@@ -1944,11 +1947,22 @@ pre {
 }
 
 .dash-shell::before { display: none; }
+.subtitle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+.subtitle .page-date {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 650;
+}
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1rem;
 }
+.dash-grid .col-3 { grid-column: 1 / -1; }
 .card,
 .stat,
 .auth-card,
@@ -1966,6 +1980,20 @@ section.card {
 .stat {
   min-height: 138px;
   border-left: 4px solid var(--purple);
+}
+.dashboard-clickable,
+.day-card[data-card-href] {
+  cursor: pointer;
+  position: relative;
+}
+.dashboard-clickable:hover,
+.day-card[data-card-href]:hover {
+  border-color: var(--enterprise-border-strong);
+}
+.dashboard-clickable:focus-visible,
+.day-card[data-card-href]:focus-visible {
+  outline: none;
+  box-shadow: var(--ring), var(--shadow-md);
 }
 .stat:nth-child(2) { border-left-color: var(--green); }
 .stat:nth-child(3) { border-left-color: var(--gold); }
@@ -2033,6 +2061,47 @@ section.card {
   color: var(--muted);
 }
 
+.landscape-card {
+  min-height: 260px;
+}
+.giving-landscape {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.8fr) minmax(320px, 1.35fr) minmax(230px, 0.85fr);
+  gap: 1.2rem;
+  align-items: center;
+}
+.giving-primary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.giving-chart .chart {
+  height: 190px;
+}
+.activity-card .collapse-card[open] {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 1rem 1.25rem;
+  align-items: start;
+}
+.activity-card .card-head {
+  grid-column: 1;
+  margin-bottom: 0;
+}
+.activity-card .list {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.2rem 1rem;
+}
+.activity-card .list li {
+  min-width: 0;
+}
+.activity-card .view-all,
+.activity-card .muted-text {
+  grid-column: 2;
+}
+
 button,
 .button,
 .btn,
@@ -2083,6 +2152,32 @@ tbody tr:hover td {
 .pill-day {
   background: var(--purple-soft);
   color: var(--purple-dark);
+}
+.m-name {
+  color: #1e293b;
+  font-family: var(--font-body);
+  font-size: 0.94rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+.m-name:hover {
+  color: var(--purple-dark);
+  text-decoration: none;
+}
+.m-sub {
+  color: #64748b;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+:root[data-theme="dark"] .m-name {
+  color: #f8fafc;
+}
+:root[data-theme="dark"] .m-name:hover {
+  color: #c7d2fe;
+}
+:root[data-theme="dark"] .m-sub {
+  color: #cbd5e1;
 }
 .m-contact .momo-badge,
 .momo-badge {
@@ -2198,6 +2293,17 @@ tbody tr:hover td {
   .topbar { min-height: 60px; }
   .stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .giving-landscape,
+  .activity-card .collapse-card[open],
+  .activity-card .list {
+    grid-template-columns: 1fr;
+  }
+  .activity-card .card-head,
+  .activity-card .list,
+  .activity-card .view-all,
+  .activity-card .muted-text {
+    grid-column: 1;
   }
 }
 
