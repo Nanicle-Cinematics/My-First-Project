@@ -132,6 +132,16 @@ function canReceive(member, channel) {
   return true;
 }
 
+function sendErrorText(result) {
+  if (!result) return null;
+  if (result.dryRun) return 'dry run';
+  if (result.error) return result.error;
+  if (Array.isArray(result.errors) && result.errors.length) return result.errors.slice(0, 3).join(' | ');
+  if (result.response) {
+    try { return JSON.stringify(result.response); } catch (_) { return String(result.response); }
+  }
+  return null;
+}
 
 function parseOrgChoice(b) {
   const memberId = Number(b.member_id) || null;
@@ -377,7 +387,7 @@ app.post('/communications/broadcast', requireAdmin, async (req, res) => {
       smsRes = await sendSmsBatch(smsList.map((s) => s.phone), body);
     } catch (e) { smsRes = { ok: false, error: e.message }; }
     const status = smsRes && smsRes.dryRun ? 'pending' : (smsRes && smsRes.ok ? 'sent' : 'failed');
-    const errText = smsRes && smsRes.dryRun ? 'dry run' : (smsRes && smsRes.error) || null;
+    const errText = sendErrorText(smsRes);
     const now = new Date().toISOString();
     for (const s of smsList) insRecip.run(broadcastId, s.member_id, 'sms', s.phone, status);
     if (status === 'sent' || status === 'pending') {
@@ -396,7 +406,7 @@ app.post('/communications/broadcast', requireAdmin, async (req, res) => {
       emailRes = await sendEmailEach(emailList, emailSubject, body);
     } catch (e) { emailRes = { ok: false, error: e.message }; }
     const status = emailRes && emailRes.dryRun ? 'pending' : (emailRes && emailRes.ok ? 'sent' : 'failed');
-    const errText = emailRes && emailRes.dryRun ? 'dry run' : (emailRes && emailRes.error) || null;
+    const errText = sendErrorText(emailRes);
     const now = new Date().toISOString();
     for (const e of emailList) insRecip.run(broadcastId, e.member_id, 'email', e.addr, status);
     if (status === 'sent' || status === 'pending') {
