@@ -92,6 +92,8 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /class="quick-drop"/);
   assert.match(home.body, /class="dash-grid"/);
   assert.match(home.body, /data-command-center="true"/);
+  assert.match(home.body, /Day-born Groups/);
+  assert.match(home.body, /Akan fellowship view/);
 });
 
 test('state-changing POST without a CSRF token is rejected (403)', async () => {
@@ -105,12 +107,15 @@ test('a member can be created and shows in the directory', async () => {
   assert.ok(token);
   const created = await post('/members', {
     first_name: 'Grace', last_name: 'Tester', membership_status: 'member',
-    mobile_phone: '0200000000', gender: 'F', preferred_channel: 'none', _csrf: token,
+    mobile_phone: '0200000000', day_born: 'Friday', gender: 'F', preferred_channel: 'none', _csrf: token,
   });
   assert.strictEqual(created.status, 302);
   const list = await get('/members');
   assert.match(list.body, /Grace<\/a>|Grace Tester|Grace/);
   assert.match(list.body, /Members Directory/);
+  assert.match(list.body, /Day Name/);
+  assert.match(list.body, /Akan Names: Afia \/ Kofi/);
+  assert.match(list.body, /MoMo ready/);
 });
 
 test('invalid member submission is rejected with a flash message', async () => {

@@ -1226,6 +1226,21 @@ app.get('/', (req, res) => {
       SELECT member_id FROM ministry_memberships WHERE left_date IS NULL
       UNION SELECT member_id FROM organization_memberships)`).get().c;
 
+  const akanByDay = {
+    Monday: { names: 'Adwoa / Kwadwo', leader: 'Group steward pending' },
+    Tuesday: { names: 'Abena / Kwabena', leader: 'Group steward pending' },
+    Wednesday: { names: 'Akua / Kwaku', leader: 'Group steward pending' },
+    Thursday: { names: 'Yaa / Yaw', leader: 'Group steward pending' },
+    Friday: { names: 'Afia / Kofi', leader: 'Group steward pending' },
+    Saturday: { names: 'Ama / Kwame', leader: 'Group steward pending' },
+    Sunday: { names: 'Akosua / Kwasi', leader: 'Group steward pending' },
+  };
+  const dayCounts = new Map(db.prepare(`
+    SELECT day_born, COUNT(*) c
+    FROM members
+    WHERE deleted_at IS NULL AND day_born IS NOT NULL AND day_born <> ''
+    GROUP BY day_born`).all().map((r) => [r.day_born, r.c]));
+
   const trendDelta = (n) => n == null ? '' :
     `<div class="trend ${n < 0 ? 'down' : ''}">${n >= 0 ? '↑' : '↓'} ${Math.abs(n)}% from last period</div>`;
 
@@ -1345,6 +1360,29 @@ app.get('/', (req, res) => {
       </div>
     </div>`;
 
+  const dayBornCard = `
+    <div class="card">
+      <div class="card-head"><h2>Day-born Groups</h2><span class="meta">Akan fellowship view</span></div>
+      <div class="day-born-grid">
+        ${Object.keys(akanByDay).map((day) => {
+          const info = akanByDay[day];
+          const count = dayCounts.get(day) || 0;
+          return `<div class="day-card" title="Akan Names: ${esc(info.names)}">
+            <div class="day-card-head">
+              <strong>${esc(day)}</strong>
+              <span>${esc(info.names)}</span>
+            </div>
+            <div class="day-card-body">
+              <div class="day-count">${count.toLocaleString()}</div>
+              <div class="day-meta">Members</div>
+              <div class="day-meta">Leader: ${esc(info.leader)}</div>
+              <div class="day-meta">Last meeting: Not recorded</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
   const netBalance = offeringsThisMonth + harvestsMonth - monthExpenses;
   const specialRows = specialByCat.slice(0, 3).map((s) =>
     `<div class="fin-row"><span class="lbl"><span class="dot">✨</span> ${esc(s.name)}</span>
@@ -1412,6 +1450,7 @@ app.get('/', (req, res) => {
       ${activityCard}
       <div class="col-2">${ministryCard}</div>
       ${attendanceCard}
+      <div class="col-2">${dayBornCard}</div>
       ${financeCard}
       ${birthdaysCard}
       ${followupsCard}
