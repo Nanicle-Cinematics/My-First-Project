@@ -1992,6 +1992,7 @@ section.card {
   outline: none;
   box-shadow: var(--ring), var(--shadow-md);
 }
+.stat:nth-child(1) { border-left-color: var(--purple); }
 .stat:nth-child(2) { border-left-color: var(--green); }
 .stat:nth-child(3) { border-left-color: var(--gold); }
 .stat:nth-child(4) { border-left-color: var(--blue); }
