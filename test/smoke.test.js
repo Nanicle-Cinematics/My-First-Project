@@ -84,14 +84,19 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   const home = await get('/');
   assert.strictEqual(home.status, 200);
   assert.match(home.body, /Dashboard/);
-  assert.match(home.body, /class="stat"/);
+  assert.match(home.body, /class="stat dashboard-clickable"/);
   assert.match(home.body, /Total Members/);
   assert.match(home.body, /Sunday Attendance/);
   assert.match(home.body, /Offerings This Month/);
   assert.match(home.body, /Visitors This Month/);
   assert.match(home.body, /class="quick-drop"/);
   assert.match(home.body, /class="dash-grid"/);
+  assert.match(home.body, /class="dashboard-row dashboard-row-split"/);
+  assert.ok(home.body.indexOf('Upcoming Events') < home.body.indexOf('Birthdays This Week'));
   assert.match(home.body, /data-command-center="true"/);
+  assert.match(home.body, /class="page-date"/);
+  assert.match(home.body, /data-card-href="\/finance"/);
+  assert.match(home.body, /data-card-href="\/reports"/);
   assert.match(home.body, /Day-born Groups/);
   assert.match(home.body, /Akan fellowship view/);
 });
@@ -331,6 +336,8 @@ test('login page links to /forgot, which renders without auth', async () => {
   // sign out to an anonymous session
   const saved = cookie; cookie = undefined;
   const login = await get('/login');
+  assert.match(login.body, /class="auth-layout"/);
+  assert.match(login.body, /Refined Ministry Operations/);
   assert.match(login.body, /href="\/forgot"/);
   assert.match(login.body, /Forgot password\?/);
   const forgot = await get('/forgot');
