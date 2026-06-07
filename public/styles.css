@@ -4653,3 +4653,496 @@ button.link {
     height: 120px;
   }
 }
+
+/* ============================================================
+   v4 — Premium animations + Sidebar logo + Worship-scene
+   auth-card background with translucency
+   ============================================================ */
+
+/* ---------- Sidebar brand logo ---------- */
+.sidebar .brand {
+  align-items: center;
+  gap: var(--e-space-3);
+}
+
+.sidebar .brand .brand-logo-img {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow:
+    0 8px 18px -4px rgba(0, 0, 0, 0.55),
+    0 0 0 2px rgba(255, 255, 255, 0.12);
+  flex-shrink: 0;
+  transition: transform 0.4s var(--ease), box-shadow 0.4s var(--ease);
+}
+
+.sidebar .brand:hover .brand-logo-img {
+  transform: rotate(6deg) scale(1.04);
+  box-shadow:
+    0 12px 28px -6px rgba(0, 0, 0, 0.6),
+    0 0 0 2px rgba(212, 160, 23, 0.4);
+}
+
+.sidebar .brand .name {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  letter-spacing: -0.018em;
+  font-size: 0.98rem;
+  color: #ffffff;
+  line-height: 1.15;
+}
+
+.sidebar .brand .tag {
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  margin-top: 2px;
+  font-weight: 700;
+}
+
+/* Hide the old emoji .logo div if any rogue style restored it */
+.sidebar .brand > .logo:not(.brand-logo-img) { display: none; }
+
+/* ---------- Worship-scene auth-card background ---------- */
+.auth-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.auth-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url('/static/worship-bg.svg');
+  background-size: cover;
+  background-position: center;
+  opacity: 0.55;             /* translucency — visible scene */
+  z-index: -2;
+  transform: scale(1.08);
+  filter: saturate(1.05);
+  animation: authBgDrift 28s ease-in-out infinite alternate;
+}
+
+/* Subtle light wash so form text stays readable while scene shows through */
+.auth-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.42) 50%,
+    rgba(255, 255, 255, 0.65) 100%);
+  backdrop-filter: blur(1.5px);
+  z-index: -1;
+}
+
+:root[data-theme="dark"] .auth-card::after {
+  background: linear-gradient(180deg,
+    rgba(23, 29, 43, 0.68) 0%,
+    rgba(23, 29, 43, 0.55) 50%,
+    rgba(23, 29, 43, 0.78) 100%);
+}
+
+/* Form inputs sit on a soft solid bg so they're crisp over the scene */
+.auth-card input[type="text"],
+.auth-card input[type="email"],
+.auth-card input[type="password"],
+.auth-card input[type="number"],
+.auth-card input[type="search"],
+.auth-card select,
+.auth-card textarea {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(4px);
+}
+
+:root[data-theme="dark"] .auth-card input,
+:root[data-theme="dark"] .auth-card select,
+:root[data-theme="dark"] .auth-card textarea {
+  background: rgba(23, 29, 43, 0.85);
+}
+
+/* Form labels: ensure good contrast over the textured bg */
+.auth-card label {
+  color: var(--ink);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.6);
+}
+
+:root[data-theme="dark"] .auth-card label {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.auth-card h1 {
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+@keyframes authBgDrift {
+  0%   { transform: scale(1.08) translate(0, 0); }
+  100% { transform: scale(1.14) translate(-12px, -8px); }
+}
+
+/* Brand-mini on auth-card sits above the background */
+.brand-mini,
+.auth-card h1,
+.auth-card form,
+.auth-card .auth-aux,
+.auth-card .form,
+.auth-card .flash {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Animation keyframes ---------- */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(-10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+@keyframes sparklineDraw {
+  from { stroke-dashoffset: 600; }
+  to   { stroke-dashoffset: 0; }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(124, 92, 252, 0.4); }
+  50%      { box-shadow: 0 0 0 8px rgba(124, 92, 252, 0); }
+}
+
+@keyframes floatY {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+
+/* ---------- Page entrance ---------- */
+.main > .page,
+.main > .topbar + .page {
+  animation: fadeUp 0.35s var(--ease) both;
+}
+
+.page-hero {
+  animation: fadeUp 0.4s var(--ease) both;
+  animation-delay: 60ms;
+}
+
+/* ---------- Stat card entrance (staggered) ---------- */
+.stat-grid .stat {
+  animation: fadeUp 0.45s var(--ease) both;
+}
+
+.stat-grid .stat:nth-child(1) { animation-delay: 80ms; }
+.stat-grid .stat:nth-child(2) { animation-delay: 140ms; }
+.stat-grid .stat:nth-child(3) { animation-delay: 200ms; }
+.stat-grid .stat:nth-child(4) { animation-delay: 260ms; }
+.stat-grid .stat:nth-child(5) { animation-delay: 320ms; }
+
+/* Stat icon subtle float on hover */
+.stat:hover .ico {
+  animation: floatY 1.6s ease-in-out infinite;
+}
+
+/* Sparkline draw on stat card mount */
+.stat .spark svg path.mini-line {
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  animation: sparklineDraw 1.4s var(--ease) 0.4s forwards;
+}
+
+/* ---------- Hero stat tiles staggered ---------- */
+.hero-stat-group .hero-stat {
+  animation: fadeUp 0.45s var(--ease) both;
+}
+
+.hero-stat-group .hero-stat:nth-child(1) { animation-delay: 60ms; }
+.hero-stat-group .hero-stat:nth-child(2) { animation-delay: 120ms; }
+.hero-stat-group .hero-stat:nth-child(3) { animation-delay: 180ms; }
+.hero-stat-group .hero-stat:nth-child(4) { animation-delay: 240ms; }
+.hero-stat-group .hero-stat:nth-child(5) { animation-delay: 300ms; }
+
+/* ---------- Dashboard grid card entrance ---------- */
+.dash-grid > * {
+  animation: fadeUp 0.5s var(--ease) both;
+}
+
+.dash-grid > *:nth-child(1) { animation-delay: 100ms; }
+.dash-grid > *:nth-child(2) { animation-delay: 160ms; }
+.dash-grid > *:nth-child(3) { animation-delay: 220ms; }
+.dash-grid > *:nth-child(4) { animation-delay: 280ms; }
+.dash-grid > *:nth-child(5) { animation-delay: 340ms; }
+.dash-grid > *:nth-child(6) { animation-delay: 400ms; }
+.dash-grid > *:nth-child(7) { animation-delay: 460ms; }
+.dash-grid > *:nth-child(8) { animation-delay: 520ms; }
+.dash-grid > *:nth-child(9) { animation-delay: 580ms; }
+
+/* ---------- Day-born tile stagger ---------- */
+.dash-grid .day-born-grid .day-card {
+  animation: scaleIn 0.4s var(--ease) both;
+}
+
+.dash-grid .day-born-grid .day-card:nth-child(1) { animation-delay: 240ms; }
+.dash-grid .day-born-grid .day-card:nth-child(2) { animation-delay: 300ms; }
+.dash-grid .day-born-grid .day-card:nth-child(3) { animation-delay: 360ms; }
+.dash-grid .day-born-grid .day-card:nth-child(4) { animation-delay: 420ms; }
+.dash-grid .day-born-grid .day-card:nth-child(5) { animation-delay: 480ms; }
+.dash-grid .day-born-grid .day-card:nth-child(6) { animation-delay: 540ms; }
+.dash-grid .day-born-grid .day-card:nth-child(7) { animation-delay: 600ms; }
+
+/* Day-card inner glow on hover */
+.day-card {
+  position: relative;
+}
+
+.day-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at top center,
+    rgba(212, 160, 23, 0.12),
+    transparent 60%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s var(--ease);
+  border-radius: inherit;
+}
+
+.day-card:hover::after { opacity: 1; }
+
+/* ---------- Sidebar nav animation ---------- */
+.sidebar .nav-section {
+  animation: slideInRight 0.4s var(--ease) both;
+}
+
+.sidebar .nav-section:nth-child(2) { animation-delay: 60ms; }
+.sidebar .nav-section:nth-child(3) { animation-delay: 120ms; }
+.sidebar .nav-section:nth-child(4) { animation-delay: 180ms; }
+.sidebar .nav-section:nth-child(5) { animation-delay: 240ms; }
+.sidebar .nav-section:nth-child(6) { animation-delay: 300ms; }
+.sidebar .nav-section:nth-child(7) { animation-delay: 360ms; }
+
+.sidebar nav a {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Shimmer sweep on sidebar nav-item hover */
+.sidebar nav a::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent);
+  transform: translateX(-100%);
+  transition: transform 0.6s var(--ease);
+  pointer-events: none;
+}
+
+.sidebar nav a:hover::before {
+  transform: translateX(100%);
+}
+
+/* Active nav-item gold pulse on first paint */
+.sidebar nav a.active {
+  animation: fadeIn 0.4s var(--ease) both;
+}
+
+.sidebar nav a.active .ico {
+  animation: floatY 2.4s ease-in-out infinite;
+}
+
+/* ---------- Topbar entrance + glass shimmer ---------- */
+.topbar {
+  animation: fadeIn 0.3s var(--ease) both;
+}
+
+/* Notification dot pulse */
+.topbar .bell .badge,
+.topbar .icon-btn .dot {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+/* ---------- Button micro-interactions ---------- */
+.btn,
+.form button[type="submit"],
+.filter-bar button[type="submit"] {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Ripple-style shine on button hover */
+.btn::after,
+.form button[type="submit"]::after,
+.filter-bar button[type="submit"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(255, 255, 255, 0.22) 50%,
+    transparent);
+  transform: translateX(-100%);
+  transition: transform 0.55s var(--ease);
+  pointer-events: none;
+}
+
+.btn:hover::after,
+.form button[type="submit"]:hover::after,
+.filter-bar button[type="submit"]:hover::after {
+  transform: translateX(100%);
+}
+
+/* ---------- Card hover lift (subtle glow) ---------- */
+.card {
+  position: relative;
+  transition: transform 0.24s var(--ease), box-shadow 0.24s var(--ease), border-color 0.24s var(--ease);
+}
+
+.dashboard-clickable:hover {
+  border-color: var(--p-border-strong);
+}
+
+/* ---------- Table row entrance ---------- */
+table tbody tr {
+  animation: fadeUp 0.34s var(--ease) both;
+}
+
+table tbody tr:nth-child(1)  { animation-delay: 30ms; }
+table tbody tr:nth-child(2)  { animation-delay: 60ms; }
+table tbody tr:nth-child(3)  { animation-delay: 90ms; }
+table tbody tr:nth-child(4)  { animation-delay: 120ms; }
+table tbody tr:nth-child(5)  { animation-delay: 150ms; }
+table tbody tr:nth-child(6)  { animation-delay: 180ms; }
+table tbody tr:nth-child(7)  { animation-delay: 210ms; }
+table tbody tr:nth-child(8)  { animation-delay: 240ms; }
+table tbody tr:nth-child(9)  { animation-delay: 270ms; }
+table tbody tr:nth-child(10) { animation-delay: 300ms; }
+table tbody tr:nth-child(n+11) { animation-delay: 330ms; }
+
+/* Member avatar gentle bounce on row hover */
+table tbody tr:hover .m-avatar,
+table tbody tr:hover .m-avatar-fallback,
+table tbody tr:hover .org-badge {
+  transform: scale(1.08);
+  transition: transform 0.2s var(--ease);
+}
+
+/* ---------- Pill / chip pop ---------- */
+.pill {
+  transition: transform 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+
+.pill:hover {
+  transform: translateY(-1px) scale(1.04);
+  box-shadow: 0 4px 10px -2px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+/* ---------- Toast slide-in (additive) ---------- */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(20px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.toast {
+  animation: toastIn 0.28s var(--ease) both;
+}
+
+/* ---------- Form input focus pop ---------- */
+input:focus,
+select:focus,
+textarea:focus {
+  animation: fadeIn 0.18s var(--ease) both;
+}
+
+/* ---------- Login auth-intro logo gentle float ---------- */
+.auth-logo {
+  animation: floatY 5s ease-in-out infinite;
+  transition: transform 0.4s var(--ease), filter 0.4s var(--ease);
+}
+
+.auth-logo:hover {
+  transform: scale(1.04) rotate(2deg);
+  filter: drop-shadow(0 10px 20px rgba(15, 23, 42, 0.45));
+}
+
+/* ---------- Finance tabs underline slide ---------- */
+.finance-tabs a {
+  position: relative;
+}
+
+.finance-tabs a::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 4px;
+  height: 2px;
+  background: var(--e-grad-accent);
+  border-radius: 2px;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.26s var(--ease);
+}
+
+.finance-tabs a.active::after,
+.finance-tabs a:hover::after {
+  transform: scaleX(1);
+}
+
+/* ---------- Calendar cell ev pop ---------- */
+.cal-ev {
+  transition: transform 0.16s var(--ease), background 0.16s var(--ease);
+}
+
+.cal-cell:hover .cal-ev {
+  transform: translateY(-1px);
+}
+
+/* ---------- Bulk-bar slide-in ---------- */
+.bulk-bar {
+  animation: fadeUp 0.3s var(--ease) both;
+}
+
+/* ---------- Loading shimmer (utility for any element with .skeleton) ---------- */
+.skeleton {
+  background: linear-gradient(90deg, var(--soft) 0%, rgba(255,255,255,0.6) 50%, var(--soft) 100%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+
+/* ---------- Respect reduced-motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .auth-card::before {
+    animation: none !important;
+  }
+}
