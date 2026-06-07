@@ -4716,7 +4716,7 @@ button.link {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: url('/static/worship-bg.svg');
+  background-image: url('/static/worship-bg.jpg');
   background-size: cover;
   background-position: center;
   opacity: 0.55;             /* translucency — visible scene */
