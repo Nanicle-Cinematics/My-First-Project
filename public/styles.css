@@ -3771,14 +3771,14 @@ body {
 }
 
 /* ---------- Day-born grid — fix overflow ---------- */
-.day-born-grid {
+.dash-grid .day-born-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: var(--e-space-3);
 }
 
-@media (max-width: 1280px) { .day-born-grid { grid-template-columns: repeat(4, 1fr); } }
-@media (max-width: 760px)  { .day-born-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1280px) { .dash-grid .day-born-grid { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 760px)  { .dash-grid .day-born-grid { grid-template-columns: repeat(2, 1fr); } }
 
 .day-card {
   padding: var(--e-space-4) var(--e-space-3);
