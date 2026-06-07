@@ -4612,14 +4612,14 @@ button.link {
 
 .auth-logo {
   display: block;
-  width: 96px;
-  height: 96px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.96);
-  padding: 8px;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  background: transparent;
+  padding: 0;
   box-shadow:
-    0 20px 40px -12px rgba(15, 23, 42, 0.45),
-    0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+    0 30px 60px -16px rgba(15, 23, 42, 0.55),
+    0 0 0 4px rgba(255, 255, 255, 0.08);
   object-fit: contain;
 }
 
@@ -4637,19 +4637,19 @@ button.link {
 }
 
 .brand-mini-logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: linear-gradient(180deg, #ffffff, #f5f1e6);
-  padding: 3px;
-  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.12);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: transparent;
+  padding: 0;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.18);
   flex-shrink: 0;
+  object-fit: contain;
 }
 
 @media (max-width: 720px) {
   .auth-logo {
-    width: 72px;
-    height: 72px;
-    border-radius: 14px;
+    width: 120px;
+    height: 120px;
   }
 }
