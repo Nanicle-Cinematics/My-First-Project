@@ -1,67 +1,121 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="The Methodist Church Ghana">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-label="The Methodist Church Ghana — Your Kingdom Come 1835">
   <title>The Methodist Church Ghana</title>
+  <desc>Official emblem: gold disc, Ghana map outline, red cross, Wesleyan rosette, Your Kingdom Come 1835 ribbon.</desc>
+
   <defs>
-    <linearGradient id="mgShield" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#1d4e89"/>
-      <stop offset="100%" stop-color="#0c2c5a"/>
-    </linearGradient>
-    <linearGradient id="mgCross" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#f7e9c8"/>
-    </linearGradient>
-    <linearGradient id="mgFlame" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#f7c948"/>
-      <stop offset="60%" stop-color="#d4a017"/>
-      <stop offset="100%" stop-color="#b9890b"/>
-    </linearGradient>
-    <radialGradient id="mgGlow" cx="50%" cy="40%" r="55%">
-      <stop offset="0%" stop-color="rgba(255,232,160,0.55)"/>
-      <stop offset="100%" stop-color="rgba(255,232,160,0)"/>
+    <radialGradient id="discGrad" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#f0b73a"/>
+      <stop offset="70%" stop-color="#e8a423"/>
+      <stop offset="100%" stop-color="#c8870e"/>
     </radialGradient>
+    <linearGradient id="ribbonGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#dbe7f5"/>
+    </linearGradient>
+    <linearGradient id="ribbonEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2f6fb9"/>
+      <stop offset="100%" stop-color="#1a4d8a"/>
+    </linearGradient>
+    <linearGradient id="crossGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e63b2e"/>
+      <stop offset="100%" stop-color="#b81f15"/>
+    </linearGradient>
+    <path id="topArc" d="M 50,210 A 150,150 0 0,1 350,210" />
+    <path id="bottomArc" d="M 80,255 A 120,120 0 0,0 320,255" />
   </defs>
 
-  <!-- Outer shield -->
-  <path d="M100 8
-           L184 32
-           V96
-           C184 142 150 178 100 192
-           C50 178 16 142 16 96
-           V32 Z"
-        fill="url(#mgShield)"
-        stroke="#d4a017"
-        stroke-width="2.5"/>
+  <!-- Outer gold disc -->
+  <circle cx="200" cy="200" r="190" fill="url(#discGrad)" stroke="#a06d05" stroke-width="2"/>
+  <circle cx="200" cy="200" r="183" fill="none" stroke="#fff1c6" stroke-width="1.5" opacity="0.4"/>
 
-  <!-- Inner glow -->
-  <circle cx="100" cy="92" r="58" fill="url(#mgGlow)"/>
+  <!-- Curved top text -->
+  <text font-family="Plus Jakarta Sans, Inter, Arial, sans-serif"
+        font-size="24" font-weight="900" fill="#1a4d8a"
+        letter-spacing="1.6" text-anchor="middle">
+    <textPath href="#topArc" startOffset="50%">THE METHODIST CHURCH GHANA</textPath>
+  </text>
 
-  <!-- Cross -->
-  <g>
-    <rect x="92" y="36" width="16" height="106" rx="2" fill="url(#mgCross)"/>
-    <rect x="60" y="68" width="80" height="16" rx="2" fill="url(#mgCross)"/>
+  <!-- Ghana map silhouette (stylized) -->
+  <g transform="translate(140,120)">
+    <path d="M 18,8
+             C 30,4 50,2 75,4
+             C 95,6 108,12 116,22
+             C 122,32 120,46 116,58
+             L 120,78
+             C 122,92 120,108 118,124
+             C 116,140 110,156 102,170
+             L 96,182
+             L 80,188
+             L 60,182
+             L 38,170
+             L 22,150
+             L 12,124
+             L 8,96
+             L 6,70
+             L 8,46
+             L 12,22 Z"
+          fill="#1a4d8a" stroke="#0d2f5a" stroke-width="1.5"/>
+
+    <!-- Wesleyan rosette (white flower) on the map -->
+    <g transform="translate(56,86)" fill="#ffffff">
+      <circle cx="0" cy="0" r="10"/>
+      <g>
+        <ellipse cx="0" cy="-14" rx="6" ry="9"/>
+        <ellipse cx="0" cy="14" rx="6" ry="9"/>
+        <ellipse cx="-14" cy="0" rx="9" ry="6"/>
+        <ellipse cx="14" cy="0" rx="9" ry="6"/>
+        <ellipse cx="-10" cy="-10" rx="7" ry="6" transform="rotate(-45 -10 -10)"/>
+        <ellipse cx="10" cy="-10" rx="7" ry="6" transform="rotate(45 10 -10)"/>
+        <ellipse cx="-10" cy="10" rx="7" ry="6" transform="rotate(45 -10 10)"/>
+        <ellipse cx="10" cy="10" rx="7" ry="6" transform="rotate(-45 10 10)"/>
+      </g>
+      <circle cx="0" cy="0" r="4" fill="#e8a423"/>
+    </g>
   </g>
 
-  <!-- Flame at base (wesleyan symbol) -->
-  <path d="M100 134
-           C84 148 78 158 84 170
-           C86 162 92 156 100 152
-           C108 156 114 162 116 170
-           C122 158 116 148 100 134 Z"
-        fill="url(#mgFlame)"
-        stroke="#7a5b00"
-        stroke-width="1"/>
-  <path d="M100 142
-           C92 152 90 158 96 166
-           C98 160 100 158 100 158
-           C100 158 102 160 104 166
-           C110 158 108 152 100 142 Z"
-        fill="#fff4d6"
-        opacity="0.9"/>
+  <!-- Red Latin cross overlaid -->
+  <g>
+    <!-- Vertical -->
+    <rect x="190" y="80" width="20" height="200" rx="2" fill="url(#crossGrad)" stroke="#7a1109" stroke-width="1"/>
+    <rect x="186" y="78" width="28" height="6" rx="1.5" fill="#c8261a"/>
+    <!-- Horizontal -->
+    <rect x="146" y="146" width="108" height="20" rx="2" fill="url(#crossGrad)" stroke="#7a1109" stroke-width="1"/>
+    <!-- Highlight stripe along the vertical -->
+    <rect x="195" y="84" width="3" height="190" fill="#ffffff" opacity="0.35"/>
+  </g>
 
-  <!-- Bottom rim -->
-  <path d="M40 168 C 60 184 140 184 160 168"
-        fill="none"
-        stroke="#d4a017"
-        stroke-width="1.5"
-        opacity="0.5"/>
+  <!-- Bottom ribbon banner -->
+  <g>
+    <!-- Ribbon left tail -->
+    <path d="M 70,300 L 90,290 L 110,300 L 110,320 L 90,310 L 70,320 Z"
+          fill="url(#ribbonEdge)" stroke="#0d2f5a" stroke-width="1"/>
+    <!-- Ribbon right tail -->
+    <path d="M 330,300 L 310,290 L 290,300 L 290,320 L 310,310 L 330,320 Z"
+          fill="url(#ribbonEdge)" stroke="#0d2f5a" stroke-width="1"/>
+    <!-- Main banner -->
+    <path d="M 90,290
+             L 200,278
+             L 310,290
+             L 310,318
+             L 200,328
+             L 90,318 Z"
+          fill="url(#ribbonGrad)" stroke="#1a4d8a" stroke-width="1.5"/>
+
+    <!-- Year markers in side circles -->
+    <circle cx="118" cy="304" r="14" fill="#1a4d8a" stroke="#ffffff" stroke-width="1.5"/>
+    <text x="118" y="310" font-family="Plus Jakarta Sans, Arial, sans-serif"
+          font-size="13" font-weight="900" fill="#ffffff" text-anchor="middle">18</text>
+    <circle cx="282" cy="304" r="14" fill="#1a4d8a" stroke="#ffffff" stroke-width="1.5"/>
+    <text x="282" y="310" font-family="Plus Jakarta Sans, Arial, sans-serif"
+          font-size="13" font-weight="900" fill="#ffffff" text-anchor="middle">35</text>
+
+    <!-- Motto -->
+    <text x="200" y="310" font-family="Plus Jakarta Sans, Arial, sans-serif"
+          font-size="12" font-weight="800" fill="#1a4d8a"
+          letter-spacing="0.4" text-anchor="middle">YOUR KINGDOM COME</text>
+  </g>
+
+  <!-- Subtle inner shadow on disc edge -->
+  <circle cx="200" cy="200" r="190" fill="none" stroke="#000" stroke-width="3" opacity="0.08"/>
 </svg>
