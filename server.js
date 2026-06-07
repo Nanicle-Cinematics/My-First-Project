@@ -1617,6 +1617,7 @@ app.get('/', (req, res) => {
 
   const grid = `
     <div class="dash-grid">
+claude/premium-dashboard-layout
       <div class="col-2">${givingCard}</div>
       ${upcomingCard}
       <div class="col-3">${dayBornCard}</div>
@@ -1625,6 +1626,18 @@ app.get('/', (req, res) => {
       ${attendanceCard}
       ${birthdaysCard}
       ${activityCard}
+=======
+      <div class="dashboard-row dashboard-row-split">
+        ${upcomingCard}
+        ${birthdaysCard}
+      </div>
+      <div class="col-2">${dayBornCard}</div>
+      ${financeCard}
+      <div class="col-3">${givingCard}</div>
+      <div class="col-3">${activityCard}</div>
+      <div class="col-2">${ministryCard}</div>
+      ${attendanceCard}
+main
       ${followupsCard}
     </div>`;
   const dashboardDate = new Date().toLocaleDateString('en-GB', {
