@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="The Methodist Church Ghana">
+  <title>The Methodist Church Ghana</title>
+  <defs>
+    <linearGradient id="mgShield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1d4e89"/>
+      <stop offset="100%" stop-color="#0c2c5a"/>
+    </linearGradient>
+    <linearGradient id="mgCross" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f7e9c8"/>
+    </linearGradient>
+    <linearGradient id="mgFlame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7c948"/>
+      <stop offset="60%" stop-color="#d4a017"/>
+      <stop offset="100%" stop-color="#b9890b"/>
+    </linearGradient>
+    <radialGradient id="mgGlow" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="rgba(255,232,160,0.55)"/>
+      <stop offset="100%" stop-color="rgba(255,232,160,0)"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Outer shield -->
+  <path d="M100 8
+           L184 32
+           V96
+           C184 142 150 178 100 192
+           C50 178 16 142 16 96
+           V32 Z"
+        fill="url(#mgShield)"
+        stroke="#d4a017"
+        stroke-width="2.5"/>
+
+  <!-- Inner glow -->
+  <circle cx="100" cy="92" r="58" fill="url(#mgGlow)"/>
+
+  <!-- Cross -->
+  <g>
+    <rect x="92" y="36" width="16" height="106" rx="2" fill="url(#mgCross)"/>
+    <rect x="60" y="68" width="80" height="16" rx="2" fill="url(#mgCross)"/>
+  </g>
+
+  <!-- Flame at base (wesleyan symbol) -->
+  <path d="M100 134
+           C84 148 78 158 84 170
+           C86 162 92 156 100 152
+           C108 156 114 162 116 170
+           C122 158 116 148 100 134 Z"
+        fill="url(#mgFlame)"
+        stroke="#7a5b00"
+        stroke-width="1"/>
+  <path d="M100 142
+           C92 152 90 158 96 166
+           C98 160 100 158 100 158
+           C100 158 102 160 104 166
+           C110 158 108 152 100 142 Z"
+        fill="#fff4d6"
+        opacity="0.9"/>
+
+  <!-- Bottom rim -->
+  <path d="M40 168 C 60 184 140 184 160 168"
+        fill="none"
+        stroke="#d4a017"
+        stroke-width="1.5"
+        opacity="0.5"/>
+</svg>
