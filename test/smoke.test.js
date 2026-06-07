@@ -99,6 +99,8 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /data-card-href="\/reports"/);
   assert.match(home.body, /Day-born Groups/);
   assert.match(home.body, /Akan fellowship view/);
+  assert.ok(home.body.indexOf('Day-born Groups') < home.body.indexOf('Giving Overview'));
+  assert.ok(home.body.indexOf('Finance Summary') < home.body.indexOf('Giving Overview'));
 });
 
 test('state-changing POST without a CSRF token is rejected (403)', async () => {

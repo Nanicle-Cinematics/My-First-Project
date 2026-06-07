@@ -1621,12 +1621,12 @@ app.get('/', (req, res) => {
         ${upcomingCard}
         ${birthdaysCard}
       </div>
+      <div class="col-2">${dayBornCard}</div>
+      ${financeCard}
       <div class="col-3">${givingCard}</div>
       <div class="col-3">${activityCard}</div>
       <div class="col-2">${ministryCard}</div>
       ${attendanceCard}
-      <div class="col-2">${dayBornCard}</div>
-      ${financeCard}
       ${followupsCard}
     </div>`;
   const dashboardDate = new Date().toLocaleDateString('en-GB', {
