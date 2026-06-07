@@ -3115,6 +3115,16 @@ label {
 }
 
 /* Day-card variant used by dashboard */
+.day-born-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding: 0.4rem 0 0;
+}
+
+@media (max-width: 1280px) { .day-born-grid { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 760px)  { .day-born-grid { grid-template-columns: repeat(2, 1fr); } }
+
 .day-card {
   border-radius: var(--p-radius);
   border: 1px solid var(--p-border);
@@ -3122,7 +3132,13 @@ label {
   box-shadow: var(--p-shadow-xs);
   position: relative;
   overflow: hidden;
+  padding: 0.95rem 0.85rem;
   transition: all 0.2s var(--ease);
+  cursor: pointer;
+}
+
+:root[data-theme="dark"] .day-card {
+  background: linear-gradient(180deg, var(--panel) 0%, rgba(255, 255, 255, 0.02) 100%);
 }
 
 .day-card::before {
@@ -3136,6 +3152,39 @@ label {
 .day-card:hover {
   transform: translateY(-3px);
   box-shadow: var(--p-shadow-md);
+  border-color: var(--p-border-strong);
+}
+
+.day-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 0.6rem;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.day-card-head strong {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: 0.92rem;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  display: block;
+}
+
+.day-card-head span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.day-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
 }
 
 .day-count {
@@ -3143,6 +3192,34 @@ label {
   font-weight: 800;
   font-size: 1.7rem;
   letter-spacing: -0.025em;
+  line-height: 1;
+  margin-bottom: 0.15rem;
+}
+
+.day-meta {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.day-meta:first-of-type {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  font-size: 0.62rem;
+  color: var(--muted);
+  margin-bottom: 0.45rem;
+}
+
+/* ---------- Premium dashboard grid layout (matches mockup) ---------- */
+.dash-grid {
+  gap: 1.1rem;
+}
+
+.dash-grid > .card,
+.dash-grid > .col-2,
+.dash-grid > .col-3 {
+  min-width: 0;
 }
 
 /* ---------- Hero refinements ---------- */
