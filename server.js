@@ -1617,16 +1617,14 @@ app.get('/', (req, res) => {
 
   const grid = `
     <div class="dash-grid">
-      <div class="dashboard-row dashboard-row-split">
-        ${upcomingCard}
-        ${birthdaysCard}
-      </div>
-      <div class="col-2">${dayBornCard}</div>
+      <div class="col-2">${givingCard}</div>
+      ${upcomingCard}
+      <div class="col-3">${dayBornCard}</div>
+      ${ministryCard}
       ${financeCard}
-      <div class="col-3">${givingCard}</div>
-      <div class="col-3">${activityCard}</div>
-      <div class="col-2">${ministryCard}</div>
       ${attendanceCard}
+      ${birthdaysCard}
+      ${activityCard}
       ${followupsCard}
     </div>`;
   const dashboardDate = new Date().toLocaleDateString('en-GB', {

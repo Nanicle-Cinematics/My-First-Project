@@ -91,16 +91,31 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /Visitors This Month/);
   assert.match(home.body, /class="quick-drop"/);
   assert.match(home.body, /class="dash-grid"/);
-  assert.match(home.body, /class="dashboard-row dashboard-row-split"/);
-  assert.ok(home.body.indexOf('Upcoming Events') < home.body.indexOf('Birthdays This Week'));
   assert.match(home.body, /data-command-center="true"/);
   assert.match(home.body, /class="page-date"/);
   assert.match(home.body, /data-card-href="\/finance"/);
   assert.match(home.body, /data-card-href="\/reports"/);
   assert.match(home.body, /Day-born Groups/);
   assert.match(home.body, /Akan fellowship view/);
-  assert.ok(home.body.indexOf('Day-born Groups') < home.body.indexOf('Giving Overview'));
-  assert.ok(home.body.indexOf('Finance Summary') < home.body.indexOf('Giving Overview'));
+  const cardOrder = [
+    'Giving Overview',
+    'Upcoming Events',
+    'Day-born Groups',
+    'Ministry Overview',
+    'Finance Summary',
+    'Attendance Overview',
+    'Birthdays This Week',
+    'Recent Activities',
+    'Pending Follow-ups',
+  ].map((label) => home.body.indexOf(label));
+  assert.ok(cardOrder.every((idx) => idx >= 0), 'dashboard should render every premium layout card');
+  assert.deepStrictEqual([...cardOrder].sort((a, b) => a - b), cardOrder);
+});
+
+test('dashboard day-born grid CSS is scoped away from finance forms', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  assert.match(css, /\.dash-grid \.day-born-grid\s*\{[\s\S]*?grid-template-columns: repeat\(7, minmax\(0, 1fr\)\)/);
+  assert.doesNotMatch(css, /(?:^|\n)\.day-born-grid\s*\{[^}]*grid-template-columns: repeat\(7, minmax\(0, 1fr\)\)/);
 });
 
 test('state-changing POST without a CSRF token is rejected (403)', async () => {
