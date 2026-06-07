@@ -3115,15 +3115,15 @@ label {
 }
 
 /* Day-card variant used by dashboard */
-.day-born-grid {
+.dash-grid .day-born-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0.75rem;
   padding: 0.4rem 0 0;
 }
 
-@media (max-width: 1280px) { .day-born-grid { grid-template-columns: repeat(4, 1fr); } }
-@media (max-width: 760px)  { .day-born-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1280px) { .dash-grid .day-born-grid { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 760px)  { .dash-grid .day-born-grid { grid-template-columns: repeat(2, 1fr); } }
 
 .day-card {
   border-radius: var(--p-radius);
