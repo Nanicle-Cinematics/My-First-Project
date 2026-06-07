@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Premium UI Mockup — My First Project</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --sidebar-bg:#103060; --sidebar-bg-2:#1d4e89;
+    --sidebar-ink:#ffffff; --sidebar-muted:rgba(255,255,255,.62);
+    --gold:#d4a017; --gold-soft:#fbf0cf; --gold-deep:#7a5b00;
+    --purple:#7c5cfc; --purple-soft:#ece8fe; --purple-dark:#4a2fb0;
+    --green:#16a34a; --green-soft:#dcfce7;
+    --blue:#3b82f6; --blue-soft:#dbeafe;
+    --rose:#e11d48; --rose-soft:#ffe4e6;
+    --bg:#f6f7fb; --panel:#ffffff; --ink:#1f2433; --muted:#5f6675;
+    --soft:#f1f2f7; --border:#eceef4;
+    --shadow-sm:0 1px 2px rgba(30,36,60,.04), 0 1px 3px rgba(30,36,60,.05);
+    --shadow:0 8px 24px rgba(30,36,60,.06), 0 2px 6px rgba(30,36,60,.04);
+    --shadow-lg:0 30px 60px -20px rgba(30,36,60,.18), 0 10px 24px -10px rgba(30,36,60,.10);
+    --radius:18px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font:14px/1.55 "Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    background:
+      radial-gradient(1200px 600px at 100% -10%, rgba(124,92,252,.10), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(212,160,23,.10), transparent 60%),
+      var(--bg);
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  .display{font-family:"Plus Jakarta Sans","Inter",sans-serif; letter-spacing:-.02em}
+
+  /* ---------- Shell ---------- */
+  .app{display:grid; grid-template-columns:264px 1fr; min-height:100vh}
+  .sidebar{
+    background:linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-2) 100%);
+    color:var(--sidebar-ink); padding:22px 16px; position:sticky; top:0; height:100vh;
+    box-shadow: inset -1px 0 0 rgba(255,255,255,.06);
+  }
+  .brand{display:flex; align-items:center; gap:12px; padding:6px 10px 18px}
+  .brand-mark{
+    width:38px;height:38px;border-radius:11px;
+    background:linear-gradient(135deg, var(--gold) 0%, #b9890b 100%);
+    display:grid;place-items:center;color:#2a2205;font-weight:800;
+    box-shadow: 0 6px 18px rgba(212,160,23,.45), inset 0 1px 0 rgba(255,255,255,.4);
+  }
+  .brand-name{font-family:"Plus Jakarta Sans";font-weight:800;font-size:15px;letter-spacing:.2px}
+  .brand-sub{font-size:11px;color:var(--sidebar-muted);margin-top:2px}
+
+  .nav-label{font-size:10px;letter-spacing:.18em;color:var(--sidebar-muted);text-transform:uppercase;padding:18px 12px 8px}
+  .nav-item{
+    display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;
+    color:var(--sidebar-muted);font-weight:500;cursor:pointer;margin-bottom:2px;
+    transition:all .15s ease;
+  }
+  .nav-item .ico{width:18px;height:18px;display:grid;place-items:center;opacity:.9}
+  .nav-item:hover{background:rgba(255,255,255,.06); color:#fff}
+  .nav-item.active{
+    background:linear-gradient(90deg, rgba(212,160,23,.22), rgba(212,160,23,.06));
+    color:#fff; box-shadow: inset 0 0 0 1px rgba(212,160,23,.35);
+  }
+  .nav-item.active .ico{color:var(--gold)}
+  .badge-dot{margin-left:auto;background:var(--gold);color:#2a2205;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px}
+
+  .side-card{
+    margin-top:18px;padding:14px;border-radius:14px;
+    background:linear-gradient(135deg, rgba(212,160,23,.18), rgba(124,92,252,.18));
+    border:1px solid rgba(255,255,255,.10);
+  }
+  .side-card h4{margin:0 0 4px;font-size:13px}
+  .side-card p{margin:0;font-size:12px;color:var(--sidebar-muted)}
+  .side-card .btn{margin-top:10px;width:100%;background:var(--gold);color:#2a2205;border:0;padding:8px 10px;border-radius:10px;font-weight:700;cursor:pointer}
+
+  /* ---------- Main ---------- */
+  .main{padding:18px 28px 40px;min-width:0}
+  .topbar{
+    display:flex;align-items:center;gap:16px;
+    background:rgba(255,255,255,.7); backdrop-filter:saturate(140%) blur(10px);
+    border:1px solid var(--border); border-radius:16px; padding:10px 14px;
+    box-shadow:var(--shadow-sm);
+  }
+  .search{flex:1;display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--soft);border-radius:10px;border:1px solid transparent}
+  .search input{flex:1;background:transparent;border:0;outline:0;font:inherit;color:var(--ink)}
+  .kbd{font-size:11px;color:var(--muted);background:#fff;border:1px solid var(--border);border-bottom-width:2px;padding:1px 6px;border-radius:6px}
+  .icon-btn{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:#fff;display:grid;place-items:center;cursor:pointer;position:relative}
+  .icon-btn .dot{position:absolute;top:8px;right:8px;width:8px;height:8px;border-radius:50%;background:var(--rose);box-shadow:0 0 0 2px #fff}
+  .avatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#7c5cfc,#4a2fb0);color:#fff;display:grid;place-items:center;font-weight:700}
+
+  .page-head{display:flex;align-items:end;justify-content:space-between;margin:22px 4px 14px;gap:16px;flex-wrap:wrap}
+  .page-head h1{margin:0;font-size:26px;font-weight:800}
+  .page-head .sub{color:var(--muted);margin-top:4px;font-size:13.5px}
+  .actions{display:flex;gap:8px;align-items:center}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:11px;border:1px solid var(--border);background:#fff;color:var(--ink);font-weight:600;cursor:pointer;transition:all .15s ease;box-shadow:var(--shadow-sm)}
+  .btn:hover{transform:translateY(-1px); box-shadow:var(--shadow)}
+  .btn.primary{
+    background:linear-gradient(135deg,#d4a017 0%, #b9890b 100%); color:#2a2205;border-color:transparent;
+    box-shadow:0 10px 24px -8px rgba(212,160,23,.55), inset 0 1px 0 rgba(255,255,255,.4);
+  }
+  .btn.purple{background:linear-gradient(135deg,#7c5cfc,#4a2fb0);color:#fff;border-color:transparent;box-shadow:0 10px 24px -8px rgba(124,92,252,.55)}
+
+  /* KPI cards */
+  .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:6px 0 22px}
+  .kpi{
+    background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:18px;box-shadow:var(--shadow); position:relative; overflow:hidden;
+  }
+  .kpi .label{color:var(--muted);font-size:12.5px;font-weight:600;letter-spacing:.02em}
+  .kpi .value{font-family:"Plus Jakarta Sans";font-weight:800;font-size:30px;margin-top:6px;letter-spacing:-.02em}
+  .kpi .row{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px;color:var(--muted)}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px}
+  .chip.up{background:var(--green-soft);color:#106a31}
+  .chip.down{background:var(--rose-soft);color:#9f1239}
+  .kpi .glyph{
+    position:absolute;right:14px;top:14px;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;
+  }
+  .kpi.g1 .glyph{background:var(--gold-soft);color:var(--gold-deep)}
+  .kpi.g2 .glyph{background:var(--purple-soft);color:var(--purple-dark)}
+  .kpi.g3 .glyph{background:var(--blue-soft);color:#1d4ed8}
+  .kpi.g4 .glyph{background:var(--green-soft);color:#106a31}
+  .spark{margin-top:14px;height:38px;width:100%}
+
+  /* Grid */
+  .grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+  .card-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px 8px}
+  .card-head h3{margin:0;font-size:15px;font-weight:700}
+  .card-head .meta{color:var(--muted);font-size:12px}
+  .tabs{display:flex;gap:4px;background:var(--soft);padding:4px;border-radius:10px}
+  .tab{padding:6px 10px;border-radius:8px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer}
+  .tab.active{background:#fff;color:var(--ink);box-shadow:var(--shadow-sm)}
+  .chart-wrap{padding:6px 12px 18px}
+
+  /* Right column */
+  .stack{display:flex;flex-direction:column;gap:16px}
+  .event{
+    display:flex;gap:12px;padding:12px;border-radius:12px;align-items:center;
+    background:linear-gradient(180deg, #ffffff, #fbfbfe); border:1px solid var(--border);
+  }
+  .event + .event{margin-top:8px}
+  .date-tile{
+    width:48px;height:54px;border-radius:12px;display:grid;place-items:center;text-align:center;
+    background:linear-gradient(180deg, var(--gold-soft), #fff); border:1px solid var(--border);
+  }
+  .date-tile .m{font-size:10px;letter-spacing:.16em;color:var(--gold-deep);font-weight:700;text-transform:uppercase}
+  .date-tile .d{font-family:"Plus Jakarta Sans";font-weight:800;font-size:20px;line-height:1}
+  .event h4{margin:0;font-size:13.5px}
+  .event p{margin:2px 0 0;font-size:12px;color:var(--muted)}
+
+  /* Members table */
+  table{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px}
+  thead th{
+    text-align:left;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+    font-weight:700;padding:12px 16px;border-bottom:1px solid var(--border);background:#fbfbfe;
+  }
+  tbody td{padding:12px 16px;border-bottom:1px solid var(--border)}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:rgba(124,92,252,.04)}
+  .person{display:flex;gap:10px;align-items:center}
+  .av{width:32px;height:32px;border-radius:50%;color:#fff;display:grid;place-items:center;font-weight:700;font-size:12px}
+  .av.a{background:linear-gradient(135deg,#7c5cfc,#4a2fb0)}
+  .av.b{background:linear-gradient(135deg,#d4a017,#b9890b)}
+  .av.c{background:linear-gradient(135deg,#16a34a,#0a7a36)}
+  .av.d{background:linear-gradient(135deg,#3b82f6,#1d4ed8)}
+  .av.e{background:linear-gradient(135deg,#e11d48,#9f1239)}
+  .person small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;padding:4px 9px;border-radius:999px}
+  .pill.ok{background:var(--green-soft);color:#106a31}
+  .pill.new{background:var(--blue-soft);color:#1d4ed8}
+  .pill.warn{background:var(--gold-soft);color:var(--gold-deep)}
+  .pill.off{background:var(--soft);color:var(--muted)}
+
+  /* Footnote */
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}
+  .legend i{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:6px;vertical-align:middle}
+
+  @media (max-width:1100px){
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .grid{grid-template-columns:1fr}
+    .app{grid-template-columns:80px 1fr}
+    .brand-name,.brand-sub,.nav-item span:not(.ico),.nav-label,.side-card{display:none}
+    .nav-item{justify-content:center}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============== SIDEBAR ============== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">N</div>
+      <div>
+        <div class="brand-name">Nanicle</div>
+        <div class="brand-sub">Ministry Suite</div>
+      </div>
+    </div>
+
+    <div class="nav-label">Overview</div>
+    <div class="nav-item active">
+      <span class="ico">◆</span><span>Dashboard</span>
+    </div>
+    <div class="nav-item"><span class="ico">◷</span><span>Attendance</span></div>
+    <div class="nav-item"><span class="ico">♛</span><span>Members</span><span class="badge-dot">12</span></div>
+    <div class="nav-item"><span class="ico">⌘</span><span>Organizations</span></div>
+
+    <div class="nav-label">Ministry</div>
+    <div class="nav-item"><span class="ico">✝</span><span>Sacraments</span></div>
+    <div class="nav-item"><span class="ico">✦</span><span>Bible Classes</span></div>
+    <div class="nav-item"><span class="ico">▥</span><span>Preaching</span></div>
+    <div class="nav-item"><span class="ico">✉</span><span>Communications</span></div>
+
+    <div class="nav-label">Operations</div>
+    <div class="nav-item"><span class="ico">◉</span><span>Finance</span></div>
+    <div class="nav-item"><span class="ico">⎙</span><span>Inventory</span></div>
+    <div class="nav-item"><span class="ico">⊞</span><span>Events</span></div>
+    <div class="nav-item"><span class="ico">⌬</span><span>Reports</span></div>
+
+    <div class="side-card">
+      <h4>Sunday Service</h4>
+      <p>Live attendance opens in 22 min. Start tracking now.</p>
+      <button class="btn">Begin check-in →</button>
+    </div>
+  </aside>
+
+  <!-- ============== MAIN ============== -->
+  <main class="main">
+    <div class="topbar">
+      <div class="search">
+        <span>⌕</span>
+        <input placeholder="Search members, events, transactions…" />
+        <span class="kbd">⌘K</span>
+      </div>
+      <button class="icon-btn" title="Notifications">🔔<span class="dot"></span></button>
+      <button class="icon-btn" title="Help">?</button>
+      <button class="icon-btn" title="Theme">◐</button>
+      <div class="avatar">RA</div>
+    </div>
+
+    <div class="page-head">
+      <div>
+        <h1 class="display">Welcome back, Richard</h1>
+        <div class="sub">Here's what's happening at <strong>Mt. Carmel Parish</strong> — Sunday, June 7, 2026.</div>
+      </div>
+      <div class="actions">
+        <button class="btn">⇩ Export</button>
+        <button class="btn purple">+ New Event</button>
+        <button class="btn primary">⊕ Record Service</button>
+      </div>
+    </div>
+
+    <!-- KPIs -->
+    <section class="kpis">
+      <div class="kpi g1">
+        <div class="glyph">♛</div>
+        <div class="label">Total Members</div>
+        <div class="value">1,284</div>
+        <div class="row"><span class="chip up">▲ 4.8%</span> vs. last month</div>
+        <svg class="spark" viewBox="0 0 200 40" preserveAspectRatio="none">
+          <defs><linearGradient id="g1" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#d4a017" stop-opacity=".35"/><stop offset="1" stop-color="#d4a017" stop-opacity="0"/></linearGradient></defs>
+          <path d="M0,30 L20,26 40,28 60,20 80,22 100,15 120,18 140,10 160,14 180,6 200,9 L200,40 0,40 Z" fill="url(#g1)"/>
+          <path d="M0,30 L20,26 40,28 60,20 80,22 100,15 120,18 140,10 160,14 180,6 200,9" fill="none" stroke="#d4a017" stroke-width="2"/>
+        </svg>
+      </div>
+      <div class="kpi g2">
+        <div class="glyph">◷</div>
+        <div class="label">Attendance · This Week</div>
+        <div class="value">872</div>
+        <div class="row"><span class="chip up">▲ 2.1%</span> vs. last week</div>
+        <svg class="spark" viewBox="0 0 200 40" preserveAspectRatio="none">
+          <defs><linearGradient id="g2" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#7c5cfc" stop-opacity=".4"/><stop offset="1" stop-color="#7c5cfc" stop-opacity="0"/></linearGradient></defs>
+          <path d="M0,24 L20,20 40,22 60,16 80,18 100,12 120,16 140,9 160,11 180,6 200,8 L200,40 0,40 Z" fill="url(#g2)"/>
+          <path d="M0,24 L20,20 40,22 60,16 80,18 100,12 120,16 140,9 160,11 180,6 200,8" fill="none" stroke="#7c5cfc" stroke-width="2"/>
+        </svg>
+      </div>
+      <div class="kpi g3">
+        <div class="glyph">◉</div>
+        <div class="label">Offering · June</div>
+        <div class="value">₵ 48,210</div>
+        <div class="row"><span class="chip up">▲ 11.4%</span> on target</div>
+        <svg class="spark" viewBox="0 0 200 40" preserveAspectRatio="none">
+          <defs><linearGradient id="g3" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#3b82f6" stop-opacity=".4"/><stop offset="1" stop-color="#3b82f6" stop-opacity="0"/></linearGradient></defs>
+          <path d="M0,32 L20,28 40,30 60,22 80,26 100,18 120,21 140,12 160,16 180,8 200,11 L200,40 0,40 Z" fill="url(#g3)"/>
+          <path d="M0,32 L20,28 40,30 60,22 80,26 100,18 120,21 140,12 160,16 180,8 200,11" fill="none" stroke="#3b82f6" stroke-width="2"/>
+        </svg>
+      </div>
+      <div class="kpi g4">
+        <div class="glyph">✝</div>
+        <div class="label">Sacraments · YTD</div>
+        <div class="value">96</div>
+        <div class="row"><span class="chip up">▲ 6</span> this month</div>
+        <svg class="spark" viewBox="0 0 200 40" preserveAspectRatio="none">
+          <defs><linearGradient id="g4" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#16a34a" stop-opacity=".4"/><stop offset="1" stop-color="#16a34a" stop-opacity="0"/></linearGradient></defs>
+          <path d="M0,28 L20,30 40,24 60,26 80,18 100,22 120,14 140,18 160,10 180,14 200,7 L200,40 0,40 Z" fill="url(#g4)"/>
+          <path d="M0,28 L20,30 40,24 60,26 80,18 100,22 120,14 140,18 160,10 180,14 200,7" fill="none" stroke="#16a34a" stroke-width="2"/>
+        </svg>
+      </div>
+    </section>
+
+    <!-- Grid -->
+    <section class="grid">
+      <!-- LEFT: Attendance chart -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h3>Attendance Trend</h3>
+            <div class="meta">Weekly average across all services</div>
+          </div>
+          <div class="tabs">
+            <div class="tab">1W</div>
+            <div class="tab active">1M</div>
+            <div class="tab">3M</div>
+            <div class="tab">1Y</div>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <svg viewBox="0 0 760 260" width="100%" height="260" preserveAspectRatio="none" aria-label="Attendance chart">
+            <defs>
+              <linearGradient id="area1" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#7c5cfc" stop-opacity=".35"/>
+                <stop offset="1" stop-color="#7c5cfc" stop-opacity="0"/>
+              </linearGradient>
+              <linearGradient id="area2" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#d4a017" stop-opacity=".30"/>
+                <stop offset="1" stop-color="#d4a017" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <!-- gridlines -->
+            <g stroke="#eceef4" stroke-width="1">
+              <line x1="40" y1="40" x2="740" y2="40"/>
+              <line x1="40" y1="100" x2="740" y2="100"/>
+              <line x1="40" y1="160" x2="740" y2="160"/>
+              <line x1="40" y1="220" x2="740" y2="220"/>
+            </g>
+            <!-- y labels -->
+            <g fill="#9aa0b3" font-size="11" font-family="Inter">
+              <text x="0" y="44">1k</text>
+              <text x="0" y="104">800</text>
+              <text x="0" y="164">600</text>
+              <text x="0" y="224">400</text>
+            </g>
+            <!-- x labels -->
+            <g fill="#9aa0b3" font-size="11" font-family="Inter" text-anchor="middle">
+              <text x="100" y="245">May 10</text>
+              <text x="240" y="245">May 17</text>
+              <text x="380" y="245">May 24</text>
+              <text x="520" y="245">May 31</text>
+              <text x="660" y="245">Jun 07</text>
+            </g>
+            <!-- area: this year -->
+            <path d="M40,180 C120,160 180,150 240,140 S380,90 460,100 540,70 620,80 700,50 740,60 L740,230 40,230 Z" fill="url(#area1)"/>
+            <path d="M40,180 C120,160 180,150 240,140 S380,90 460,100 540,70 620,80 700,50 740,60" fill="none" stroke="#7c5cfc" stroke-width="2.5"/>
+            <!-- area: last year (gold dashed) -->
+            <path d="M40,200 C120,190 200,180 260,170 S400,130 480,140 580,110 660,120 740,100 740,100" fill="url(#area2)"/>
+            <path d="M40,200 C120,190 200,180 260,170 S400,130 480,140 580,110 660,120 740,100 740,100" fill="none" stroke="#d4a017" stroke-width="2" stroke-dasharray="4 5"/>
+            <!-- points -->
+            <g fill="#7c5cfc">
+              <circle cx="240" cy="140" r="4"/>
+              <circle cx="460" cy="100" r="4"/>
+              <circle cx="660" cy="68" r="4"/>
+            </g>
+            <!-- tooltip -->
+            <g>
+              <rect x="600" y="22" width="120" height="44" rx="10" fill="#1f2433"/>
+              <text x="612" y="42" fill="#fff" font-size="11" font-family="Inter">Sun · Jun 07</text>
+              <text x="612" y="58" fill="#d4a017" font-size="13" font-weight="700" font-family="Plus Jakarta Sans">872 attended</text>
+            </g>
+          </svg>
+          <div class="legend">
+            <span><i style="background:#7c5cfc"></i>This year</span>
+            <span><i style="background:#d4a017"></i>Last year</span>
+            <span><i style="background:#e11d48"></i>Target</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Upcoming events -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h3>Upcoming</h3>
+            <div class="meta">Next 7 days</div>
+          </div>
+          <a class="tab active" style="background:#fff;border:1px solid var(--border)">View all →</a>
+        </div>
+        <div style="padding:6px 16px 18px">
+          <div class="event">
+            <div class="date-tile"><div class="m">Jun</div><div class="d">08</div></div>
+            <div>
+              <h4>Youth Bible Class · Week 12</h4>
+              <p>7:00 PM · Hall B · 24 confirmed</p>
+            </div>
+          </div>
+          <div class="event">
+            <div class="date-tile"><div class="m">Jun</div><div class="d">11</div></div>
+            <div>
+              <h4>Confirmation Rehearsal</h4>
+              <p>5:30 PM · Sanctuary · Fr. Mensah</p>
+            </div>
+          </div>
+          <div class="event">
+            <div class="date-tile"><div class="m">Jun</div><div class="d">14</div></div>
+            <div>
+              <h4>Choir Anniversary Mass</h4>
+              <p>9:00 AM · Main Service · Broadcast</p>
+            </div>
+          </div>
+          <div class="event">
+            <div class="date-tile"><div class="m">Jun</div><div class="d">15</div></div>
+            <div>
+              <h4>Finance Council</h4>
+              <p>6:00 PM · Office · 8 attendees</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Members table -->
+    <section class="card" style="margin-top:16px">
+      <div class="card-head">
+        <div>
+          <h3>Recent Members</h3>
+          <div class="meta">Registered in the last 14 days</div>
+        </div>
+        <div class="actions">
+          <button class="btn">Filter</button>
+          <button class="btn purple">+ Add Member</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Member</th><th>Organization</th><th>Joined</th><th>Sacraments</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div class="person"><div class="av a">AO</div><div><strong>Adwoa Owusu</strong><small>adwoa.o@gmail.com</small></div></div></td>
+            <td>Youth Ministry</td>
+            <td>Jun 04, 2026</td>
+            <td><span class="pill warn">Confirmation pending</span></td>
+            <td><span class="pill new">New</span></td>
+            <td>⋯</td>
+          </tr>
+          <tr>
+            <td><div class="person"><div class="av b">KM</div><div><strong>Kwabena Mensah</strong><small>kmensah@ktu.edu.gh</small></div></div></td>
+            <td>Choir</td>
+            <td>Jun 02, 2026</td>
+            <td><span class="pill ok">Baptized · Confirmed</span></td>
+            <td><span class="pill ok">Active</span></td>
+            <td>⋯</td>
+          </tr>
+          <tr>
+            <td><div class="person"><div class="av c">EA</div><div><strong>Efua Ankrah</strong><small>efua@example.com</small></div></div></td>
+            <td>Women's Fellowship</td>
+            <td>May 31, 2026</td>
+            <td><span class="pill ok">Full sacraments</span></td>
+            <td><span class="pill ok">Active</span></td>
+            <td>⋯</td>
+          </tr>
+          <tr>
+            <td><div class="person"><div class="av d">SN</div><div><strong>Samuel Nyarko</strong><small>snyarko@gmail.com</small></div></div></td>
+            <td>Catechism</td>
+            <td>May 29, 2026</td>
+            <td><span class="pill warn">Baptism only</span></td>
+            <td><span class="pill new">New</span></td>
+            <td>⋯</td>
+          </tr>
+          <tr>
+            <td><div class="person"><div class="av e">RA</div><div><strong>Richard Arthur</strong><small>richard.arthur@ktu.edu.gh</small></div></div></td>
+            <td>Administration</td>
+            <td>May 28, 2026</td>
+            <td><span class="pill ok">Full sacraments</span></td>
+            <td><span class="pill off">Admin</span></td>
+            <td>⋯</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+  </main>
+</div>
+</body>
+</html>
