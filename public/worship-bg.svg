@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice" role="img" aria-label="">
+  <defs>
+    <radialGradient id="skyGlow" cx="50%" cy="38%" r="65%">
+      <stop offset="0%" stop-color="#6db4ff" stop-opacity="0.95"/>
+      <stop offset="35%" stop-color="#2a6dd9" stop-opacity="0.7"/>
+      <stop offset="70%" stop-color="#0e2655" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#04122f" stop-opacity="1"/>
+    </radialGradient>
+
+    <radialGradient id="crossHalo" cx="50%" cy="42%" r="22%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="40%" stop-color="#8fd0ff" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#3a8fff" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="rayGrad" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#aee2ff" stop-opacity="0.55"/>
+      <stop offset="50%" stop-color="#5fb1ff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#5fb1ff" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="crossFill" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#eaf6ff"/>
+      <stop offset="50%" stop-color="#9ed4ff"/>
+      <stop offset="100%" stop-color="#6db4ff"/>
+    </linearGradient>
+
+    <filter id="softBlur" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+  </defs>
+
+  <!-- Night sky -->
+  <rect width="1200" height="800" fill="url(#skyGlow)"/>
+
+  <!-- Bokeh particles -->
+  <g opacity="0.55">
+    <circle cx="180"  cy="140" r="28" fill="#6db4ff" opacity="0.18"/>
+    <circle cx="320"  cy="220" r="14" fill="#aee2ff" opacity="0.28"/>
+    <circle cx="980"  cy="120" r="32" fill="#6db4ff" opacity="0.16"/>
+    <circle cx="1100" cy="260" r="20" fill="#aee2ff" opacity="0.22"/>
+    <circle cx="120"  cy="380" r="18" fill="#8fd0ff" opacity="0.22"/>
+    <circle cx="1070" cy="430" r="26" fill="#6db4ff" opacity="0.18"/>
+    <circle cx="240"  cy="500" r="12" fill="#aee2ff" opacity="0.30"/>
+    <circle cx="900"  cy="540" r="18" fill="#8fd0ff" opacity="0.24"/>
+    <circle cx="400"  cy="120" r="10" fill="#ffffff" opacity="0.35"/>
+    <circle cx="780"  cy="180" r="8"  fill="#ffffff" opacity="0.45"/>
+    <circle cx="540"  cy="80"  r="6"  fill="#ffffff" opacity="0.55"/>
+  </g>
+
+  <!-- Halo behind cross -->
+  <circle cx="600" cy="340" r="260" fill="url(#crossHalo)"/>
+
+  <!-- Light rays fanning from cross -->
+  <g opacity="0.85" transform="translate(600 360)">
+    <polygon points="-300,520 -60,0 60,0 300,520" fill="url(#rayGrad)" opacity="0.5"/>
+    <polygon points="-540,520 -100,0 100,0 540,520" fill="url(#rayGrad)" opacity="0.3"/>
+    <polygon points="-180,520 -30,0 30,0 180,520" fill="url(#rayGrad)" opacity="0.7"/>
+  </g>
+
+  <!-- Cross -->
+  <g>
+    <rect x="588" y="200" width="24" height="290" rx="2" fill="url(#crossFill)" filter="url(#softBlur)" opacity="0.6"/>
+    <rect x="528" y="298" width="144" height="24" rx="2" fill="url(#crossFill)" filter="url(#softBlur)" opacity="0.6"/>
+    <rect x="592" y="204" width="16" height="282" rx="2" fill="#eaf6ff"/>
+    <rect x="532" y="302" width="136" height="16" rx="2" fill="#eaf6ff"/>
+    <!-- inner brightness -->
+    <rect x="596" y="208" width="8" height="274" rx="1" fill="#ffffff" opacity="0.9"/>
+    <rect x="536" y="306" width="128" height="8"  rx="1" fill="#ffffff" opacity="0.9"/>
+  </g>
+
+  <!-- Silhouetted hands + heads at the bottom -->
+  <g fill="#020a1f">
+    <path d="M0 800 L0 720
+             C 40 700 80 690 120 700
+             L 140 660 L 160 700
+             C 200 690 220 700 230 720
+             L 250 680 L 270 720
+             C 300 700 340 700 360 720
+             L 380 670 L 400 720
+             C 440 700 480 690 520 720
+             L 540 660 L 560 720
+             C 580 700 620 700 640 720
+             L 660 660 L 680 720
+             C 720 700 760 700 780 720
+             L 800 670 L 820 720
+             C 860 700 900 690 940 720
+             L 960 670 L 980 720
+             C 1020 700 1060 710 1100 720
+             L 1120 670 L 1140 720
+             C 1170 710 1200 700 1200 720
+             L 1200 800 Z"/>
+
+    <!-- heads -->
+    <ellipse cx="100"  cy="710" rx="22" ry="18"/>
+    <ellipse cx="260"  cy="708" rx="20" ry="17"/>
+    <ellipse cx="420"  cy="712" rx="22" ry="19"/>
+    <ellipse cx="580"  cy="708" rx="24" ry="20"/>
+    <ellipse cx="740"  cy="710" rx="22" ry="18"/>
+    <ellipse cx="900"  cy="712" rx="20" ry="17"/>
+    <ellipse cx="1060" cy="708" rx="22" ry="18"/>
+  </g>
+
+  <!-- Subtle vignette -->
+  <radialGradient id="vignette" cx="50%" cy="50%" r="75%">
+    <stop offset="60%" stop-color="#000" stop-opacity="0"/>
+    <stop offset="100%" stop-color="#000" stop-opacity="0.45"/>
+  </radialGradient>
+  <rect width="1200" height="800" fill="url(#vignette)"/>
+</svg>
