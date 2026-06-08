@@ -49,8 +49,8 @@ module.exports.register = function register(app, ctx) {
     });
 
     const newForm = res.locals.isAdmin
-      ? `<details class="form-toggle" style="margin-bottom:1rem">
-           <summary><strong>+ Add an item</strong></summary>
+      ? `<details class="form-toggle" id="add-item" style="margin-bottom:1rem">
+           <summary><strong>＋ Add an item</strong></summary>
            <form class="form" method="post" action="/inventory" style="margin-top:0.75rem">
              <label class="wide">Name<input name="name" required></label>
              <label>Quantity<input type="number" name="quantity" min="0" value="0" required></label>
@@ -67,8 +67,8 @@ module.exports.register = function register(app, ctx) {
          </details>`
       : '';
     const newCategoryForm = res.locals.isAdmin
-      ? `<details class="form-toggle" style="margin-bottom:1rem">
-           <summary><strong>+ Create inventory category</strong></summary>
+      ? `<details class="form-toggle" id="add-category" style="margin-bottom:1rem">
+           <summary><strong>＋ Create inventory category</strong></summary>
            <form class="form" method="post" action="/inventory/categories" style="margin-top:0.75rem">
              <label class="wide">Category name<input name="name" placeholder="e.g. Instruments" required></label>
              <div class="actions"><button type="submit">Create category</button></div>
@@ -101,7 +101,12 @@ module.exports.register = function register(app, ctx) {
             </table>
           </section>`;
         }).join('')
-      : '<div class="empty-state"><div class="empty-ico">📦</div><p>No inventory items match your search.</p></div>';
+      : `<div class="empty-state">
+          <div class="empty-ico" aria-hidden="true">📦</div>
+          <h3>${q ? `No items match "${esc(q)}"` : 'No inventory items yet'}</h3>
+          <p>${q ? 'Try a different search term, or add a new item below.' : 'Track what your church owns. Use the form below to add your first item.'}</p>
+          ${q ? '<div style="margin-top:0.6rem"><a class="link" href="/inventory">Clear search →</a></div>' : ''}
+        </div>`;
 
     const totals = db.prepare(`SELECT COUNT(*) items, COALESCE(SUM(quantity),0) qty,
       COUNT(DISTINCT COALESCE(NULLIF(TRIM(category),''),'Uncategorized')) cats
@@ -111,7 +116,10 @@ module.exports.register = function register(app, ctx) {
       { cls: 'gold', icon: '📦', value: Number(totals.items).toLocaleString(), label: 'Items' },
       { cls: 'green', icon: '🗂', value: Number(totals.cats).toLocaleString(), label: 'Categories' },
       { cls: 'blue', icon: '#', value: Number(totals.qty).toLocaleString(), label: 'Total Quantity' },
-    ]);
+    ], res.locals.isAdmin
+      ? `<a class="btn primary" href="#add-item">＋ Add Item</a>
+         <a class="btn ghost" href="#add-category">＋ Category</a>`
+      : '');
     const filters = filterCard({ q, placeholder: 'Search items by name…' });
 
     res.page({
