@@ -83,30 +83,26 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.strictEqual(r.status, 302);
   const home = await get('/');
   assert.strictEqual(home.status, 200);
-  assert.match(home.body, /Dashboard/);
-  assert.match(home.body, /class="stat dashboard-clickable"/);
+  assert.match(home.body, /Welcome back/);
+  assert.match(home.body, /class="stat mockup-stat dashboard-clickable"/);
   assert.match(home.body, /Total Members/);
-  assert.match(home.body, /Sunday Attendance/);
-  assert.match(home.body, /Offerings This Month/);
-  assert.match(home.body, /Visitors This Month/);
+  assert.match(home.body, /Attendance · This Week/);
+  assert.match(home.body, /Offering · /);
+  assert.match(home.body, /Sacraments · YTD/);
   assert.match(home.body, /class="quick-drop"/);
-  assert.match(home.body, /class="dash-grid"/);
+  assert.match(home.body, /class="dash-grid mockup-grid"/);
   assert.match(home.body, /data-command-center="true"/);
-  assert.match(home.body, /class="page-date"/);
   assert.match(home.body, /data-card-href="\/finance"/);
-  assert.match(home.body, /data-card-href="\/reports"/);
+  assert.match(home.body, /data-card-href="\/sacraments"/);
   assert.match(home.body, /Day-born Groups/);
   assert.match(home.body, /Akan fellowship view/);
+  assert.match(home.body, /Recent Members/);
+  assert.match(home.body, /Attendance trend/);
   const cardOrder = [
-    'Giving Overview',
-    'Upcoming Events',
+    'Attendance trend',
+    'Upcoming',
     'Day-born Groups',
-    'Ministry Overview',
-    'Finance Summary',
-    'Attendance Overview',
-    'Birthdays This Month',
-    'Recent Activities',
-    'Pending Follow-ups',
+    'Recent Members',
   ].map((label) => home.body.indexOf(label));
   assert.ok(cardOrder.every((idx) => idx >= 0), 'dashboard should render every premium layout card');
   assert.deepStrictEqual([...cardOrder].sort((a, b) => a - b), cardOrder);

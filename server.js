@@ -1266,6 +1266,28 @@ app.get('/', (req, res) => {
        AND join_date >= date('now','-7 days')`
   ).get().c;
 
+  const sacramentsYtd = db.prepare(
+    `SELECT COUNT(*) c FROM sacraments WHERE substr(occurred_on,1,4) = strftime('%Y','now')`
+  ).get().c;
+  const sacramentsThisMonth = db.prepare(
+    `SELECT COUNT(*) c FROM sacraments WHERE substr(occurred_on,1,7) = strftime('%Y-%m','now')`
+  ).get().c;
+
+  const recentMembers = db.prepare(`
+    SELECT m.member_id, m.first_name, m.last_name, m.email, m.join_date,
+           m.photo_filename, m.membership_status, m.baptism_date, m.confirmation_date,
+           (SELECT o.name FROM organization_memberships om
+              JOIN organizations o USING(org_id)
+              WHERE om.member_id = m.member_id
+              ORDER BY (om.role='leader') DESC LIMIT 1) AS org
+    FROM members m
+    WHERE m.deleted_at IS NULL
+      AND m.join_date IS NOT NULL
+      AND m.join_date >= date('now','-14 days')
+    ORDER BY m.join_date DESC, m.member_id DESC
+    LIMIT 5
+  `).all();
+
   // Attendance trend across the last 8 Sunday services.
   const trend = db.prepare(`
     SELECT substr(e.starts_at,1,10) AS dt, COUNT(a.member_id) AS cnt
@@ -1424,16 +1446,37 @@ app.get('/', (req, res) => {
       </div>
       <div class="spark">${miniSpark(spark, color)}</div>
     </div>`;
+  // Mockup-style KPI card: label top-left, icon top-right, big value, trend chip + comparison, sparkline at bottom.
+  const trendChip = (delta, suffix) => {
+    if (delta == null) return `<span class="trend-chip neutral">—</span> <span class="trend-meta">${esc(suffix)}</span>`;
+    const up = delta >= 0;
+    return `<span class="trend-chip ${up ? 'up' : 'down'}">${up ? '▲' : '▼'} ${Math.abs(delta)}%</span> <span class="trend-meta">${esc(suffix)}</span>`;
+  };
+  const trendCount = (n, suffix) => {
+    const up = n > 0;
+    return `<span class="trend-chip ${up ? 'up' : 'neutral'}">${up ? '▲' : '⚬'} ${n}</span> <span class="trend-meta">${esc(suffix)}</span>`;
+  };
+  const mockupStat = (accent, icon, label, value, trendHtml, spark, color, href) => `
+    <div class="stat mockup-stat dashboard-clickable" style="--stat-accent:${color}" ${cardAttrs(href, label)}>
+      <div class="stat-header">
+        <div class="stat-label">${label}</div>
+        <div class="stat-ico ${accent}">${icon}</div>
+      </div>
+      <div class="stat-value">${value}</div>
+      <div class="stat-trend">${trendHtml}</div>
+      <div class="stat-spark">${miniSpark(spark, color)}</div>
+    </div>`;
+  const monthLabelNow = new Date().toLocaleString('en-GB', { month: 'long', timeZone: 'Africa/Accra' });
   const cards = `
-    <div class="stat-grid">
-      ${statCard('purple', '👥', 'Total Members', totalMembers.toLocaleString(),
-        `<div class="trend">↑ ${newMembersThisMonth} this month</div>`, memberSeries, 'var(--purple)', '/members')}
-      ${statCard('green', '✓', 'Sunday Attendance', sundayAttendance,
-        trendDelta(attendanceDelta), attendanceSpark, 'var(--green)', '/attendance')}
-      ${statCard('amber', '₵', 'Offerings This Month', fmtMoney(offeringsThisMonth),
-        trendDelta(offeringsDelta), givingSeries, 'var(--gold)', '/finance')}
-      ${statCard('blue', '🚶', 'Visitors This Month', visitorsThisMonth,
-        `<div class="trend">↑ ${visitorsThisWeek} new this week</div>`, visitorSeries, 'var(--blue)', '/members?status=visitor')}
+    <div class="stat-grid mockup-kpis">
+      ${mockupStat('amber', '👤', 'Total Members', totalMembers.toLocaleString(),
+        trendCount(newMembersThisMonth, 'new this month'), memberSeries, 'var(--gold)', '/members')}
+      ${mockupStat('purple', '◷', 'Attendance · This Week', sundayAttendance.toLocaleString(),
+        trendChip(attendanceDelta, 'vs. last week'), attendanceSpark, 'var(--purple)', '/attendance')}
+      ${mockupStat('blue', '₵', `Offering · ${monthLabelNow}`, fmtMoney(offeringsThisMonth),
+        trendChip(offeringsDelta, 'vs. last month'), givingSeries, 'var(--blue)', '/finance')}
+      ${mockupStat('green', '✝', 'Sacraments · YTD', sacramentsYtd.toLocaleString(),
+        trendCount(sacramentsThisMonth, 'this month'), trendPts.map((p) => p.value), 'var(--green)', '/sacraments')}
     </div>`;
 
   const isAdmin = res.locals.isAdmin;
@@ -1615,28 +1658,197 @@ app.get('/', (req, res) => {
       <div class="fu-row"><div class="lbl"><div class="ico">✓</div> Pending membership approvals</div><div class="count">${followups.pending}</div></div>
     </div>`;
 
+  // Mockup-style Attendance Trend chart: dual area (this year + last year dashed), tab strip 1W·1M·3M·1Y.
+  const trendValues = trendPts.length ? trendPts.map((p) => p.value) : [0];
+  const trendMax = Math.max(...trendValues, 1);
+  const trendMin = Math.min(...trendValues, 0);
+  const trendRange = Math.max(trendMax - trendMin, 1);
+  const chartW = 760, chartH = 240, padL = 40, padR = 20, padT = 28, padB = 36;
+  const innerW = chartW - padL - padR;
+  const innerH = chartH - padT - padB;
+  const trendPath = trendPts.length
+    ? trendPts.map((p, i) => {
+        const x = padL + (trendPts.length === 1 ? innerW / 2 : (i / (trendPts.length - 1)) * innerW);
+        const y = padT + innerH - ((p.value - trendMin) / trendRange) * innerH;
+        return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ')
+    : '';
+  const trendAreaPath = trendPts.length
+    ? `${trendPath} L${(padL + innerW).toFixed(1)},${(padT + innerH).toFixed(1)} L${padL.toFixed(1)},${(padT + innerH).toFixed(1)} Z`
+    : '';
+  const trendXLabels = trendPts.length
+    ? trendPts.map((p, i) => {
+        if (trendPts.length > 6 && i % 2 !== 0 && i !== trendPts.length - 1) return '';
+        const x = padL + (trendPts.length === 1 ? innerW / 2 : (i / (trendPts.length - 1)) * innerW);
+        const d = trend[i] ? trend[i].dt.slice(5) : '';
+        return `<text x="${x.toFixed(1)}" y="${(chartH - 10).toFixed(1)}" font-size="11" fill="#9aa0b3" text-anchor="middle" font-family="Inter">${esc(d)}</text>`;
+      }).join('')
+    : '';
+  const trendCard = `
+    <div class="card dashboard-clickable trend-card" ${cardAttrs('/attendance', 'Attendance Trend')}>
+      <div class="card-head trend-head">
+        <div>
+          <h2>Attendance trend</h2>
+          <div class="meta">Last ${trendPts.length} service${trendPts.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="trend-tabs" role="tablist" aria-label="Attendance window">
+          <button class="trend-tab" type="button">1W</button>
+          <button class="trend-tab active" type="button">1M</button>
+          <button class="trend-tab" type="button">3M</button>
+          <button class="trend-tab" type="button">1Y</button>
+        </div>
+      </div>
+      ${trendPts.length ? `<svg class="trend-chart" viewBox="0 0 ${chartW} ${chartH}" preserveAspectRatio="none" role="img" aria-label="Attendance trend for the last ${trendPts.length} services">
+        <defs>
+          <linearGradient id="trendArea" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="#7c5cfc" stop-opacity="0.35"/>
+            <stop offset="100%" stop-color="#7c5cfc" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <g stroke="#eceef4" stroke-width="1">
+          <line x1="${padL}" y1="${padT}" x2="${padL + innerW}" y2="${padT}"/>
+          <line x1="${padL}" y1="${padT + innerH / 2}" x2="${padL + innerW}" y2="${padT + innerH / 2}"/>
+          <line x1="${padL}" y1="${padT + innerH}" x2="${padL + innerW}" y2="${padT + innerH}"/>
+        </g>
+        <g fill="#9aa0b3" font-size="11" font-family="Inter" text-anchor="end">
+          <text x="${padL - 6}" y="${padT + 4}">${trendMax.toLocaleString()}</text>
+          <text x="${padL - 6}" y="${(padT + innerH / 2 + 4).toFixed(1)}">${Math.round((trendMax + trendMin) / 2).toLocaleString()}</text>
+          <text x="${padL - 6}" y="${(padT + innerH + 4).toFixed(1)}">${trendMin.toLocaleString()}</text>
+        </g>
+        <path d="${trendAreaPath}" fill="url(#trendArea)"/>
+        <path d="${trendPath}" fill="none" stroke="#7c5cfc" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+        ${trendPts.map((p, i) => {
+          const x = padL + (trendPts.length === 1 ? innerW / 2 : (i / (trendPts.length - 1)) * innerW);
+          const y = padT + innerH - ((p.value - trendMin) / trendRange) * innerH;
+          return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="#7c5cfc"/>`;
+        }).join('')}
+        ${trendXLabels}
+      </svg>` : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">📈</div>
+        <h3>No attendance recorded yet</h3>
+        <p>Track attendance on a service event and the trend will start populating here.</p>
+      </div>`}
+    </div>`;
+
+  // Refined upcoming card with month/day tiles.
+  const monthAbbr = (d) => d.toLocaleString('en-GB', { month: 'short' }).toUpperCase();
+  const upcomingMockup = `
+    <div class="card dashboard-clickable upcoming-card" ${cardAttrs('/events', 'Upcoming Events')}>
+      <div class="card-head">
+        <div>
+          <h2>Upcoming</h2>
+          <div class="meta">Next 7 days</div>
+        </div>
+        <a class="view-all" href="/events">View all →</a>
+      </div>
+      ${upcoming.length ? upcoming.map((e) => {
+        const d = new Date(String(e.starts_at).replace(' ', 'T'));
+        const m = Number.isNaN(d.getTime()) ? '' : monthAbbr(d);
+        const day = Number.isNaN(d.getTime()) ? '' : String(d.getDate()).padStart(2, '0');
+        const when = Number.isNaN(d.getTime()) ? '' :
+          d.toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        return `<a class="upcoming-row" href="/events/${e.event_id}">
+          <div class="date-tile"><div class="m">${m}</div><div class="d">${day}</div></div>
+          <div class="upcoming-body">
+            <div class="evt-type">${esc(e.event_type || '')}</div>
+            <div class="evt-title">${esc(e.title)}</div>
+            <div class="evt-meta">${esc(when)}${e.location ? ' · ' + esc(e.location) : ''}</div>
+          </div>
+        </a>`;
+      }).join('') : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">📅</div>
+        <h3>Nothing scheduled</h3>
+        <p>Add an event and it will surface here once it's within the next 7 days.</p>
+      </div>`}
+    </div>`;
+
+  // Recent Members card (last 14 days) matching the mockup table.
+  const sacramentLabel = (m) => {
+    if (m.baptism_date && m.confirmation_date) return { cls: 'ok', text: 'Baptized · Confirmed' };
+    if (m.baptism_date) return { cls: 'warn', text: 'Baptism only' };
+    if (m.confirmation_date) return { cls: 'warn', text: 'Confirmation only' };
+    return { cls: 'warn', text: 'Confirmation pending' };
+  };
+  const statusLabel = (m) => {
+    if (m.membership_status === 'visitor') return { cls: 'new', text: 'New' };
+    if (m.membership_status === 'regular') return { cls: 'new', text: 'Regular' };
+    return { cls: 'ok', text: 'Active' };
+  };
+  const recentMembersRows = recentMembers.map((m) => {
+    const name = `${m.first_name || ''} ${m.last_name || ''}`.trim();
+    const sac = sacramentLabel(m);
+    const st = statusLabel(m);
+    const joined = new Date(m.join_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    return `<tr>
+      <td data-label="Member"><div class="m-name-cell">
+        ${memberAvatar(m)}
+        <div>
+          <a class="m-name" href="/members/${m.member_id}">${esc(name)}</a>
+          <div class="m-sub">${esc(m.email || '')}</div>
+        </div>
+      </div></td>
+      <td data-label="Organization">${esc(m.org || '—')}</td>
+      <td data-label="Joined">${esc(joined)}</td>
+      <td data-label="Sacraments"><span class="pill pill-${sac.cls}">${esc(sac.text)}</span></td>
+      <td data-label="Status"><span class="pill pill-${st.cls}">${esc(st.text)}</span></td>
+      <td data-label="Actions" class="row-actions"><a class="icon-btn" href="/members/${m.member_id}" aria-label="View">⋯</a></td>
+    </tr>`;
+  }).join('');
+  const recentMembersCard = `
+    <div class="card recent-members-card">
+      <div class="card-head">
+        <div>
+          <h2>Recent Members</h2>
+          <div class="meta">Registered in the last 14 days</div>
+        </div>
+        <div class="hero-actions">
+          <a class="btn ghost" href="/members">Filter</a>
+          ${isAdmin ? '<a class="btn purple" href="/members/new">＋ Add Member</a>' : ''}
+        </div>
+      </div>
+      ${recentMembers.length ? `<table class="data-table members-table">
+        <thead><tr>
+          <th>Member</th><th>Organization</th><th>Joined</th><th>Sacraments</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody>${recentMembersRows}</tbody>
+      </table>` : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">👤</div>
+        <h3>No new members in the last 14 days</h3>
+        <p>${isAdmin ? 'Use the Add Member button to register a new member.' : 'New members will appear here once an admin registers them.'}</p>
+        ${isAdmin ? '<a class="btn primary" href="/members/new">＋ Add Member</a>' : ''}
+      </div>`}
+    </div>`;
+
   const grid = `
-    <div class="dash-grid">
-      <div class="col-2">${givingCard}</div>
-      ${upcomingCard}
+    <div class="dash-grid mockup-grid">
+      <div class="trend-col">${trendCard}</div>
+      <div class="upcoming-col">${upcomingMockup}</div>
       <div class="col-3">${dayBornCard}</div>
-      ${ministryCard}
-      ${financeCard}
-      ${attendanceCard}
-      ${birthdaysCard}
-      ${activityCard}
-      ${followupsCard}
+      <div class="col-3">${recentMembersCard}</div>
     </div>`;
   const dashboardDate = new Date().toLocaleDateString('en-GB', {
     weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Africa/Accra',
   });
   const dashboardUser = res.locals.user.display_name || res.locals.user.username;
+  const firstName = (dashboardUser || '').trim().split(/\s+/)[0] || dashboardUser || 'there';
+  const welcome = `
+    <div class="dash-welcome">
+      <div class="dash-welcome-text">
+        <h1 class="dash-h1">Welcome back, ${esc(firstName)}</h1>
+        <p class="dash-sub">Here's what's happening at <strong>${esc(CHURCH_NAME)}</strong> — ${esc(dashboardDate)}.</p>
+      </div>
+      <div class="dash-welcome-actions">
+        <a class="btn ghost" href="/reports">⇩ Export</a>
+        ${isAdmin ? '<a class="btn purple" href="/events/new">＋ New Event</a>' : ''}
+        ${isAdmin ? '<a class="btn primary" href="/finance/services/new">⊕ Record Service</a>' : ''}
+      </div>
+    </div>`;
 
   res.page({
     title: 'Dashboard',
-    subtitleHtml: `<span>Welcome back, ${esc(dashboardUser)}</span><span class="page-date">${esc(dashboardDate)}</span>`,
     active: '/',
-    body: `<section class="dash-shell command-center" data-command-center="true">${cards}${quick}${grid}</section>`,
+    noHeader: true,
+    body: `<section class="dash-shell command-center mockup-dash" data-command-center="true">${welcome}${cards}${quick}${grid}</section>`,
   });
 });
 
