@@ -1273,6 +1273,44 @@ app.get('/', (req, res) => {
     `SELECT COUNT(*) c FROM sacraments WHERE substr(occurred_on,1,7) = strftime('%Y-%m','now')`
   ).get().c;
 
+  // Birthdays in the next 7 days (today inclusive). Uses a day-of-year window
+  // that wraps year-end so late-December queries still surface early-January.
+  const birthdaysThisWeek = db.prepare(`
+    SELECT COUNT(*) c FROM members
+    WHERE deleted_at IS NULL AND date_of_birth IS NOT NULL
+      AND (
+        strftime('%j', date_of_birth) BETWEEN strftime('%j','now') AND strftime('%j', date('now','+7 days'))
+        OR (
+          strftime('%j','now') > strftime('%j', date('now','+7 days'))
+          AND (
+            strftime('%j', date_of_birth) >= strftime('%j','now')
+            OR strftime('%j', date_of_birth) <= strftime('%j', date('now','+7 days'))
+          )
+        )
+      )
+  `).get().c;
+  const birthdaysToday = db.prepare(`
+    SELECT COUNT(*) c FROM members
+    WHERE deleted_at IS NULL AND date_of_birth IS NOT NULL
+      AND strftime('%m-%d', date_of_birth) = strftime('%m-%d','now')
+  `).get().c;
+  // Per-day birthday counts across the next 7 days, used to draw a sparkline
+  // for the Birthdays KPI card.
+  const birthdaysWeekSpark = (() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const counts = [];
+    const stmt = db.prepare(`SELECT COUNT(*) c FROM members
+      WHERE deleted_at IS NULL AND date_of_birth IS NOT NULL
+        AND strftime('%m-%d', date_of_birth) = ?`);
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today.getTime() + i * 86400000);
+      const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      counts.push(stmt.get(md).c);
+    }
+    return counts;
+  })();
+
   const recentMembers = db.prepare(`
     SELECT m.member_id, m.first_name, m.last_name, m.email, m.join_date,
            m.photo_filename, m.membership_status, m.baptism_date, m.confirmation_date,
@@ -1475,8 +1513,11 @@ app.get('/', (req, res) => {
         trendChip(attendanceDelta, 'vs. last week'), attendanceSpark, 'var(--purple)', '/attendance')}
       ${mockupStat('blue', '₵', `Offering · ${monthLabelNow}`, fmtMoney(offeringsThisMonth),
         trendChip(offeringsDelta, 'vs. last month'), givingSeries, 'var(--blue)', '/finance')}
-      ${mockupStat('green', '✝', 'Sacraments · YTD', sacramentsYtd.toLocaleString(),
-        trendCount(sacramentsThisMonth, 'this month'), trendPts.map((p) => p.value), 'var(--green)', '/sacraments')}
+      ${mockupStat('green', '🎂', 'Birthdays · This Week', birthdaysThisWeek.toLocaleString(),
+        birthdaysToday > 0
+          ? `<span class="trend-chip up">🎂 ${birthdaysToday}</span> <span class="trend-meta">${birthdaysToday === 1 ? 'birthday today' : 'birthdays today'}</span>`
+          : `<span class="trend-chip neutral">—</span> <span class="trend-meta">next 7 days</span>`,
+        birthdaysWeekSpark, 'var(--green)', '/members')}
     </div>`;
 
   const isAdmin = res.locals.isAdmin;
@@ -1832,10 +1873,11 @@ app.get('/', (req, res) => {
   const dashboardUser = res.locals.user.display_name || res.locals.user.username;
   const firstName = (dashboardUser || '').trim().split(/\s+/)[0] || dashboardUser || 'there';
   const welcome = `
-    <div class="dash-welcome">
+    <div class="dash-welcome dash-welcome-cover" aria-hidden="false">
       <div class="dash-welcome-text">
+        <div class="dash-welcome-kicker">Today · ${esc(dashboardDate)}</div>
         <h1 class="dash-h1">Welcome back, ${esc(firstName)}</h1>
-        <p class="dash-sub">Here's what's happening at <strong>${esc(CHURCH_NAME)}</strong> — ${esc(dashboardDate)}.</p>
+        <p class="dash-sub">Here's what's happening at <strong>${esc(CHURCH_NAME)}</strong>.</p>
       </div>
       <div class="dash-welcome-actions">
         <a class="btn ghost" href="/reports">⇩ Export</a>

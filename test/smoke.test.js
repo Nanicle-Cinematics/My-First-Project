@@ -88,12 +88,12 @@ test('setup form carries a CSRF token and creates the admin', async () => {
   assert.match(home.body, /Total Members/);
   assert.match(home.body, /Attendance · This Week/);
   assert.match(home.body, /Offering · /);
-  assert.match(home.body, /Sacraments · YTD/);
+  assert.match(home.body, /Birthdays · This Week/);
   assert.match(home.body, /class="quick-drop"/);
   assert.match(home.body, /class="dash-grid mockup-grid"/);
   assert.match(home.body, /data-command-center="true"/);
   assert.match(home.body, /data-card-href="\/finance"/);
-  assert.match(home.body, /data-card-href="\/sacraments"/);
+  assert.match(home.body, /data-card-href="\/members"/);
   assert.match(home.body, /Day-born Groups/);
   assert.match(home.body, /Akan fellowship view/);
   assert.match(home.body, /Recent Members/);
