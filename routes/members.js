@@ -307,7 +307,10 @@ function memberForm(member = {}, bibleClasses = [], organizations = [], memberOr
       <label>Contact phone<input name="emergency_contact_phone" value="${esc(member.emergency_contact_phone)}"></label>
       <label>Relationship<input name="emergency_contact_relation" placeholder="e.g. spouse, parent, sibling" value="${esc(member.emergency_contact_relation)}"></label>
       <label class="wide">Notes<textarea name="notes" rows="3">${esc(member.notes)}</textarea></label>
-      <div class="actions"><button type="submit">Save</button></div>
+      <div class="actions form-actions">
+        <a class="btn ghost" href="/members">Cancel</a>
+        <button type="submit">Save member</button>
+      </div>
     </form>`;
 }
 
