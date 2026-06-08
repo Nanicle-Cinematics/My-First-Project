@@ -1894,17 +1894,21 @@ app.get('/backups', requireOwner, (req, res) => {
           </div></td>
         </tr>`).join('')}</tbody>
       </table>`
-    : '<div class="empty-state"><div class="empty-ico">💾</div><p>No backups yet. Create one below.</p></div>';
+    : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">💾</div>
+        <h3>No backups yet</h3>
+        <p>Create your first snapshot of the church database below. Keep at least one off-site copy.</p>
+      </div>`;
 
   const tools = `
     <div class="card" style="margin-bottom:1rem">
       <div class="card-head"><h2>Create &amp; restore</h2></div>
       <div class="filter-bar">
-        <form method="post" action="/backups/create"><button type="submit">＋ Create backup now</button></form>
+        <form method="post" action="/backups/create"><button class="btn primary" type="submit">＋ Create backup now</button></form>
         <form method="post" action="/backups/restore-upload" enctype="multipart/form-data" class="filter-bar" style="margin:0"
               onsubmit="return confirm('Restore from the uploaded file on next restart? The current database is copied aside first.')">
           <input type="file" name="backup" accept=".db,.sqlite,application/octet-stream" required>
-          <button class="ghost" type="submit">Upload &amp; stage restore</button>
+          <button class="btn ghost" type="submit">Upload &amp; stage restore</button>
         </form>
       </div>
       <p class="muted-text" style="margin:0.6rem 0 0">Restores are applied safely on the next app restart. Keep downloaded copies off-site.</p>
@@ -1920,7 +1924,7 @@ app.get('/backups', requireOwner, (req, res) => {
         { cls: process.env.BACKUP_UPLOAD_URL ? 'green' : 'orange', icon: '↗', value: offsite, label: 'Off-site Upload' },
       ])}
       ${tools}
-      ${listCard({ title: '💾 Available Backups', count: backups.length, countLabel: 'files', inner: rows })}`,
+      ${listCard({ title: 'Available Backups', count: backups.length, countLabel: 'files', inner: rows })}`,
   });
 });
 
@@ -2165,7 +2169,7 @@ app.get('/users', requireOwner, (req, res) => {
     <p class="muted-text">Any administrator can set a user's access level (read/write jurisdiction):
       <strong>Admin</strong> = full read &amp; write; <strong>Viewer</strong> = read-only.
       Only the main administrator (<strong>dunwelladmin</strong>) can add or delete user accounts and reset passwords.</p>
-    ${res.locals.isUserManager ? '<p><a class="btn" href="/users/new">+ New user</a></p>' : ''}
+    ${res.locals.isUserManager ? '<div class="page-actions"><a class="btn primary" href="/users/new">＋ New user</a></div>' : ''}
     ${table(['Username', 'Display name', 'Role', 'Created', 'Actions'], rows)}`;
   res.page({ title: 'Users', active: '/users', noHeader: true, body });
 });
@@ -2182,9 +2186,12 @@ app.get('/users/new', requireUserManager, (req, res) => {
         <option value="viewer" selected>viewer (read-only)</option>
       </select>
       <span class="hint">Admins manage everything incl. users, backups &amp; settings. Editors manage records but not those admin areas. Viewers are read-only.</span></label>
-      <div class="actions"><button type="submit">Create user</button></div>
+      <div class="actions form-actions">
+        <a class="btn ghost" href="/users">Cancel</a>
+        <button type="submit">Create user</button>
+      </div>
     </form>`;
-  res.page({ title: 'New user', body });
+  res.page({ title: 'New user', active: '/users', body });
 });
 
 app.post('/users', requireUserManager, (req, res) => {
@@ -2458,11 +2465,15 @@ app.get('/errors', requireOwner, (req, res) => {
           <td data-label="Request"><code>${esc(r.method || '')} ${esc(r.path || '')}</code></td>
           <td data-label="Message">${esc(r.message || '')}</td>
         </tr>`).join('')}</tbody></table>`
-    : '<div class="empty-state"><div class="empty-ico">✓</div><p>No errors logged. All clear.</p></div>';
+    : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">✓</div>
+        <h3>All clear</h3>
+        <p>No errors have been logged. If something does go wrong, the request and stack trace will land here.</p>
+      </div>`;
   res.page({
     title: 'Error Log', active: null, noHeader: true,
     body: `${pageHero('Error Log', 'The 100 most recent server errors captured by the app.')}
-      ${listCard({ title: '⚠ Recent Errors', count: rows.length, countLabel: 'logged', inner })}`,
+      ${listCard({ title: 'Recent Errors', count: rows.length, countLabel: 'logged', inner })}`,
   });
 });
 app.post('/errors/clear', requireOwner, (req, res) => {
