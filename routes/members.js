@@ -100,7 +100,7 @@ app.get('/members', (req, res) => {
     { cls: 'gold', icon: '👥', value: totalMembers.toLocaleString(), label: 'Total Members' },
     { cls: 'green', icon: '✓', value: activeMembers.toLocaleString(), label: 'Active' },
     { cls: 'blue', icon: '＋', value: newMembers.toLocaleString(), label: 'New (30d)' },
-  ], `${isAdmin ? `<a class="btn" href="/members/new">👤＋ Add New Member</a>` : ''}
+  ], `${isAdmin ? `<a class="btn primary" href="/members/new">＋ Add New Member</a>` : ''}
       <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>`);
   const filters = filterCard({
     q, placeholder: 'Search members by name, ID, email or phone…',
@@ -167,16 +167,18 @@ app.get('/members', (req, res) => {
       <button type="submit">Apply</button>
     </form>` : '';
   const list = listCard({
-    title: '👥 Members List', count: matched, countLabel: 'members',
+    title: 'Members List', count: matched, countLabel: 'members',
     note: 'Results update as you search and filter',
     inner: rows.length ? `${bulkBar}<table class="data-table members-table"${isAdmin ? ' data-bulk' : ''}>
         <thead><tr>${isAdmin ? '<th class="bulk-cell"><input type="checkbox" class="bulk-all" aria-label="Select all"></th>' : ''}<th>Name</th><th>Contact</th><th>Day Name</th><th>Group</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
       </table>
       ${pager('/members', { q, status, class: classId }, page, pages)}` : `<div class="empty-state">
-        <div class="empty-ico">👥</div>
-        <p>No members match your search.</p>
-        ${isAdmin ? '<a class="btn" href="/members/new">👤＋ Add New Member</a>' : ''}
+        <div class="empty-ico" aria-hidden="true">👥</div>
+        <h3>${q || classId || status ? 'No members match your search' : 'No members yet'}</h3>
+        <p>${q || classId || status ? 'Try clearing filters or searching by phone number.' : 'Add your first member and the directory will start populating.'}</p>
+        ${isAdmin ? '<a class="btn primary" href="/members/new">＋ Add New Member</a>' : ''}
+        ${q || classId || status ? '<div style="margin-top:0.6rem"><a class="link" href="/members">Clear filters →</a></div>' : ''}
       </div>`,
   });
 
