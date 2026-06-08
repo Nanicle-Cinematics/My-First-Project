@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Components · Church Manager Design System</title>
+<link rel="stylesheet" href="../public/styles.css">
+<style>
+  /* Gallery-only styles — never moved into styles.css */
+  :root {
+    --gx-bg: #f6f7fb;
+    --gx-panel: #ffffff;
+    --gx-border: #ececf1;
+    --gx-ink: #1f2433;
+    --gx-muted: #5f6675;
+  }
+  :root[data-theme="dark"] {
+    --gx-bg: #0d1320;
+    --gx-panel: #171d2b;
+    --gx-border: #2a3142;
+    --gx-ink: #e7e9f0;
+    --gx-muted: #98a0b3;
+  }
+  body {
+    margin: 0;
+    background: var(--gx-bg);
+    color: var(--gx-ink);
+  }
+  .gx-shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+  .gx-toc {
+    position: sticky; top: 0; align-self: start; height: 100vh;
+    background: var(--gx-panel); border-right: 1px solid var(--gx-border);
+    padding: 1.4rem 1rem 1.4rem 1.6rem; overflow-y: auto;
+  }
+  .gx-toc h1 {
+    font-family: "Plus Jakarta Sans", "Inter", sans-serif;
+    font-size: 0.92rem; letter-spacing: -0.012em; margin: 0 0 .4rem;
+  }
+  .gx-toc .sub {
+    font-size: 0.7rem; color: var(--gx-muted); letter-spacing: 0.12em;
+    text-transform: uppercase; font-weight: 700; margin-bottom: 1rem;
+  }
+  .gx-toc a {
+    display: block; padding: 0.32rem 0.5rem; border-radius: 8px;
+    color: var(--gx-muted); font-size: 0.84rem; font-weight: 600;
+    text-decoration: none; line-height: 1.4;
+  }
+  .gx-toc a:hover { background: rgba(124, 92, 252, 0.06); color: var(--gx-ink); }
+  .gx-toc .group {
+    margin: 0.9rem 0 0.3rem; font-size: 0.62rem;
+    letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700;
+    color: var(--gx-muted); opacity: 0.6;
+  }
+  .gx-main { padding: 2rem 2.4rem 6rem; max-width: 1200px; }
+  .gx-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 1.6rem; }
+  .gx-head h1 {
+    font-family: "Plus Jakarta Sans","Inter",sans-serif; font-weight: 800;
+    font-size: 1.85rem; letter-spacing: -0.025em; margin: 0;
+  }
+  .gx-head p { color: var(--gx-muted); margin: 0.4rem 0 0; font-size: 0.94rem; }
+  .gx-theme {
+    background: var(--gx-panel); border: 1px solid var(--gx-border);
+    border-radius: 10px; padding: 0.4rem 0.7rem; font-size: 0.82rem;
+    font-weight: 600; cursor: pointer; color: var(--gx-ink);
+  }
+  .gx-section { margin: 2.4rem 0 0; scroll-margin-top: 1.5rem; }
+  .gx-section h2 {
+    font-family: "Plus Jakarta Sans","Inter",sans-serif; font-weight: 800;
+    font-size: 1.25rem; letter-spacing: -0.022em; margin: 0 0 0.3rem;
+    display: flex; align-items: baseline; gap: 0.6rem;
+  }
+  .gx-section h2 .anchor {
+    font-size: 0.66rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--gx-muted); font-weight: 700;
+  }
+  .gx-section > p { color: var(--gx-muted); margin: 0 0 1rem; font-size: 0.92rem; }
+  .gx-card {
+    background: var(--gx-panel); border: 1px solid var(--gx-border);
+    border-radius: 18px; padding: 1.6rem; margin-bottom: 1rem;
+  }
+  .gx-row { display: flex; gap: 0.8rem; flex-wrap: wrap; align-items: center; }
+  .gx-grid { display: grid; gap: 0.8rem; }
+  .gx-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .gx-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .gx-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+  .gx-grid.cols-7 { grid-template-columns: repeat(7, minmax(0,1fr)); }
+  .gx-label {
+    font-size: 0.66rem; letter-spacing: 0.14em; text-transform: uppercase;
+    font-weight: 700; color: var(--gx-muted); margin: 0 0 0.6rem;
+  }
+  .gx-code {
+    background: rgba(15, 23, 42, 0.04);
+    border-radius: 8px; padding: 0.5rem 0.7rem;
+    font: 0.78rem/1.5 "JetBrains Mono", ui-monospace, monospace;
+    color: var(--gx-ink); margin-top: 0.7rem; overflow-x: auto;
+  }
+  :root[data-theme="dark"] .gx-code { background: rgba(255, 255, 255, 0.05); }
+  .gx-swatch {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .gx-swatch .chip {
+    height: 64px; border-radius: 12px; border: 1px solid var(--gx-border);
+    display: flex; align-items: end; justify-content: end;
+    padding: 0.5rem; font: 700 0.66rem/1 "Inter", sans-serif;
+    color: rgba(255,255,255,0.92); text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  }
+  .gx-swatch .name { font-weight: 650; font-size: 0.78rem; }
+  .gx-swatch .hex {
+    font: 0.7rem/1.4 "JetBrains Mono", monospace;
+    color: var(--gx-muted);
+  }
+  .gx-type-row {
+    display: grid; grid-template-columns: 110px 1fr 130px;
+    align-items: baseline; gap: 1rem;
+    padding: 0.6rem 0; border-bottom: 1px dashed var(--gx-border);
+  }
+  .gx-type-row .meta {
+    font: 0.7rem/1.3 "JetBrains Mono", monospace; color: var(--gx-muted);
+  }
+  .gx-spacer-bar { background: linear-gradient(90deg, #d4a017, #7c5cfc); height: 12px; border-radius: 4px; }
+  .gx-shadow {
+    background: var(--gx-panel); border-radius: 14px;
+    height: 80px; display: flex; align-items: center; justify-content: center;
+    font: 700 0.74rem/1 "Inter", sans-serif; color: var(--gx-muted);
+    border: 1px solid var(--gx-border);
+  }
+  /* Mini wrapper for stat/hero demos so the gallery sandbox styles don't clobber them */
+  .gx-stat-demo {
+    background: var(--gx-panel); border: 1px solid var(--gx-border);
+    border-radius: 20px; padding: 1.25rem; box-shadow: 0 2px 6px rgba(30,36,60,.05);
+    position: relative; overflow: hidden;
+  }
+  .gx-stat-demo::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+    background: var(--c, var(--purple));
+  }
+  .gx-stat-demo .label {
+    font-size: 0.74rem; font-weight: 650; color: var(--gx-muted);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .gx-stat-demo .ico {
+    width: 36px; height: 36px; border-radius: 10px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 1rem; background: var(--ico-bg, rgba(124,92,252,0.12));
+    color: var(--ico-fg, #6240e0);
+  }
+  .gx-stat-demo .value {
+    font-family: "Plus Jakarta Sans", sans-serif; font-weight: 800;
+    font-size: 1.75rem; letter-spacing: -0.028em; line-height: 1.1;
+    margin: 0.2rem 0 0.1rem; font-variant-numeric: tabular-nums;
+  }
+  .gx-stat-demo .trend {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 0.7rem; font-weight: 700; padding: 0.18rem 0.5rem;
+    border-radius: 999px; background: #dcfce7; color: #106a31;
+  }
+  .gx-stat-demo .trend.down { background: #fde8e8; color: #9f1239; }
+  .gx-spark {
+    width: 100%; height: 36px; margin-top: 0.6rem; display: block;
+  }
+  /* Gallery button gallery uses real .btn from styles.css */
+  .gx-btnrow { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+  /* Avatar demo */
+  .gx-av {
+    width: 34px; height: 34px; border-radius: 50%; color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font: 700 0.78rem/1 "Plus Jakarta Sans", sans-serif;
+  }
+  .gx-av.a { background: linear-gradient(135deg,#7c5cfc,#4a2fb0); }
+  .gx-av.b { background: linear-gradient(135deg,#d4a017,#b9890b); color: #2a2205; }
+  .gx-av.c { background: linear-gradient(135deg,#16a34a,#0a7a36); }
+  .gx-av.d { background: linear-gradient(135deg,#3b82f6,#1d4ed8); }
+  .gx-av.e { background: linear-gradient(135deg,#e11d48,#9f1239); }
+  /* Day-card demo */
+  .gx-day {
+    background: var(--gx-panel); border: 1px solid var(--gx-border);
+    border-radius: 14px; padding: 0.95rem 0.85rem; position: relative; overflow: hidden;
+    transition: transform 200ms cubic-bezier(0.4,0,0.2,1), box-shadow 200ms cubic-bezier(0.4,0,0.2,1);
+  }
+  .gx-day::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+    background: linear-gradient(90deg, #d4a017, #7c5cfc);
+  }
+  .gx-day:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 12px 28px -10px rgba(30,36,60,.14), 0 4px 10px -4px rgba(30,36,60,.06);
+  }
+  .gx-day .d-name {
+    font-family: "Plus Jakarta Sans", sans-serif; font-weight: 800;
+    font-size: 0.92rem; letter-spacing: -0.012em;
+  }
+  .gx-day .d-akan { font-size: 0.7rem; color: var(--gx-muted); margin-top: 2px; }
+  .gx-day .d-count {
+    font-family: "Plus Jakarta Sans", sans-serif; font-weight: 800;
+    font-size: 1.55rem; letter-spacing: -0.025em; margin-top: 0.8rem; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .gx-day .d-mlabel {
+    font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase;
+    font-weight: 700; color: var(--gx-muted); margin: 0.3rem 0 0.5rem;
+  }
+  .gx-day .d-lead { font-size: 0.68rem; color: var(--gx-muted); display: flex; gap: 6px; align-items: center; }
+  /* Toast demo */
+  .gx-toast {
+    background: var(--gx-panel); border: 1px solid var(--gx-border);
+    border-left: 3px solid var(--toast-c, #16a34a);
+    border-radius: 12px; padding: 0.7rem 0.9rem 0.7rem 0.8rem;
+    box-shadow: 0 12px 28px -10px rgba(30,36,60,.14);
+    display: flex; align-items: center; gap: 0.6rem; min-width: 280px;
+    font-size: 0.86rem;
+  }
+  /* Pill demos */
+  .gx-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 700 0.68rem/1.4 "Inter", sans-serif; letter-spacing: 0.04em;
+    padding: 0.24rem 0.6rem; border-radius: 999px;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.04);
+  }
+  /* Misc */
+  .gx-divider { height: 1px; background: var(--gx-border); margin: 2rem 0; border: 0; }
+  details { background: var(--gx-panel); border: 1px solid var(--gx-border); border-radius: 12px; padding: 0.7rem 1rem; }
+  details summary { font-weight: 650; cursor: pointer; }
+  /* Empty state demo */
+  .gx-empty {
+    text-align: center; padding: 2.4rem 1.4rem;
+    border: 1px dashed var(--gx-border); border-radius: 14px;
+    background: var(--gx-panel);
+  }
+  .gx-empty h3 { font-family: "Plus Jakarta Sans", sans-serif; font-weight: 800; margin: 0.4rem 0; font-size: 1.05rem; }
+  .gx-empty p { color: var(--gx-muted); font-size: 0.88rem; margin: 0 0 0.9rem; }
+</style>
+</head>
+<body>
+<div class="gx-shell">
+
+  <!-- TOC -->
+  <aside class="gx-toc">
+    <h1>Components</h1>
+    <div class="sub">Design system v2</div>
+
+    <div class="group">Foundations</div>
+    <a href="#colors">Color</a>
+    <a href="#type">Typography</a>
+    <a href="#spacing">Spacing &amp; layout</a>
+    <a href="#radius">Radius</a>
+    <a href="#shadow">Shadow</a>
+    <a href="#focus">Focus ring</a>
+
+    <div class="group">Primitives</div>
+    <a href="#buttons">Buttons</a>
+    <a href="#inputs">Inputs</a>
+    <a href="#pills">Pills &amp; badges</a>
+    <a href="#avatars">Avatars</a>
+    <a href="#cards">Cards</a>
+
+    <div class="group">Data</div>
+    <a href="#stat-cards">Stat cards (KPI)</a>
+    <a href="#hero-stats">Hero stats</a>
+    <a href="#tables">Tables</a>
+    <a href="#charts">Charts</a>
+    <a href="#day-born">Day-born tiles</a>
+
+    <div class="group">Surfaces</div>
+    <a href="#empty">Empty states</a>
+    <a href="#toasts">Toasts</a>
+    <a href="#tabs">Tabs</a>
+
+    <div class="group">Reference</div>
+    <a href="#animations">Animations</a>
+    <a href="#a11y">Accessibility</a>
+  </aside>
+
+  <!-- Main -->
+  <main class="gx-main">
+    <div class="gx-head">
+      <div>
+        <h1>Components</h1>
+        <p>Storybook-style gallery for every primitive in the Church Manager design system.</p>
+      </div>
+      <button class="gx-theme" onclick="toggleTheme()">◐ Toggle theme</button>
+    </div>
+
+    <!-- ============================================
+         FOUNDATIONS · COLOR
+         ============================================ -->
+    <section id="colors" class="gx-section">
+      <h2>Color <span class="anchor">#colors</span></h2>
+      <p>Brand palette with hex codes. Use tokens via CSS vars in <code>public/styles.css</code> — never hard-code.</p>
+
+      <div class="gx-card">
+        <div class="gx-label">Brand</div>
+        <div class="gx-grid cols-4">
+          <div class="gx-swatch"><div class="chip" style="background:#0c2c5a">700</div><div class="name">Trypan Blue</div><div class="hex">#0c2c5a</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#1d4e89">500</div><div class="name">Trypan Blue</div><div class="hex">#1d4e89</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#d4a017;color:#2a2205;text-shadow:none">500</div><div class="name">Harvest Gold</div><div class="hex">#d4a017</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#b9890b">600</div><div class="name">Harvest Gold</div><div class="hex">#b9890b</div></div>
+        </div>
+      </div>
+
+      <div class="gx-card">
+        <div class="gx-label">Semantic</div>
+        <div class="gx-grid cols-4">
+          <div class="gx-swatch"><div class="chip" style="background:#7c5cfc">Plum</div><div class="name">Plum (focus, secondary)</div><div class="hex">#7c5cfc</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#16a34a">Success</div><div class="name">Sage</div><div class="hex">#16a34a</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#3b82f6">Info</div><div class="name">Blue</div><div class="hex">#3b82f6</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#c8261a">Danger</div><div class="name">Wesleyan Red</div><div class="hex">#c8261a</div></div>
+        </div>
+      </div>
+
+      <div class="gx-card">
+        <div class="gx-label">Soft tints (chip backgrounds)</div>
+        <div class="gx-grid cols-4">
+          <div class="gx-swatch"><div class="chip" style="background:#fbf0cf;color:#7a5b00;text-shadow:none">Gold</div><div class="name">gold-soft</div><div class="hex">#fbf0cf</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#ece8fe;color:#4a2fb0;text-shadow:none">Purple</div><div class="name">purple-soft</div><div class="hex">#ece8fe</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#dcfce7;color:#106a31;text-shadow:none">Green</div><div class="name">green-soft</div><div class="hex">#dcfce7</div></div>
+          <div class="gx-swatch"><div class="chip" style="background:#dbeafe;color:#1d4ed8;text-shadow:none">Blue</div><div class="name">blue-soft</div><div class="hex">#dbeafe</div></div>
+        </div>
+      </div>
+
+      <div class="gx-code">--gold: #d4a017; --purple: #7c5cfc; --green: #16a34a; --danger: #c8261a;
+--gold-soft: #fbf0cf; --purple-soft: #ece8fe; --green-soft: #dcfce7; --danger-soft: #fde8e8;</div>
+    </section>
+
+    <!-- ============================================
+         FOUNDATIONS · TYPE
+         ============================================ -->
+    <section id="type" class="gx-section">
+      <h2>Typography <span class="anchor">#type</span></h2>
+      <p>Plus Jakarta Sans for display + Inter for body. Tabular nums on every number.</p>
+
+      <div class="gx-card">
+        <div class="gx-type-row">
+          <div class="meta">display-2xl<br>2rem · 800</div>
+          <div style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:2rem;letter-spacing:-0.028em;line-height:1.08">Welcome back, Richard</div>
+          <div class="meta">Page hero h1</div>
+        </div>
+        <div class="gx-type-row">
+          <div class="meta">display-xl<br>1.5rem · 800</div>
+          <div style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:1.5rem;letter-spacing:-0.024em;line-height:1.1">1,284</div>
+          <div class="meta">Stat card value</div>
+        </div>
+        <div class="gx-type-row">
+          <div class="meta">display-lg<br>1.2rem · 700</div>
+          <div style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:1.2rem;letter-spacing:-0.02em">Day-born Groups</div>
+          <div class="meta">Card h2</div>
+        </div>
+        <div class="gx-type-row">
+          <div class="meta">body-lg<br>1rem · 400</div>
+          <div style="font-size:1rem;line-height:1.55">Manage and view all church members in one place. Search, filter, and act on member records.</div>
+          <div class="meta">Body paragraph</div>
+        </div>
+        <div class="gx-type-row">
+          <div class="meta">body<br>0.9rem · 500</div>
+          <div style="font-size:0.9rem;line-height:1.55">Default UI text size. Buttons, table cells, form inputs.</div>
+          <div class="meta">Default UI</div>
+        </div>
+        <div class="gx-type-row">
+          <div class="meta">label<br>0.74rem · 700</div>
+          <div style="font-size:0.74rem;letter-spacing:0.04em;text-transform:uppercase;font-weight:700;color:var(--gx-muted)">First name *</div>
+          <div class="meta">Form label</div>
+        </div>
+        <div class="gx-type-row">
+          <div class="meta">overline<br>0.66rem · 700</div>
+          <div style="font-size:0.66rem;letter-spacing:0.14em;text-transform:uppercase;font-weight:700;color:var(--gx-muted)">Command Center</div>
+          <div class="meta">Page hero kicker</div>
+        </div>
+      </div>
+
+      <div class="gx-code">font-family: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+font-variant-numeric: tabular-nums;</div>
+    </section>
+
+    <!-- ============================================
+         SPACING
+         ============================================ -->
+    <section id="spacing" class="gx-section">
+      <h2>Spacing &amp; layout <span class="anchor">#spacing</span></h2>
+      <p>Strict 8-point grid. The only sub-grid values are 2 and 6 px for icon nudges.</p>
+      <div class="gx-card">
+        <div style="display:grid;grid-template-columns:80px 1fr 100px;gap:0.6rem 1rem;align-items:center">
+          <div class="gx-label">--e-space-1</div><div class="gx-spacer-bar" style="width:4px"></div><div class="meta" style="font:0.74rem 'JetBrains Mono',monospace;color:var(--gx-muted)">0.25rem · 4px</div>
+          <div class="gx-label">--e-space-2</div><div class="gx-spacer-bar" style="width:8px"></div><div class="meta" style="font:0.74rem 'JetBrains Mono',monospace;color:var(--gx-muted)">0.5rem · 8px</div>
+          <div class="gx-label">--e-space-3</div><div class="gx-spacer-bar" style="width:12px"></div><div class="meta" style="font:0.74rem 'JetBrains Mono',monospace;color:var(--gx-muted)">0.75rem · 12px</div>
+          <div class="gx-label">--e-space-4</div><div class="gx-spacer-bar" style="width:16px"></div><div class="meta" style="font:0.74rem 'JetBrains Mono',monospace;color:var(--gx-muted)">1rem · 16px</div>
+          <div class="gx-label">--e-space-5</div><div class="gx-spacer-bar" style="width:20px"></div><div class="meta" style="font:0.74rem 'JetBrains Mono',monospace;color:var(--gx-muted)">1.25rem · 20px</div>
+          <div class="gx-label">--e-space-6</div><div class="gx-spacer-bar" style="width:24px"></div><div class="meta" style="font:0.74rem 'JetBrains Mono',monospace;color:var(--gx-muted)">1.5rem · 24px</div>
+          <div class="gx-label">--e-space-8</div><div class="gx-spacer-bar" style="width:32px"></div><div class="meta" style="font:0.74rem 'JetBrains Mono',monospace;color:var(--gx-muted)">2rem · 32px</div>
+          <div class="gx-label">--e-space-10</div><div class="gx-spacer-bar" style="width:40px"></div><div class="meta" style="font:0.74rem 'JetBrains Mono',monospace;color:var(--gx-muted)">2.5rem · 40px</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         RADIUS
+         ============================================ -->
+    <section id="radius" class="gx-section">
+      <h2>Radius <span class="anchor">#radius</span></h2>
+      <div class="gx-card">
+        <div class="gx-grid cols-4">
+          <div style="text-align:center"><div style="background:#e8eef7;border:1px solid var(--gx-border);height:80px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--gx-muted);font-size:0.78rem">sm 8px</div><div class="meta" style="font:0.7rem 'JetBrains Mono',monospace;color:var(--gx-muted);margin-top:0.4rem">--e-radius-sm</div></div>
+          <div style="text-align:center"><div style="background:#e8eef7;border:1px solid var(--gx-border);height:80px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--gx-muted);font-size:0.78rem">md 12px</div><div class="meta" style="font:0.7rem 'JetBrains Mono',monospace;color:var(--gx-muted);margin-top:0.4rem">--e-radius</div></div>
+          <div style="text-align:center"><div style="background:#e8eef7;border:1px solid var(--gx-border);height:80px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--gx-muted);font-size:0.78rem">lg 16px</div><div class="meta" style="font:0.7rem 'JetBrains Mono',monospace;color:var(--gx-muted);margin-top:0.4rem">--e-radius-md</div></div>
+          <div style="text-align:center"><div style="background:#e8eef7;border:1px solid var(--gx-border);height:80px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--gx-muted);font-size:0.78rem">xl 20px</div><div class="meta" style="font:0.7rem 'JetBrains Mono',monospace;color:var(--gx-muted);margin-top:0.4rem">--e-radius-lg</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         SHADOW
+         ============================================ -->
+    <section id="shadow" class="gx-section">
+      <h2>Shadow <span class="anchor">#shadow</span></h2>
+      <div class="gx-card">
+        <div class="gx-grid cols-4">
+          <div class="gx-shadow" style="box-shadow: 0 1px 2px rgba(15,23,42,.04)">xs</div>
+          <div class="gx-shadow" style="box-shadow: 0 4px 12px -4px rgba(15,23,42,.08), 0 1px 2px rgba(15,23,42,.04)">sm</div>
+          <div class="gx-shadow" style="box-shadow: 0 12px 28px -10px rgba(15,23,42,.14), 0 4px 10px -4px rgba(15,23,42,.06)">md</div>
+          <div class="gx-shadow" style="box-shadow: 0 30px 60px -20px rgba(15,23,42,.22), 0 12px 24px -12px rgba(15,23,42,.10)">lg</div>
+        </div>
+        <div class="gx-grid cols-2" style="margin-top: 0.8rem">
+          <div class="gx-shadow" style="box-shadow: 0 14px 30px -10px rgba(212,160,23,.45)">gold (primary CTA)</div>
+          <div class="gx-shadow" style="box-shadow: 0 14px 30px -10px rgba(124,92,252,.45)">plum (secondary CTA)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         FOCUS
+         ============================================ -->
+    <section id="focus" class="gx-section">
+      <h2>Focus ring <span class="anchor">#focus</span></h2>
+      <p>Applied to every interactive element on <code>:focus-visible</code>. Never <code>outline: none</code> without replacement.</p>
+      <div class="gx-card">
+        <div class="gx-row">
+          <button style="background:#fff;border:1px solid #cfd8e7;color:#1f2433;padding:0.5rem 1rem;border-radius:12px;font-weight:650;box-shadow:0 0 0 4px rgba(124,92,252,.20);outline:none">Focused button</button>
+          <input style="height:40px;padding:0 0.7rem;border-radius:12px;border:1px solid rgba(124,92,252,.55);background:#fff;box-shadow:0 0 0 4px rgba(124,92,252,.14);outline:none" value="Focused input">
+        </div>
+        <div class="gx-code">box-shadow: 0 0 0 4px rgba(124, 92, 252, 0.20);  /* button */
+box-shadow: 0 0 0 4px rgba(124, 92, 252, 0.14);  /* input */</div>
+      </div>
+    </section>
+
+    <hr class="gx-divider">
+
+    <!-- ============================================
+         BUTTONS
+         ============================================ -->
+    <section id="buttons" class="gx-section">
+      <h2>Buttons <span class="anchor">#buttons</span></h2>
+      <p>40px height, 12px radius, 650 weight. Six variants. All have hover, focus, active, disabled, loading states.</p>
+
+      <div class="gx-card">
+        <div class="gx-label">Variants</div>
+        <div class="gx-btnrow">
+          <button class="btn primary">Primary</button>
+          <button class="btn purple">Secondary</button>
+          <button class="btn ghost">Ghost</button>
+          <button class="btn" style="background:#fde8e8;color:#c8261a;border-color:rgba(200,38,26,0.25)">Destructive</button>
+          <button class="icon-btn" aria-label="Edit">✎</button>
+          <a class="link" style="color:#4a2fb0;text-decoration:underline;text-underline-offset:3px;font-weight:600;font-size:0.86rem" href="#">Link button</a>
+        </div>
+
+        <div class="gx-label" style="margin-top:1.2rem">States — primary</div>
+        <div class="gx-btnrow">
+          <button class="btn primary">Default</button>
+          <button class="btn primary" style="transform:translateY(-1px);box-shadow:0 16px 32px -10px rgba(212,160,23,.6),inset 0 1px 0 rgba(255,255,255,.4)">Hover</button>
+          <button class="btn primary" style="transform:translateY(0);filter:brightness(0.95)">Active</button>
+          <button class="btn primary" style="opacity:0.5;cursor:not-allowed" disabled>Disabled</button>
+          <button class="btn primary"><span style="display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin 0.7s linear infinite;margin-right:6px;vertical-align:middle"></span>Loading…</button>
+        </div>
+      </div>
+      <div class="gx-code">&lt;button class="btn primary"&gt;Save member&lt;/button&gt;
+&lt;button class="btn purple"&gt;+ New event&lt;/button&gt;
+&lt;button class="btn ghost"&gt;Cancel&lt;/button&gt;
+&lt;button class="icon-btn"&gt;✎&lt;/button&gt;</div>
+    </section>
+
+    <!-- ============================================
+         INPUTS
+         ============================================ -->
+    <section id="inputs" class="gx-section">
+      <h2>Inputs <span class="anchor">#inputs</span></h2>
+      <p>40px height, 12px radius. Premium focus ring. Inline validation slot.</p>
+
+      <div class="gx-card">
+        <div class="gx-grid cols-2">
+          <label style="display:block">
+            <div style="font-size:0.74rem;letter-spacing:0.04em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);margin-bottom:0.4rem">First name *</div>
+            <input type="text" placeholder="e.g. Adwoa" style="height:40px;width:100%;padding:0 0.7rem;border-radius:12px;border:1px solid rgba(15,23,42,.14);background:#fff;font:0.9rem 'Inter',sans-serif">
+          </label>
+          <label style="display:block">
+            <div style="font-size:0.74rem;letter-spacing:0.04em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);margin-bottom:0.4rem">Day born</div>
+            <select style="height:40px;width:100%;padding:0 0.7rem;border-radius:12px;border:1px solid rgba(15,23,42,.14);background:#fff;font:0.9rem 'Inter',sans-serif">
+              <option>Monday</option><option>Tuesday</option><option>Wednesday</option>
+            </select>
+          </label>
+          <label style="display:block">
+            <div style="font-size:0.74rem;letter-spacing:0.04em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);margin-bottom:0.4rem">Email — focused</div>
+            <input type="email" value="adwoa.o@example.com" style="height:40px;width:100%;padding:0 0.7rem;border-radius:12px;border:1px solid rgba(124,92,252,.55);background:#fff;box-shadow:0 0 0 4px rgba(124,92,252,.14);outline:none;font:0.9rem 'Inter',sans-serif">
+          </label>
+          <label style="display:block">
+            <div style="font-size:0.74rem;letter-spacing:0.04em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);margin-bottom:0.4rem">Phone — error</div>
+            <input type="tel" value="123" style="height:40px;width:100%;padding:0 0.7rem;border-radius:12px;border:1px solid #c8261a;background:#fff;box-shadow:0 0 0 4px rgba(200,38,26,0.14);outline:none;font:0.9rem 'Inter',sans-serif">
+            <div style="font-size:0.74rem;color:#c8261a;margin-top:0.3rem">Must be a Ghana mobile number (10 digits, starting with 02 or 05).</div>
+          </label>
+        </div>
+        <div style="margin-top:1rem">
+          <div style="font-size:0.74rem;letter-spacing:0.04em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);margin-bottom:0.4rem">Notes</div>
+          <textarea rows="3" style="width:100%;padding:0.7rem;border-radius:12px;border:1px solid rgba(15,23,42,.14);background:#fff;font:0.9rem 'Inter',sans-serif;resize:vertical">Recently transferred from Kumasi parish.</textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         PILLS
+         ============================================ -->
+    <section id="pills" class="gx-section">
+      <h2>Pills &amp; badges <span class="anchor">#pills</span></h2>
+      <p>Used for status, role, channel and count. 9 status variants.</p>
+
+      <div class="gx-card">
+        <div class="gx-label">Membership status</div>
+        <div class="gx-btnrow">
+          <span class="gx-pill" style="background:#dcfce7;color:#106a31">⚬ Member</span>
+          <span class="gx-pill" style="background:#dbeafe;color:#1d4ed8">⚬ Regular</span>
+          <span class="gx-pill" style="background:#fdecd2;color:#6b4915">⚬ Visitor</span>
+          <span class="gx-pill" style="background:#f1f2f7;color:#5f6675">⚬ Inactive</span>
+          <span class="gx-pill" style="background:#fde8e8;color:#9f1239">⚬ Transferred</span>
+        </div>
+
+        <div class="gx-label" style="margin-top:1rem">Communications</div>
+        <div class="gx-btnrow">
+          <span class="gx-pill" style="background:#dcfce7;color:#106a31">Sent</span>
+          <span class="gx-pill" style="background:#dbeafe;color:#1d4ed8">Sending</span>
+          <span class="gx-pill" style="background:#fdecd2;color:#6b4915">Pending</span>
+          <span class="gx-pill" style="background:#fde8e8;color:#9f1239">Failed</span>
+          <span class="gx-pill" style="background:#fbf0cf;color:#7a5b00">Dry run</span>
+        </div>
+
+        <div class="gx-label" style="margin-top:1rem">Counts &amp; chips</div>
+        <div class="gx-btnrow">
+          <span class="gx-pill" style="background:#ece8fe;color:#4a2fb0">12 members</span>
+          <span class="gx-pill" style="background:#dcfce7;color:#106a31">▲ 4.8%</span>
+          <span class="gx-pill" style="background:#fde8e8;color:#9f1239">▼ 2.3%</span>
+          <span class="gx-pill" style="background:#fbf0cf;color:#7a5b00">⚙ Admin</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         AVATARS
+         ============================================ -->
+    <section id="avatars" class="gx-section">
+      <h2>Avatars <span class="anchor">#avatars</span></h2>
+      <p>Round, gradient by index, 5 sizes. Fallback is initials when no photo.</p>
+      <div class="gx-card">
+        <div class="gx-btnrow">
+          <span class="gx-av a">AO</span>
+          <span class="gx-av b">KM</span>
+          <span class="gx-av c">EA</span>
+          <span class="gx-av d">YO</span>
+          <span class="gx-av e">SN</span>
+        </div>
+
+        <div class="gx-label" style="margin-top:1rem">Sizes</div>
+        <div class="gx-btnrow" style="align-items:end">
+          <span class="gx-av a" style="width:24px;height:24px;font-size:0.6rem">xs</span>
+          <span class="gx-av a" style="width:28px;height:28px;font-size:0.66rem">sm</span>
+          <span class="gx-av a">md</span>
+          <span class="gx-av a" style="width:42px;height:42px;font-size:0.88rem">lg</span>
+          <span class="gx-av a" style="width:56px;height:56px;font-size:1.05rem">xl</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         CARDS
+         ============================================ -->
+    <section id="cards" class="gx-section">
+      <h2>Cards <span class="anchor">#cards</span></h2>
+      <p>20px radius. Three variants. Dashboard-interactive cards lift on hover and reveal a gradient top stripe.</p>
+      <div class="gx-grid cols-3">
+        <div class="gx-stat-demo">
+          <div class="label">Default card<span class="ico" style="--ico-bg:rgba(212,160,23,0.16);--ico-fg:#7a5b00">⚬</span></div>
+          <div style="margin-top:0.6rem;font-size:0.86rem;color:var(--gx-muted)">Surface for plain content. Resting shadow xs.</div>
+        </div>
+        <div class="gx-stat-demo" style="box-shadow:0 12px 28px -10px rgba(30,36,60,.14)">
+          <div class="label">Elevated card<span class="ico">⚙</span></div>
+          <div style="margin-top:0.6rem;font-size:0.86rem;color:var(--gx-muted)">For dialogs, dropdowns, sticky popovers. Shadow md.</div>
+        </div>
+        <div class="gx-stat-demo" style="--c: linear-gradient(90deg, #d4a017, #7c5cfc)">
+          <div class="label">Interactive card<span class="ico" style="--ico-bg:rgba(124,92,252,0.16);--ico-fg:#4a2fb0">→</span></div>
+          <div style="margin-top:0.6rem;font-size:0.86rem;color:var(--gx-muted)">Whole card is clickable. Gradient stripe + lift on hover.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         STAT CARDS
+         ============================================ -->
+    <section id="stat-cards" class="gx-section">
+      <h2>Stat cards (KPI) <span class="anchor">#stat-cards</span></h2>
+      <p>Icon + label + value + trend chip + sparkline. Colored top accent. Used on dashboards.</p>
+      <div class="gx-grid cols-4">
+        <div class="gx-stat-demo" style="--c:#d4a017">
+          <div class="label">Total members<span class="ico" style="--ico-bg:#fbf0cf;--ico-fg:#7a5b00">👤</span></div>
+          <div class="value">1,284</div>
+          <div class="trend">▲ 4.8%</div>
+          <svg class="gx-spark" viewBox="0 0 200 36" preserveAspectRatio="none">
+            <defs><linearGradient id="sp1" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#d4a017" stop-opacity=".4"/><stop offset="1" stop-color="#d4a017" stop-opacity="0"/></linearGradient></defs>
+            <path d="M0,30 L20,26 40,28 60,20 80,22 100,15 120,18 140,10 160,14 180,6 200,9 L200,36 0,36 Z" fill="url(#sp1)"/>
+            <path d="M0,30 L20,26 40,28 60,20 80,22 100,15 120,18 140,10 160,14 180,6 200,9" fill="none" stroke="#d4a017" stroke-width="2"/>
+          </svg>
+        </div>
+        <div class="gx-stat-demo" style="--c:#7c5cfc">
+          <div class="label">Attendance · wk<span class="ico" style="--ico-bg:#ece8fe;--ico-fg:#6240e0">✓</span></div>
+          <div class="value">872</div>
+          <div class="trend">▲ 2.1%</div>
+          <svg class="gx-spark" viewBox="0 0 200 36" preserveAspectRatio="none">
+            <defs><linearGradient id="sp2" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#7c5cfc" stop-opacity=".4"/><stop offset="1" stop-color="#7c5cfc" stop-opacity="0"/></linearGradient></defs>
+            <path d="M0,24 L20,20 40,22 60,16 80,18 100,12 120,16 140,9 160,11 180,6 200,8 L200,36 0,36 Z" fill="url(#sp2)"/>
+            <path d="M0,24 L20,20 40,22 60,16 80,18 100,12 120,16 140,9 160,11 180,6 200,8" fill="none" stroke="#7c5cfc" stroke-width="2"/>
+          </svg>
+        </div>
+        <div class="gx-stat-demo" style="--c:#3b82f6">
+          <div class="label">Offerings · Jun<span class="ico" style="--ico-bg:#dbeafe;--ico-fg:#1d4ed8">₵</span></div>
+          <div class="value">48,210</div>
+          <div class="trend">▲ 11.4%</div>
+          <svg class="gx-spark" viewBox="0 0 200 36" preserveAspectRatio="none">
+            <defs><linearGradient id="sp3" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#3b82f6" stop-opacity=".4"/><stop offset="1" stop-color="#3b82f6" stop-opacity="0"/></linearGradient></defs>
+            <path d="M0,32 L20,28 40,30 60,22 80,26 100,18 120,21 140,12 160,16 180,8 200,11 L200,36 0,36 Z" fill="url(#sp3)"/>
+            <path d="M0,32 L20,28 40,30 60,22 80,26 100,18 120,21 140,12 160,16 180,8 200,11" fill="none" stroke="#3b82f6" stroke-width="2"/>
+          </svg>
+        </div>
+        <div class="gx-stat-demo" style="--c:#16a34a">
+          <div class="label">Sacraments · YTD<span class="ico" style="--ico-bg:#dcfce7;--ico-fg:#106a31">✝</span></div>
+          <div class="value">96</div>
+          <div class="trend down">▼ 2 vs last yr</div>
+          <svg class="gx-spark" viewBox="0 0 200 36" preserveAspectRatio="none">
+            <defs><linearGradient id="sp4" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#16a34a" stop-opacity=".4"/><stop offset="1" stop-color="#16a34a" stop-opacity="0"/></linearGradient></defs>
+            <path d="M0,28 L20,30 40,24 60,26 80,18 100,22 120,14 140,18 160,10 180,14 200,7 L200,36 0,36 Z" fill="url(#sp4)"/>
+            <path d="M0,28 L20,30 40,24 60,26 80,18 100,22 120,14 140,18 160,10 180,14 200,7" fill="none" stroke="#16a34a" stroke-width="2"/>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         HERO STATS
+         ============================================ -->
+    <section id="hero-stats" class="gx-section">
+      <h2>Hero stats <span class="anchor">#hero-stats</span></h2>
+      <p>Sit directly below the page hero. White panel, colored left border, icon + value + label.</p>
+      <div class="gx-grid cols-3">
+        <div style="background:var(--gx-panel);border:1px solid var(--gx-border);border-left:4px solid #d4a017;border-radius:14px;padding:0.95rem 1.1rem;display:flex;gap:0.8rem;align-items:center">
+          <div style="width:42px;height:42px;border-radius:11px;background:#fbf0cf;color:#7a5b00;display:inline-flex;align-items:center;justify-content:center;font-size:1.15rem">👤</div>
+          <div><div style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:1.5rem;letter-spacing:-0.028em">12</div><div style="font-size:0.74rem;color:var(--gx-muted);font-weight:600">Total members</div></div>
+        </div>
+        <div style="background:var(--gx-panel);border:1px solid var(--gx-border);border-left:4px solid #16a34a;border-radius:14px;padding:0.95rem 1.1rem;display:flex;gap:0.8rem;align-items:center">
+          <div style="width:42px;height:42px;border-radius:11px;background:#dcfce7;color:#106a31;display:inline-flex;align-items:center;justify-content:center;font-size:1.15rem">✓</div>
+          <div><div style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:1.5rem;letter-spacing:-0.028em">11</div><div style="font-size:0.74rem;color:var(--gx-muted);font-weight:600">Active</div></div>
+        </div>
+        <div style="background:var(--gx-panel);border:1px solid var(--gx-border);border-left:4px solid #7c5cfc;border-radius:14px;padding:0.95rem 1.1rem;display:flex;gap:0.8rem;align-items:center">
+          <div style="width:42px;height:42px;border-radius:11px;background:#ece8fe;color:#4a2fb0;display:inline-flex;align-items:center;justify-content:center;font-size:1.15rem">+</div>
+          <div><div style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:1.5rem;letter-spacing:-0.028em">1</div><div style="font-size:0.74rem;color:var(--gx-muted);font-weight:600">New (30d)</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         TABLES
+         ============================================ -->
+    <section id="tables" class="gx-section">
+      <h2>Tables <span class="anchor">#tables</span></h2>
+      <p>Uppercase letter-spaced headers, subtle gradient row hover, 32×32 icon-btn actions column.</p>
+      <div class="gx-card" style="padding:0;overflow:hidden">
+        <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:0.88rem">
+          <thead>
+            <tr>
+              <th style="text-align:left;font-size:0.66rem;letter-spacing:0.14em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);padding:0.85rem 1rem;background:linear-gradient(180deg,rgba(124,92,252,0.025),transparent);border-bottom:1px solid var(--gx-border)">Member</th>
+              <th style="text-align:left;font-size:0.66rem;letter-spacing:0.14em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);padding:0.85rem 1rem;background:linear-gradient(180deg,rgba(124,92,252,0.025),transparent);border-bottom:1px solid var(--gx-border)">Day name</th>
+              <th style="text-align:left;font-size:0.66rem;letter-spacing:0.14em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);padding:0.85rem 1rem;background:linear-gradient(180deg,rgba(124,92,252,0.025),transparent);border-bottom:1px solid var(--gx-border)">Status</th>
+              <th style="text-align:right;font-size:0.66rem;letter-spacing:0.14em;text-transform:uppercase;font-weight:700;color:var(--gx-muted);padding:0.85rem 1rem;background:linear-gradient(180deg,rgba(124,92,252,0.025),transparent);border-bottom:1px solid var(--gx-border)">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="padding:0.75rem 1rem;border-bottom:1px solid var(--gx-border)"><div style="display:flex;gap:0.6rem;align-items:center"><span class="gx-av a">AO</span><div><div style="font-weight:650;font-size:0.9rem">Adwoa Owusu</div><div style="font-size:0.74rem;color:var(--gx-muted)">adwoa.o@example.com</div></div></div></td>
+              <td style="padding:0.75rem 1rem;border-bottom:1px solid var(--gx-border)">Monday</td>
+              <td style="padding:0.75rem 1rem;border-bottom:1px solid var(--gx-border)"><span class="gx-pill" style="background:#dcfce7;color:#106a31">Member</span></td>
+              <td style="padding:0.75rem 1rem;border-bottom:1px solid var(--gx-border);text-align:right"><span style="display:inline-flex;gap:4px"><button class="icon-btn">⊙</button><button class="icon-btn">✎</button><button class="icon-btn">🗑</button></span></td>
+            </tr>
+            <tr>
+              <td style="padding:0.75rem 1rem;border-bottom:1px solid var(--gx-border)"><div style="display:flex;gap:0.6rem;align-items:center"><span class="gx-av b">KM</span><div><div style="font-weight:650;font-size:0.9rem">Kwabena Mensah</div><div style="font-size:0.74rem;color:var(--gx-muted)">kmensah@example.com</div></div></div></td>
+              <td style="padding:0.75rem 1rem;border-bottom:1px solid var(--gx-border)">Tuesday</td>
+              <td style="padding:0.75rem 1rem;border-bottom:1px solid var(--gx-border)"><span class="gx-pill" style="background:#dcfce7;color:#106a31">Member</span></td>
+              <td style="padding:0.75rem 1rem;border-bottom:1px solid var(--gx-border);text-align:right"><span style="display:inline-flex;gap:4px"><button class="icon-btn">⊙</button><button class="icon-btn">✎</button><button class="icon-btn">🗑</button></span></td>
+            </tr>
+            <tr>
+              <td style="padding:0.75rem 1rem"><div style="display:flex;gap:0.6rem;align-items:center"><span class="gx-av c">EA</span><div><div style="font-weight:650;font-size:0.9rem">Efua Ankrah</div><div style="font-size:0.74rem;color:var(--gx-muted)">efua@example.com</div></div></div></td>
+              <td style="padding:0.75rem 1rem">Wednesday</td>
+              <td style="padding:0.75rem 1rem"><span class="gx-pill" style="background:#fdecd2;color:#6b4915">Visitor</span></td>
+              <td style="padding:0.75rem 1rem;text-align:right"><span style="display:inline-flex;gap:4px"><button class="icon-btn">⊙</button><button class="icon-btn">✎</button><button class="icon-btn">🗑</button></span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================
+         CHARTS
+         ============================================ -->
+    <section id="charts" class="gx-section">
+      <h2>Charts <span class="anchor">#charts</span></h2>
+      <p>SVG only. Gradient area fills. 2.5px stroke. Always accompanied by a screen-reader data-table fallback.</p>
+      <div class="gx-card">
+        <svg viewBox="0 0 760 240" width="100%" height="240" preserveAspectRatio="none" role="img" aria-label="Weekly attendance trend">
+          <title>Attendance trend last 5 weeks</title>
+          <defs>
+            <linearGradient id="ch1" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0" stop-color="#7c5cfc" stop-opacity=".35"/>
+              <stop offset="1" stop-color="#7c5cfc" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <g stroke="#eceef4" stroke-width="1">
+            <line x1="40" y1="30" x2="740" y2="30"/>
+            <line x1="40" y1="100" x2="740" y2="100"/>
+            <line x1="40" y1="170" x2="740" y2="170"/>
+          </g>
+          <g fill="#9aa0b3" font-size="11" font-family="Inter">
+            <text x="0" y="34">1k</text>
+            <text x="0" y="104">700</text>
+            <text x="0" y="174">400</text>
+          </g>
+          <path d="M40,180 C120,160 180,150 240,140 S380,90 460,100 540,70 620,80 700,50 740,60 L740,220 40,220 Z" fill="url(#ch1)"/>
+          <path d="M40,180 C120,160 180,150 240,140 S380,90 460,100 540,70 620,80 700,50 740,60" fill="none" stroke="#7c5cfc" stroke-width="2.5"/>
+        </svg>
+      </div>
+    </section>
+
+    <!-- ============================================
+         DAY-BORN
+         ============================================ -->
+    <section id="day-born" class="gx-section">
+      <h2>Day-born tiles <span class="anchor">#day-born</span></h2>
+      <p>The Akan fellowship row. 7 inline tiles on desktop, 4 on tablet, 2 on mobile.</p>
+      <div class="gx-card">
+        <div class="gx-grid cols-7">
+          <div class="gx-day"><div class="d-name">Monday</div><div class="d-akan">Adwoa · Kwadwo</div><div class="d-count">182</div><div class="d-mlabel">Members</div><div class="d-lead"><span class="gx-av c" style="width:18px;height:18px;font-size:9px">EA</span> Lead: Efua A.</div></div>
+          <div class="gx-day"><div class="d-name">Tuesday</div><div class="d-akan">Abena · Kwabena</div><div class="d-count">204</div><div class="d-mlabel">Members</div><div class="d-lead"><span class="gx-av b" style="width:18px;height:18px;font-size:9px">KM</span> Lead: Kwabena M.</div></div>
+          <div class="gx-day"><div class="d-name">Wednesday</div><div class="d-akan">Akua · Kwaku</div><div class="d-count">176</div><div class="d-mlabel">Members</div><div class="d-lead"><span class="gx-av a" style="width:18px;height:18px;font-size:9px">AB</span> Steward pending</div></div>
+          <div class="gx-day"><div class="d-name">Thursday</div><div class="d-akan">Yaa · Yaw</div><div class="d-count">158</div><div class="d-mlabel">Members</div><div class="d-lead"><span class="gx-av d" style="width:18px;height:18px;font-size:9px">YO</span> Lead: Yaw O.</div></div>
+          <div class="gx-day"><div class="d-name">Friday</div><div class="d-akan">Afia · Kofi</div><div class="d-count">191</div><div class="d-mlabel">Members</div><div class="d-lead"><span class="gx-av e" style="width:18px;height:18px;font-size:9px">KA</span> Lead: Kofi A.</div></div>
+          <div class="gx-day"><div class="d-name">Saturday</div><div class="d-akan">Ama · Kwame</div><div class="d-count">167</div><div class="d-mlabel">Members</div><div class="d-lead"><span class="gx-av c" style="width:18px;height:18px;font-size:9px">AB</span> Lead: Ama B.</div></div>
+          <div class="gx-day"><div class="d-name">Sunday</div><div class="d-akan">Akosua · Kwasi</div><div class="d-count">206</div><div class="d-mlabel">Members</div><div class="d-lead"><span class="gx-av b" style="width:18px;height:18px;font-size:9px">AO</span> Lead: Akosua O.</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         EMPTY
+         ============================================ -->
+    <section id="empty" class="gx-section">
+      <h2>Empty states <span class="anchor">#empty</span></h2>
+      <p>Icon + heading + supporting copy + CTA. Never just "No data."</p>
+      <div class="gx-grid cols-2">
+        <div class="gx-empty">
+          <div style="width:48px;height:48px;background:#ece8fe;color:#4a2fb0;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;font-size:1.4rem;margin-bottom:0.6rem">👥</div>
+          <h3>No members yet</h3>
+          <p>Add your first member and the directory will start populating.</p>
+          <button class="btn primary">+ Add member</button>
+        </div>
+        <div class="gx-empty">
+          <div style="width:48px;height:48px;background:#fbf0cf;color:#7a5b00;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;font-size:1.4rem;margin-bottom:0.6rem">🔎</div>
+          <h3>No results for "yaa"</h3>
+          <p>Try clearing filters or searching by phone number.</p>
+          <a class="link" href="#" style="color:#4a2fb0;font-weight:650">Clear filters →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         TOASTS
+         ============================================ -->
+    <section id="toasts" class="gx-section">
+      <h2>Toasts <span class="anchor">#toasts</span></h2>
+      <p>Backdrop blur. Colored left border by status. Auto-dismiss 4s.</p>
+      <div class="gx-card" style="display:flex;flex-direction:column;gap:0.6rem;align-items:start">
+        <div class="gx-toast" style="--toast-c:#16a34a">✓ Member <strong>Adwoa Owusu</strong> created.</div>
+        <div class="gx-toast" style="--toast-c:#3b82f6">ℹ Broadcast queued — 12 recipients.</div>
+        <div class="gx-toast" style="--toast-c:#d4a017">⚠ Dry run: 0 messages were actually sent.</div>
+        <div class="gx-toast" style="--toast-c:#c8261a">✕ Failed to upload photo. <a class="link" href="#" style="color:#4a2fb0;font-weight:650">Retry</a></div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         TABS
+         ============================================ -->
+    <section id="tabs" class="gx-section">
+      <h2>Tabs <span class="anchor">#tabs</span></h2>
+      <p>Pill segmented control. 260ms underline slide on switch (when used as inline tabs).</p>
+      <div class="gx-card">
+        <div style="display:flex;gap:4px;background:#f1f2f7;border-radius:12px;padding:4px;width:fit-content">
+          <button style="padding:0.45rem 0.9rem;border-radius:8px;background:#fff;color:#1f2433;font-weight:650;font-size:0.84rem;border:0;box-shadow:0 1px 2px rgba(15,23,42,.06)">Overview</button>
+          <button style="padding:0.45rem 0.9rem;border-radius:8px;background:transparent;color:#5f6675;font-weight:600;font-size:0.84rem;border:0">Services</button>
+          <button style="padding:0.45rem 0.9rem;border-radius:8px;background:transparent;color:#5f6675;font-weight:600;font-size:0.84rem;border:0">Tithes</button>
+          <button style="padding:0.45rem 0.9rem;border-radius:8px;background:transparent;color:#5f6675;font-weight:600;font-size:0.84rem;border:0">Harvests</button>
+          <button style="padding:0.45rem 0.9rem;border-radius:8px;background:transparent;color:#5f6675;font-weight:600;font-size:0.84rem;border:0">Special</button>
+        </div>
+      </div>
+    </section>
+
+    <hr class="gx-divider">
+
+    <!-- ============================================
+         ANIMATIONS
+         ============================================ -->
+    <section id="animations" class="gx-section">
+      <h2>Animations <span class="anchor">#animations</span></h2>
+      <p>Every named motion is documented in <a href="design-system.md#5b-animation-catalog">design-system.md §5b</a>. Examples below — hover, focus, click to feel them.</p>
+
+      <div class="gx-card">
+        <div class="gx-label">Hover lift (cardLift + dashCardAccent)</div>
+        <div class="gx-grid cols-3" style="margin-top:0.5rem">
+          <div class="gx-stat-demo" style="cursor:pointer">Hover me</div>
+          <div class="gx-stat-demo" style="cursor:pointer">Hover me</div>
+          <div class="gx-stat-demo" style="cursor:pointer">Hover me</div>
+        </div>
+
+        <div class="gx-label" style="margin-top:1rem">Button shine (buttonShine)</div>
+        <div class="gx-btnrow">
+          <button class="btn primary">Hover me</button>
+          <button class="btn purple">Hover me</button>
+        </div>
+
+        <div class="gx-label" style="margin-top:1rem">Day-card glow (dayCardGlow)</div>
+        <div class="gx-grid cols-4">
+          <div class="gx-day"><div class="d-name">Monday</div><div class="d-count">182</div></div>
+          <div class="gx-day"><div class="d-name">Tuesday</div><div class="d-count">204</div></div>
+          <div class="gx-day"><div class="d-name">Wednesday</div><div class="d-count">176</div></div>
+          <div class="gx-day"><div class="d-name">Thursday</div><div class="d-count">158</div></div>
+        </div>
+
+        <div class="gx-label" style="margin-top:1rem">Reduced-motion</div>
+        <div style="font-size:0.86rem;color:var(--gx-muted)">
+          To verify your OS / browser respects motion preferences, enable <em>Reduce motion</em>
+          in your system settings and refresh this page. All transitions should collapse to
+          near-instant. Test in DevTools → Rendering → Emulate CSS media → <code>prefers-reduced-motion: reduce</code>.
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================
+         A11Y
+         ============================================ -->
+    <section id="a11y" class="gx-section">
+      <h2>Accessibility <span class="anchor">#a11y</span></h2>
+      <p>The gallery is a build-time tool only — but it follows the same rules every shipped page must.</p>
+      <ul style="line-height:1.8;color:var(--gx-muted);font-size:0.92rem">
+        <li>All interactive elements reachable from the keyboard alone.</li>
+        <li>Focus ring is always visible. Never <code>outline: none</code> without replacement.</li>
+        <li>Contrast meets WCAG AA (4.5:1 body, 3:1 ≥18pt). Test with WAVE / axe.</li>
+        <li>One <code>h1</code> per page; never skip heading levels.</li>
+        <li>Every form field has a <code>&lt;label for&gt;</code>; errors linked via <code>aria-describedby</code>.</li>
+        <li>Decorative icons get <code>aria-hidden="true"</code>; meaningful icons get an accessible name.</li>
+        <li>Charts include <code>&lt;title&gt;</code> + screen-reader data-table fallback.</li>
+        <li>Motion respects <code>prefers-reduced-motion</code>.</li>
+        <li>Touch targets ≥ 44×44px on coarse pointer.</li>
+      </ul>
+    </section>
+
+  </main>
+</div>
+
+<style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
+<script>
+  function toggleTheme() {
+    const r = document.documentElement;
+    const next = r.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    r.setAttribute('data-theme', next);
+    try { localStorage.setItem('gallery-theme', next); } catch (e) {}
+  }
+  try {
+    const saved = localStorage.getItem('gallery-theme');
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+  } catch (e) {}
+</script>
+</body>
+</html>
