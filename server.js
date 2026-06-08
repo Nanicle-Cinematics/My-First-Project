@@ -1826,11 +1826,17 @@ app.get('/sacraments', (req, res) => {
     </div>
     <div class="card">
       <div class="card-head"><h2>Records</h2><span class="meta">${rows.length} entries shown</span></div>
-      ${table(['Type', 'Date', 'Member', 'Spouse', 'Location'],
-        rows.map((r) => [esc(r.sacrament_type), esc(r.occurred_on),
-          r.member_id ? `<a href="/members/${r.member_id}">${esc(r.member)}</a>` : '—',
-          r.spouse_id ? `<a href="/members/${r.spouse_id}">${esc(r.spouse)}</a>` : '—',
-          esc(r.location)]))}
+      ${rows.length
+        ? table(['Type', 'Date', 'Member', 'Spouse', 'Location'],
+            rows.map((r) => [esc(r.sacrament_type), esc(r.occurred_on),
+              r.member_id ? `<a href="/members/${r.member_id}">${esc(r.member)}</a>` : '—',
+              r.spouse_id ? `<a href="/members/${r.spouse_id}">${esc(r.spouse)}</a>` : '—',
+              esc(r.location)]))
+        : `<div class="empty-state">
+            <div class="empty-ico" aria-hidden="true">✝</div>
+            <h3>No sacraments recorded yet</h3>
+            <p>Baptisms, confirmations, marriages, funerals and dedications recorded against members will appear here. Open a member to add one.</p>
+          </div>`}
     </div>`;
   res.page({ title: 'Sacraments', active: '/sacraments', noHeader: true, body });
 });
@@ -2001,7 +2007,7 @@ app.get('/settings', requireOwner, (req, res) => {
   const body = `
     ${pageHero('Settings', 'Owner-only controls for integrations, automation and runtime configuration.')}
     <div class="card">
-      <h2>Application</h2>
+      <div class="card-head"><h2>Application</h2><span class="meta">Runtime configuration</span></div>
       <dl class="stats">
         <dt>Church name</dt><dd>${esc(CHURCH_NAME)} <span class="muted-text">(set via the CHURCH_NAME env var)</span></dd>
         <dt>Database</dt><dd><code>${esc(DB_PATH)}</code></dd>
@@ -2009,15 +2015,15 @@ app.get('/settings', requireOwner, (req, res) => {
       </dl>
     </div>
     <div class="card">
-      <h2>Roles & access</h2>
+      <div class="card-head"><h2>Roles &amp; access</h2><span class="meta">Who can do what</span></div>
       <p>Manage user accounts and permissions on the <a href="/users">Users &amp; Roles</a> page.</p>
     </div>
     <div class="card">
-      <h2>Maintenance</h2>
+      <div class="card-head"><h2>Maintenance</h2><span class="meta">Backups &amp; errors</span></div>
       <p>Snapshots and restore on the <a href="/backups">Backups</a> page · recent server errors in the <a href="/errors">Error Log</a>.</p>
     </div>
     <div class="card">
-      <h2>SMS &amp; Email</h2>
+      <div class="card-head"><h2>SMS &amp; Email</h2><span class="meta">Outbound providers</span></div>
       <dl class="stats">
         <dt>SMS provider</dt><dd>Arkesel — <span class="pill pill-${ARKESEL_API_KEY ? 'sent' : 'dry_run'}">${ARKESEL_API_KEY ? 'configured' : 'dry-run'}</span></dd>
         <dt>SMS sender ID</dt><dd><code>${esc(ARKESEL_SENDER)}</code></dd>
@@ -2037,19 +2043,19 @@ app.get('/settings', requireOwner, (req, res) => {
       <p class="muted-text">For Gmail, generate an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> — your normal password will not work. Set <code>PUBLIC_URL</code> too so unsubscribe links work.</p>
     </div>
     <div class="card">
-      <h2>Send a test message</h2>
+      <div class="card-head"><h2>Send a test message</h2><span class="meta">Dry-run if provider unset</span></div>
       <p class="muted-text">Verify your settings by sending yourself a test. If a service isn't configured, you'll get a dry-run notice instead of a real send.</p>
       <form method="post" action="/settings/test-sms" class="filter-bar" data-no-confirm="1" style="margin-bottom:0.6rem">
         <input type="tel" name="to" placeholder="Phone, e.g. 0244123456" required style="flex:1;min-width:200px">
-        <button type="submit">📱 Send test SMS</button>
+        <button class="btn primary" type="submit">＋ Send test SMS</button>
       </form>
       <form method="post" action="/settings/test-email" class="filter-bar" data-no-confirm="1">
         <input type="email" name="to" placeholder="you@example.com" required style="flex:1;min-width:200px">
-        <button type="submit">✉ Send test email</button>
+        <button class="btn primary" type="submit">＋ Send test email</button>
       </form>
     </div>
     <div class="card">
-      <h2>Birthday automation</h2>
+      <div class="card-head"><h2>Birthday automation</h2><span class="meta">Daily SMS run</span></div>
       <dl class="stats">
         <dt>Daily run time</dt><dd>${BIRTHDAY_HOUR}:00 (server time)</dd>
         <dt>Last run</dt><dd>${esc(getState('last_birthday_send') || '—')}</dd>
@@ -2058,11 +2064,11 @@ app.get('/settings', requireOwner, (req, res) => {
       </dl>
       <p>The system sends a personalized SMS to every member whose birthday matches today's date, has a phone, and hasn't opted out. To customize the message, set the <code>BIRTHDAY_TEMPLATE</code> env var. Tokens: <code>{first_name}</code>, <code>{last_name}</code>, <code>{church_name}</code>.</p>
       <form method="post" action="/settings/birthdays/run">
-        <button type="submit">🎂 Send today's birthday messages now</button>
+        <button class="btn primary" type="submit">＋ Send today's birthday messages now</button>
       </form>
     </div>
     <div class="card">
-      <h2>Backup</h2>
+      <div class="card-head"><h2>Backup</h2><span class="meta">Fly SSH snapshot</span></div>
       <p>Your database file is at <code>${esc(DB_PATH)}</code>. To back it up while running on Fly:</p>
       <pre>flyctl ssh sftp get ${esc(DB_PATH)} ./church-backup.db</pre>
     </div>`;
@@ -2106,18 +2112,31 @@ app.get('/profile', (req, res) => {
     mismatch: 'New passwords do not match.',
     bad: 'Current password is incorrect.',
   }[req.query.e] : null;
+  const roleLabel = ({ admin: 'Administrator', editor: 'Editor', viewer: 'Viewer' }[u.role] || u.role);
   const body = `
     ${pageHero('Profile', 'Account controls for your signed-in user.')}
-    <p>Signed in as <strong>${esc(u.username)}</strong> (${esc(u.role)}).</p>
-    <h2>Change password</h2>
-    ${error ? `<p class="error">${esc(error)}</p>` : ''}
-    <form class="form" method="post" action="/profile/password">
-      <label class="wide">Current password<input type="password" name="current" required></label>
-      <label class="wide">New password<input type="password" name="next" required minlength="8"></label>
-      <label class="wide">Confirm new password<input type="password" name="next2" required></label>
-      <div class="actions"><button type="submit">Update password</button></div>
-    </form>`;
-  res.page({ title: 'Profile', noHeader: true, body, flash });
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Account</h2><span class="meta">Signed-in user</span></div>
+      <dl class="stats">
+        <dt>Username</dt><dd><strong>${esc(u.username)}</strong></dd>
+        <dt>Display name</dt><dd>${esc(u.display_name || '—')}</dd>
+        <dt>Role</dt><dd><span class="pill pill-${esc(u.role)}">${esc(roleLabel)}</span></dd>
+      </dl>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Change password</h2><span class="meta">Min 8 characters</span></div>
+      ${error ? `<p class="error">${esc(error)}</p>` : ''}
+      <form class="form" method="post" action="/profile/password" style="box-shadow:none;border:0;padding:0">
+        <label class="wide">Current password<input type="password" name="current" required></label>
+        <label class="wide">New password<input type="password" name="next" required minlength="8"></label>
+        <label class="wide">Confirm new password<input type="password" name="next2" required></label>
+        <div class="actions form-actions">
+          <a class="btn ghost" href="/">Done</a>
+          <button type="submit">Update password</button>
+        </div>
+      </form>
+    </div>`;
+  res.page({ title: 'Profile', active: '/profile', noHeader: true, body, flash });
 });
 
 app.post('/profile/password', (req, res) => {
@@ -2259,16 +2278,22 @@ app.get('/security/audit', requireOwner, (req, res) => {
       FROM security_audit_log sal
       LEFT JOIN users u ON u.user_id=sal.actor_id
      ORDER BY sal.audit_id DESC LIMIT 100`).all();
+  const inner = rows.length
+    ? table(['When', 'Event', 'Actor', 'Subject', 'IP'], rows.map((r) => [
+        esc(r.occurred_at),
+        esc(r.event),
+        esc(r.actor || 'system/anonymous'),
+        esc(r.subject || '—'),
+        esc(r.ip || '—'),
+      ]))
+    : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">🔒</div>
+        <h3>No audit events yet</h3>
+        <p>Logins, password changes, role updates and other security-sensitive actions will be logged here. Use this after deploys and account changes.</p>
+      </div>`;
   const body = `
     ${pageHero('Security Audit', 'Owner-only review of login, password and role events.')}
-    <p class="muted-text">Most recent security-sensitive events. Use this after deploys and account changes.</p>
-    ${table(['When', 'Event', 'Actor', 'Subject', 'IP'], rows.map((r) => [
-      esc(r.occurred_at),
-      esc(r.event),
-      esc(r.actor || 'system/anonymous'),
-      esc(r.subject || '—'),
-      esc(r.ip || '—'),
-    ]))}`;
+    ${listCard({ title: 'Recent security events', count: rows.length, countLabel: 'events', note: 'Most recent first · max 100', inner })}`;
   res.page({ title: 'Security Audit', active: '/security/audit', noHeader: true, body });
 });
 
