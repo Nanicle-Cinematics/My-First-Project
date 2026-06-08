@@ -5160,3 +5160,32 @@ textarea:focus {
   .page-actions { justify-content: flex-start; }
   .page-actions .btn { flex: 1 1 auto; justify-content: center; }
 }
+
+/* ---------- Form actions row (Cancel + Save) ---------- */
+.form .actions.form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--p-border);
+}
+
+.form .actions.form-actions .btn.ghost {
+  height: auto;
+  padding: 0.55rem 1.1rem;
+  font-weight: 650;
+}
+
+@media (max-width: 720px) {
+  .form .actions.form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .form .actions.form-actions .btn,
+  .form .actions.form-actions button[type="submit"] {
+    width: 100%;
+    justify-content: center;
+  }
+}
