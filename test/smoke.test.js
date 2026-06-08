@@ -104,7 +104,7 @@ test('setup form carries a CSRF token and creates the admin', async () => {
     'Ministry Overview',
     'Finance Summary',
     'Attendance Overview',
-    'Birthdays This Week',
+    'Birthdays This Month',
     'Recent Activities',
     'Pending Follow-ups',
   ].map((label) => home.body.indexOf(label));

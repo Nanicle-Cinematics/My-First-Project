@@ -4535,9 +4535,9 @@ button.link {
 
 .activity-card .collapse-card[open] .list {
   grid-column: auto;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--e-space-2) var(--e-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -4546,17 +4546,53 @@ button.link {
 .activity-card .collapse-card[open] .list li {
   min-width: 0;
   display: flex;
-  align-items: flex-start;
-  gap: var(--e-space-2);
-  padding: var(--e-space-2) 0;
+  align-items: center;
+  gap: var(--e-space-3);
+  padding: var(--e-space-3) 0;
   border-bottom: 1px solid var(--p-border);
   font-size: 0.84rem;
   line-height: 1.4;
 }
 
-.activity-card .collapse-card[open] .list li:last-child,
-.activity-card .collapse-card[open] .list li:nth-last-child(2) {
+.activity-card .collapse-card[open] .list li:last-child {
   border-bottom: 0;
+}
+
+/* Icon stays a fixed tile */
+.activity-card .collapse-card[open] .list li > .ico {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--purple-soft);
+  color: var(--purple-dark);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+}
+
+/* Description flexes, truncates on overflow, never line-breaks per word */
+.activity-card .collapse-card[open] .list li > span:not(.ico):not(.when) {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-card .collapse-card[open] .list li > span:not(.ico):not(.when) a {
+  color: inherit;
+}
+
+/* When-timestamp pinned to the right, compact mono-style */
+.activity-card .collapse-card[open] .list li > .when {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: auto;
 }
 
 .activity-card .collapse-card[open] .view-all,
