@@ -26,9 +26,9 @@ module.exports.register = function register(app, ctx) {
         <label>Topic / theme<input name="topic" value="${esc(plan.topic || '')}"></label>
         <label>Scripture<input name="scripture" placeholder="e.g. John 3:16" value="${esc(plan.scripture || '')}"></label>
         <label class="wide-cell">Notes<textarea name="notes" rows="2">${esc(plan.notes || '')}</textarea></label>
-        <div class="actions">
+        <div class="actions form-actions">
+          <a class="btn ghost" href="/preaching">Cancel</a>
           <button type="submit">Save</button>
-          <a href="/preaching" class="link">Cancel</a>
         </div>
       </form>`;
   }
@@ -88,15 +88,19 @@ module.exports.register = function register(app, ctx) {
            ${res.locals.isAdmin ? (preachingHasContact(next)
              ? `<form method="post" action="/preaching/${next.plan_id}/remind"
                       onsubmit="return confirm('Send an SMS / email reminder to this preacher?')">
-                  <button type="submit">📣 Send reminder to ${esc((preacherContact(next).first) || 'preacher')}</button>
+                  <button class="btn primary" type="submit">＋ Send reminder to ${esc((preacherContact(next).first) || 'preacher')}</button>
                 </form>`
              : '<p class="muted-text">Add a phone or email for this preacher to enable reminders.</p>') : ''}
          </section>`
-      : '<p class="muted-text">No upcoming preaching appointments scheduled.</p>';
+      : `<div class="empty-state">
+          <div class="empty-ico" aria-hidden="true">📣</div>
+          <h3>No upcoming preaching appointments</h3>
+          <p>${res.locals.isAdmin ? 'Use the form below to schedule the first one.' : 'Once the preaching plan is set, it will appear here.'}</p>
+        </div>`;
 
     const newForm = res.locals.isAdmin
-      ? `<details class="form-toggle" style="margin-bottom:1rem">
-           <summary><strong>+ Schedule a preaching appointment</strong></summary>
+      ? `<details class="form-toggle" id="schedule" style="margin-bottom:1rem">
+           <summary><strong>＋ Schedule a preaching appointment</strong></summary>
            <div style="margin-top:0.75rem">${preachingForm({}, '/preaching')}</div>
          </details>`
       : '';
@@ -123,10 +127,10 @@ module.exports.register = function register(app, ctx) {
 
     const head = `<thead><tr><th>Date</th><th>Preacher</th><th>Service</th><th>Topic</th>${res.locals.isAdmin ? '<th></th>' : ''}</tr></thead>`;
     const upcomingTable = upcoming.length
-      ? `<section class="card" style="margin-bottom:1rem"><h2>Upcoming</h2><table>${head}<tbody>${renderRows(upcoming)}</tbody></table></section>`
+      ? `<section class="card" style="margin-bottom:1rem"><div class="card-head"><h2>Upcoming</h2><span class="meta">${upcoming.length} scheduled</span></div><table>${head}<tbody>${renderRows(upcoming)}</tbody></table></section>`
       : '';
     const pastTable = past.length
-      ? `<section class="card"><h2>Recent (past)</h2><table>${head}<tbody>${renderRows(past)}</tbody></table></section>`
+      ? `<section class="card"><div class="card-head"><h2>Recent (past)</h2><span class="meta">Last ${past.length}</span></div><table>${head}<tbody>${renderRows(past)}</tbody></table></section>`
       : '';
 
     res.page({
