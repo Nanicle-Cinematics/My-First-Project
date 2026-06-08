@@ -45,8 +45,8 @@ module.exports.register = function register(app, ctx) {
       { cls: 'gold', icon: '♫', value: orgCount.toLocaleString(), label: 'Organizations' },
       { cls: 'green', icon: '👥', value: enrolled.toLocaleString(), label: 'Members Enrolled' },
       { cls: 'blue', icon: '★', value: leaders.toLocaleString(), label: 'Groups with a Leader' },
-    ], `${isAdmin ? `<a class="btn" href="/organizations/new">＋ Add Organization</a>` : ''}
-        <a class="btn ghost" href="/members">👥 View Members</a>`);
+    ], `${isAdmin ? `<a class="btn primary" href="/organizations/new">＋ Add Organization</a>` : ''}
+        <a class="btn ghost" href="/members">View Members</a>`);
     const sortOpts = [['', 'Sort: A–Z'], ['members', 'Sort: Most members']]
       .map(([v, l]) => `<option value="${v}" ${v === sort ? 'selected' : ''}>${l}</option>`).join('');
     const filters = filterCard({
@@ -80,15 +80,17 @@ module.exports.register = function register(app, ctx) {
     }).join('');
 
     const list = listCard({
-      title: '♫ Organizations List', count: orgs.length, countLabel: 'groups',
+      title: 'Organizations', count: orgs.length, countLabel: 'groups',
       note: 'Results update as you search and filter',
       inner: orgs.length ? `<table class="data-table members-table">
           <thead><tr><th>Organization</th><th>Leader</th><th>Members</th><th>Actions</th></tr></thead>
           <tbody>${rowHtml}</tbody>
         </table>` : `<div class="empty-state">
-          <div class="empty-ico">♫</div>
-          <p>No organizations match your search.</p>
-          ${isAdmin ? '<a class="btn" href="/organizations/new">＋ Add Organization</a>' : ''}
+          <div class="empty-ico" aria-hidden="true">♫</div>
+          <h3>${q ? `No organizations match "${esc(q)}"` : 'No organizations yet'}</h3>
+          <p>${q ? 'Try a different search term, or add a new group.' : 'Add your first choir, fellowship or band to get started.'}</p>
+          ${isAdmin ? '<a class="btn primary" href="/organizations/new">＋ Add Organization</a>' : ''}
+          ${q ? '<div style="margin-top:0.6rem"><a class="link" href="/organizations">Clear search →</a></div>' : ''}
         </div>`,
     });
 
@@ -100,13 +102,15 @@ module.exports.register = function register(app, ctx) {
 
   app.get('/organizations/new', requireAdmin, (req, res) => {
     const body = `
-      <p><a href="/organizations">← Back to organizations</a></p>
       <form class="form" method="post" action="/organizations">
         <label class="wide">Name<input name="name" required></label>
         <label>Meets<input name="meets_on" placeholder="e.g. Saturday 5pm"></label>
         <label>Leader<select name="leader_id">${orgMemberOptions()}</select></label>
         <label class="wide">Description<input name="description"></label>
-        <div class="actions"><button type="submit">Add organization</button></div>
+        <div class="actions form-actions">
+          <a class="btn ghost" href="/organizations">Cancel</a>
+          <button type="submit">Add organization</button>
+        </div>
       </form>`;
     res.page({ title: 'New organization', active: '/organizations', body });
   });
@@ -146,7 +150,11 @@ module.exports.register = function register(app, ctx) {
                </form></td>` : ''}
            </tr>`).join('')}</tbody>
          </table>`
-      : '<div class="empty-state"><div class="empty-ico">👥</div><p>No members assigned yet.</p></div>';
+      : `<div class="empty-state">
+          <div class="empty-ico" aria-hidden="true">👥</div>
+          <h3>No members in this group yet</h3>
+          <p>${isAdmin ? 'Use the form below to add the first member.' : 'Ask an admin to add members to this organization.'}</p>
+        </div>`;
 
     const manage = isAdmin
       ? `<div class="card" style="margin-top:1rem">
@@ -171,7 +179,7 @@ module.exports.register = function register(app, ctx) {
         { cls: 'green', icon: '★', value: o.leader_id ? esc(o.leader_name) : '—', label: 'Leader' },
         { cls: 'blue', icon: '📅', value: o.meets_on ? esc(o.meets_on) : '—', label: 'Meets' },
       ])}
-      ${listCard({ title: '👥 Roster', count: members.length, countLabel: 'members', inner: roster })}
+      ${listCard({ title: 'Roster', count: members.length, countLabel: 'members', inner: roster })}
       ${manage}`;
     res.page({ title: o.name, active: '/organizations', noHeader: true, body });
   });
