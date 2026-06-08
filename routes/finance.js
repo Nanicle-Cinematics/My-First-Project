@@ -87,6 +87,11 @@ app.get('/finance', (req, res) => {
   const body = `
     ${pageHero('Finance', 'Offerings, tithes, harvests and expenses — this year at a glance.')}
     ${financeTabs('/finance')}
+    <div class="page-actions">
+      <a class="btn primary" href="/finance/services/new">＋ Record Service</a>
+      <a class="btn purple" href="/finance/special/new">＋ Special Offering</a>
+      <a class="btn ghost" href="/finance/expenses/new">＋ Expense</a>
+    </div>
     ${statsRow([
       { cls: 'gold', icon: '₵', value: fmtMoney(services), label: 'Service Offerings YTD' },
       { cls: 'green', icon: '🤲', value: fmtMoney(tithesYtd), label: 'Tithes YTD' },
@@ -959,7 +964,12 @@ app.get('/finance/statements', (req, res) => {
           <td data-label="Statement"><a class="btn ghost" href="/members/${r.member_id}/statement?year=${year}">View →</a></td>
         </tr>`).join('')}</tbody>
       </table>`
-    : `<div class="empty-state"><div class="empty-ico">🧾</div><p>No member giving recorded for ${year}.</p></div>`;
+    : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">🧾</div>
+        <h3>No giving recorded for ${year}</h3>
+        <p>Once contributions are linked to members, you'll see them here. Try a different year, or record a new offering.</p>
+        <a class="btn primary" href="/finance/services/new">＋ Record Service</a>
+      </div>`;
 
   res.page({
     title: 'Finance · Statements', active: '/finance', noHeader: true,
@@ -969,7 +979,7 @@ app.get('/finance/statements', (req, res) => {
         { cls: 'gold', icon: '🧾', value: rows.length.toLocaleString(), label: `Givers in ${year}` },
         { cls: 'green', icon: '₵', value: fmtMoney(totalGiving), label: `Attributed Giving ${year}` },
       ], yearSel)}
-      ${listCard({ title: `🧾 Members with giving in ${year}`, count: rows.length, countLabel: 'members', inner })}`,
+      ${listCard({ title: `Members with giving in ${year}`, count: rows.length, countLabel: 'members', inner })}`,
   });
 });
 
