@@ -1313,9 +1313,9 @@ app.get('/', (req, res) => {
   const birthdays = db.prepare(`
     SELECT member_id, first_name || ' ' || last_name AS name, date_of_birth
     FROM members WHERE date_of_birth IS NOT NULL
-      AND strftime('%j', date_of_birth) BETWEEN
-          strftime('%j','now') AND strftime('%j', date('now','+7 days'))
-    ORDER BY strftime('%m-%d', date_of_birth) LIMIT 5
+      AND strftime('%m', date_of_birth) = strftime('%m','now')
+      AND deleted_at IS NULL
+    ORDER BY strftime('%d', date_of_birth) LIMIT 10
   `).all();
 
   const followups = {
@@ -1593,8 +1593,8 @@ app.get('/', (req, res) => {
     </div>`;
 
   const birthdaysCard = `
-    <div class="card dashboard-clickable" ${cardAttrs('/members', 'Birthdays This Week')}>
-      <div class="card-head"><h2>Birthdays This Week</h2><a href="/members">View all</a></div>
+    <div class="card dashboard-clickable" ${cardAttrs('/members', 'Birthdays This Month')}>
+      <div class="card-head"><h2>Birthdays This Month</h2><a href="/members">View all</a></div>
       ${birthdays.length ? birthdays.map((b) => {
         const day = new Date(b.date_of_birth);
         const when = day.toLocaleString('en', { month: 'short', day: '2-digit' });
@@ -1603,7 +1603,7 @@ app.get('/', (req, res) => {
           <div><a href="/members/${b.member_id}">${esc(b.name)}</a></div>
           <div class="when">${esc(when)}</div>
         </div>`;
-      }).join('') : '<p class="muted-text">No birthdays this week.</p>'}
+      }).join('') : '<p class="muted-text">No birthdays this month.</p>'}
     </div>`;
 
   const followupsCard = `
