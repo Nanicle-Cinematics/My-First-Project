@@ -5146,3 +5146,17 @@ textarea:focus {
     animation: none !important;
   }
 }
+
+/* ---------- Page actions row (above stats) ---------- */
+.page-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin: 0 0 1rem;
+  justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .page-actions { justify-content: flex-start; }
+  .page-actions .btn { flex: 1 1 auto; justify-content: center; }
+}
