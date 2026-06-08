@@ -5225,3 +5225,297 @@ textarea:focus {
     justify-content: center;
   }
 }
+
+/* ============================================================
+   MOCKUP-ALIGNED DASHBOARD
+   "Welcome back" header + 4 refined KPI cards + dual-area chart +
+   refined upcoming events + day-born + recent members table
+   ============================================================ */
+
+/* --- Welcome header --- */
+.dash-welcome {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 1rem; flex-wrap: wrap;
+  margin: 0 0 1.4rem;
+}
+.dash-welcome-text { min-width: 0; flex: 1 1 320px; }
+.dash-welcome .dash-h1 {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: clamp(1.5rem, 2.2vw, 1.95rem);
+  letter-spacing: -0.028em;
+  line-height: 1.1;
+  margin: 0 0 0.35rem;
+  color: var(--ink);
+}
+.dash-welcome .dash-sub {
+  margin: 0; color: var(--muted);
+  font-size: 0.92rem; line-height: 1.5;
+}
+.dash-welcome .dash-sub strong { color: var(--ink); font-weight: 700; }
+.dash-welcome-actions { display: flex; gap: 0.55rem; flex-wrap: wrap; }
+
+@media (max-width: 720px) {
+  .dash-welcome { align-items: stretch; }
+  .dash-welcome-actions { width: 100%; }
+  .dash-welcome-actions .btn { flex: 1 1 auto; justify-content: center; }
+}
+
+/* --- Mockup KPI cards: label top-left + icon top-right + big value + trend chip + sparkline --- */
+.stat-grid.mockup-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0 0 1.4rem;
+}
+@media (max-width: 1100px) { .stat-grid.mockup-kpis { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px)  { .stat-grid.mockup-kpis { grid-template-columns: 1fr; } }
+
+.mockup-stat {
+  background: var(--panel);
+  border: 1px solid var(--p-border);
+  border-radius: 20px;
+  padding: 1.25rem 1.3rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.25rem;
+  box-shadow: var(--p-shadow-sm);
+  position: relative; overflow: hidden;
+  transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease), border-color 0.22s var(--ease);
+  min-width: 0;
+}
+.mockup-stat:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--p-shadow-md);
+  border-color: var(--p-border-strong);
+}
+.mockup-stat::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+  background: var(--stat-accent, var(--purple));
+  opacity: 0.9;
+}
+
+.mockup-stat .stat-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 0.6rem; min-width: 0;
+}
+.mockup-stat .stat-label {
+  font-size: 0.85rem; font-weight: 650; color: var(--muted);
+  letter-spacing: -0.005em;
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mockup-stat .stat-ico {
+  width: 38px; height: 38px; border-radius: 11px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1rem; flex-shrink: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+.mockup-stat .stat-ico.amber  { background: var(--gold-soft);   color: var(--gold-deep); }
+.mockup-stat .stat-ico.purple { background: var(--purple-soft); color: var(--purple-dark); }
+.mockup-stat .stat-ico.blue   { background: var(--blue-soft);   color: var(--blue); }
+.mockup-stat .stat-ico.green  { background: var(--green-soft);  color: #106a31; }
+
+.mockup-stat .stat-value {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: clamp(1.65rem, 2.1vw, 1.95rem);
+  line-height: 1.05;
+  letter-spacing: -0.030em;
+  margin: 0.45rem 0 0.4rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.mockup-stat .stat-trend {
+  display: flex; align-items: center; gap: 0.45rem;
+  font-size: 0.78rem; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mockup-stat .stat-trend .trend-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.7rem; font-weight: 700;
+  padding: 0.2rem 0.55rem; border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.mockup-stat .stat-trend .trend-chip.up      { background: var(--green-soft);  color: #106a31; }
+.mockup-stat .stat-trend .trend-chip.down    { background: var(--danger-soft); color: #9f1239; }
+.mockup-stat .stat-trend .trend-chip.neutral { background: var(--soft);        color: var(--muted); }
+.mockup-stat .stat-trend .trend-meta {
+  font-size: 0.74rem; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mockup-stat .stat-spark { margin-top: 0.7rem; }
+.mockup-stat .stat-spark svg { width: 100%; height: 44px; display: block; }
+
+/* --- Mockup dashboard grid: Chart (2/3) + Upcoming (1/3), Day-born full, Recent Members full --- */
+.dash-grid.mockup-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1rem;
+  align-items: stretch;
+}
+.dash-grid.mockup-grid .trend-col,
+.dash-grid.mockup-grid .upcoming-col { min-width: 0; }
+.dash-grid.mockup-grid .col-3 { grid-column: 1 / -1; }
+
+@media (max-width: 980px) {
+  .dash-grid.mockup-grid { grid-template-columns: 1fr; }
+}
+
+/* --- Attendance Trend chart card --- */
+.trend-card { padding: 0; overflow: hidden; height: 100%; display: flex; flex-direction: column; }
+.trend-card .card-head.trend-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 1.1rem 1.3rem;
+  border-bottom: 1px solid var(--p-border);
+  margin-bottom: 0;
+  gap: 1rem;
+}
+.trend-card .card-head.trend-head h2 {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.018em;
+  margin: 0 0 0.15rem;
+}
+.trend-card .card-head.trend-head .meta {
+  font-size: 0.78rem; color: var(--muted);
+}
+
+.trend-tabs {
+  display: inline-flex; gap: 2px;
+  background: var(--soft);
+  border-radius: 10px;
+  padding: 3px;
+  flex-shrink: 0;
+}
+.trend-tab {
+  border: 0; background: transparent;
+  padding: 0.35rem 0.7rem;
+  border-radius: 8px;
+  font: 600 0.78rem/1 var(--p-font-body);
+  color: var(--muted); cursor: pointer;
+  transition: all 0.16s var(--ease);
+}
+.trend-tab:hover { color: var(--ink); }
+.trend-tab.active {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--p-shadow-xs);
+}
+
+.trend-card .trend-chart {
+  width: 100%; height: auto;
+  display: block;
+  padding: 0.4rem 0.6rem 0.2rem;
+  flex: 1;
+}
+.trend-card .empty-state { padding: 2rem 1.2rem; flex: 1; }
+
+/* --- Upcoming events card with date tiles --- */
+.upcoming-card { padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 100%; }
+.upcoming-card .card-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 1.1rem 1.3rem 0.7rem;
+  margin: 0;
+  border-bottom: 0;
+  gap: 0.5rem;
+}
+.upcoming-card .card-head h2 {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.018em;
+  margin: 0;
+}
+.upcoming-card .card-head .meta { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+.upcoming-card .card-head .view-all {
+  font-size: 0.78rem; font-weight: 650; color: var(--purple-dark);
+  padding: 0.35rem 0.7rem; border-radius: 8px;
+  border: 1px solid var(--p-border-strong);
+  background: var(--panel);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.upcoming-card .upcoming-row {
+  display: flex; align-items: center; gap: 0.85rem;
+  padding: 0.75rem 1.3rem;
+  border-bottom: 1px solid var(--p-border);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.16s var(--ease);
+}
+.upcoming-card .upcoming-row:last-child { border-bottom: 0; }
+.upcoming-card .upcoming-row:hover {
+  background: linear-gradient(90deg, rgba(212, 160, 23, 0.06), transparent);
+}
+.upcoming-card .date-tile {
+  flex-shrink: 0;
+  width: 56px; height: 60px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--gold-soft), var(--panel));
+  border: 1px solid var(--p-border);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center;
+  box-shadow: var(--p-shadow-xs);
+}
+.upcoming-card .date-tile .m {
+  font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
+  font-weight: 700; color: var(--gold-deep);
+}
+.upcoming-card .date-tile .d {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin-top: 2px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.upcoming-card .upcoming-body { flex: 1; min-width: 0; }
+.upcoming-card .upcoming-body .evt-type {
+  font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
+  font-weight: 700; color: var(--purple-dark);
+}
+.upcoming-card .upcoming-body .evt-title {
+  font-family: var(--p-font-display);
+  font-weight: 700; font-size: 0.95rem;
+  margin-top: 2px; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.upcoming-card .upcoming-body .evt-meta {
+  font-size: 0.74rem; color: var(--muted); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.upcoming-card .empty-state { padding: 2rem 1.2rem; }
+
+/* --- Recent Members card --- */
+.recent-members-card { padding: 0; overflow: hidden; }
+.recent-members-card .card-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 1.1rem 1.3rem;
+  border-bottom: 1px solid var(--p-border);
+  margin: 0;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.recent-members-card .card-head h2 {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.018em;
+  margin: 0 0 0.15rem;
+}
+.recent-members-card .card-head .meta {
+  font-size: 0.78rem; color: var(--muted);
+}
+.recent-members-card .hero-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.recent-members-card .hero-actions .btn { height: 38px; padding: 0 1rem; font-size: 0.84rem; }
+
+.recent-members-card .data-table { width: 100%; }
+.recent-members-card .pill-warn { background: var(--gold-soft); color: var(--gold-deep); }
+.recent-members-card .pill-ok   { background: var(--green-soft); color: #106a31; }
+.recent-members-card .pill-new  { background: var(--blue-soft);  color: #1d4ed8; }
+.recent-members-card .empty-state { padding: 2.5rem 1.2rem; }
