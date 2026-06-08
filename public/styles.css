@@ -5590,3 +5590,84 @@ textarea:focus {
 .recent-members-card .pill-ok   { background: var(--green-soft); color: #106a31; }
 .recent-members-card .pill-new  { background: var(--blue-soft);  color: #1d4ed8; }
 .recent-members-card .empty-state { padding: 2.5rem 1.2rem; }
+
+/* ============================================================
+   v5 — Move dashboard cover image up to reveal the cross,
+   add worship-bw as the page background (outside the sidebar +
+   outside the auth-card), refined event detail header
+   ============================================================ */
+
+/* 1. Dashboard cover: pull image up so the cross sits in the visible area */
+.dash-welcome.dash-welcome-cover {
+  background:
+    linear-gradient(120deg, rgba(12, 44, 90, 0.86) 0%, rgba(12, 44, 90, 0.55) 45%, rgba(12, 44, 90, 0.20) 100%),
+    url('/static/worship-bg.jpg') center 22% / cover no-repeat;
+}
+
+/* 2. App-wide background — B&W worship image visible behind everything in
+      the main content area. Sidebar keeps its own gradient (untouched).
+      A translucent wash sits above so cards stay legible. */
+body {
+  background:
+    linear-gradient(180deg, rgba(246, 247, 251, 0.90), rgba(246, 247, 251, 0.94)),
+    url('/static/worship-bw.jpg') center / cover no-repeat fixed;
+}
+
+:root[data-theme="dark"] body {
+  background:
+    linear-gradient(180deg, rgba(13, 19, 32, 0.92), rgba(13, 19, 32, 0.96)),
+    url('/static/worship-bw.jpg') center / cover no-repeat fixed;
+}
+
+/* Page area is transparent so the body image shows through; topbar gains
+   slightly stronger glass for legibility */
+.main { background: transparent; }
+.topbar {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: saturate(160%) blur(14px);
+}
+:root[data-theme="dark"] .topbar {
+  background: rgba(13, 19, 32, 0.78);
+}
+
+/* 3. Auth-shell (sign-in page) — full-bleed cover of the B&W image with a
+      darker overlay so the cross + raised hands feel like a hero behind
+      the sign-in card. Translucent overlay leaves the photo clearly visible. */
+.auth-shell {
+  background:
+    linear-gradient(135deg, rgba(12, 44, 90, 0.55) 0%, rgba(12, 44, 90, 0.38) 45%, rgba(12, 44, 90, 0.72) 100%),
+    url('/static/worship-bw.jpg') center / cover no-repeat fixed;
+}
+
+/* Form CARD stays a clean solid-ish surface so inputs don't compete with
+   the background photo */
+.auth-card {
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(6px);
+}
+:root[data-theme="dark"] .auth-card {
+  background: rgba(23, 29, 43, 0.94);
+}
+
+/* 4. Event detail header — gives "Edit event" room next to the metadata */
+.event-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0 0 1.1rem;
+}
+.event-detail-head .evt-type {
+  font-size: 0.66rem; letter-spacing: 0.14em; text-transform: uppercase;
+  font-weight: 700; color: var(--purple-dark);
+  margin-bottom: 0.2rem;
+}
+.event-detail-head .event-detail-meta {
+  font-size: 0.95rem; color: var(--ink); font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .event-detail-head { align-items: stretch; }
+  .event-detail-head > div:last-child .btn { width: 100%; justify-content: center; }
+}
