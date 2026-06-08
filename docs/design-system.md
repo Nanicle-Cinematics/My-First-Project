@@ -325,7 +325,142 @@ Nav item: 40px min-height, 12px radius, 0.88rem 600. Hover: `translateX(2px)` + 
 
 ---
 
-## 5. ASCII wireframes
+## 5. Motion tokens & philosophy
+
+Motion exists to **clarify state, hierarchy, and arrival** — never to entertain. Decorative-only animation is forbidden. Every motion respects `prefers-reduced-motion: reduce`.
+
+### Token table
+
+```
+EASING       standard     cubic-bezier(0.4, 0, 0.2, 1)
+             emphasized   cubic-bezier(0.2, 0, 0, 1)
+
+DURATION     micro        120ms     state ticks (hover color)
+             short        180ms     focus rings, fades
+             medium       240ms     hover lifts, expand
+             long         360ms     route entrance, modals
+             slow         600ms     stagger group cap
+             ambient      ≥ 2s      pulses, drifts, idle loops
+```
+
+### Rules
+
+- Animate only `transform` and `opacity`. Never animate layout properties (`width`, `height`, `top`, `left`, `margin`).
+- Maximum single-element animation: **600ms**. Ambient loops (pulse, drift) exempted.
+- Only `standard` and `emphasized` easings. No bounce, no spring oscillation, no wobble.
+- Stagger steps no shorter than 30ms, no longer than 90ms.
+- All `:hover` motion must also work on `:focus-visible` for keyboard parity.
+- Reduced-motion collapse: every transition becomes `1ms`, except essential opacity fades preserved at `180ms` so state changes remain perceivable.
+- Animations are owned by CSS. No JS-driven motion except one-shot counter rolls, which use `requestAnimationFrame`.
+
+---
+
+## 5b. Animation catalog
+
+Every named motion currently shipped in `public/styles.css`. New motion must extend this table or be removed.
+
+### Page-level
+
+| Name           | Element                     | Property                          | Duration | Easing       | Trigger        |
+|----------------|-----------------------------|-----------------------------------|----------|--------------|----------------|
+| `pageEntrance` | `main > .page`              | opacity + translateY 12 → 0       | 360ms    | emphasized   | route load     |
+| `heroEntrance` | `.page-hero`                | opacity + translateY 8 → 0        | 400ms    | emphasized   | route load (60ms delay) |
+
+### Stagger families (children animate in sequence)
+
+| Name              | Selector                            | Step delay | Total cap |
+|-------------------|-------------------------------------|------------|-----------|
+| `statStagger`     | `.stat-grid > .stat`                | 60ms       | 320ms     |
+| `heroStatStagger` | `.hero-stat-group > .hero-stat`     | 60ms       | 300ms     |
+| `gridStagger`     | `.dash-grid > *`                    | 60ms       | 600ms     |
+| `dayBornStagger`  | `.day-born-grid > .day-card`        | 60ms       | 420ms     |
+| `navStagger`      | `.sidebar .nav-section`             | 60ms       | 360ms     |
+| `tableRowStagger` | `tbody tr` (first 10)               | 30ms       | 300ms     |
+
+### Mount animations
+
+| Name              | Effect                                                         | When                  |
+|-------------------|----------------------------------------------------------------|-----------------------|
+| `sparklineDraw`   | KPI sparkline `path` `stroke-dashoffset` 600 → 0 (1400ms)      | stat card mount       |
+| `chartArea`       | Area chart fill `scaleY` 0 → 1 (transform-origin bottom)       | chart card mount      |
+| `counterRoll`     | KPI number counts from 0 to value (1.4s, rAF-driven)           | stat card mount, once |
+| `skeletonShimmer` | Linear gradient sweep across `.skeleton` (1.4s infinite)       | while loading         |
+
+### Hover / interactive
+
+| Name              | Selector                                            | Effect                                  |
+|-------------------|-----------------------------------------------------|-----------------------------------------|
+| `cardLift`        | `.card`                                             | `translateY(-2px)` + shadow xs → md     |
+| `dashCardAccent`  | `.dashboard-clickable::before`                      | gold→plum top stripe opacity 0 → 1      |
+| `dayCardGlow`     | `.day-card::after`                                  | radial gold glow opacity 0 → 1          |
+| `buttonShine`     | `.btn::after`, `.form button[type=submit]::after`   | gradient sweep translateX -100% → 100% (550ms) |
+| `navShimmer`      | `.sidebar nav a::before`                            | white gradient sweep, hover only        |
+| `activeIconFloat` | `.sidebar nav a.active .ico`                        | `floatY` ±4px (2.4s infinite)           |
+| `statIconFloat`   | `.stat:hover .ico`                                  | `floatY` ±4px (1.6s infinite)           |
+| `avatarPop`       | `tr:hover .m-avatar`, `.org-badge`                  | `scale(1.08)` 200ms                     |
+| `pillPop`         | `.pill:hover`                                       | `translateY(-1px) scale(1.04)`          |
+| `tabUnderline`    | `.finance-tabs a::after`                            | `scaleX` 0 → 1 from left (260ms)        |
+| `calEvLift`       | `.cal-cell:hover .cal-ev`                           | `translateY(-1px)`                      |
+
+### Persistent / ambient
+
+| Name                 | Selector                          | Notes                                          |
+|----------------------|-----------------------------------|------------------------------------------------|
+| `notificationPulse`  | `.topbar .bell .badge`            | box-shadow ring pulse (2s infinite)            |
+| `authBgDrift`        | `.auth-card::before`              | `scale` + `translate` (28s ease alternate)     |
+| `logoFloat`          | `.auth-logo`                      | `floatY` ±4px (5s infinite)                    |
+| `logoTilt`           | `.sidebar .brand:hover img`       | `rotate(6deg) scale(1.04)` 400ms               |
+
+### State transitions
+
+| Event                  | Animation                                                                       |
+|------------------------|---------------------------------------------------------------------------------|
+| Modal open             | backdrop fade 180ms + dialog `scale(0.96) → 1` + `translateY(12 → 0)` 240ms emphasized |
+| Modal close            | reverse, 160ms standard                                                         |
+| Toast in               | `translateY(20) scale(0.96) → 0/1` + opacity (280ms emphasized)                 |
+| Toast auto-dismiss     | opacity → 0 + `translateY(-8)` 200ms at 4000ms or on action                    |
+| Drawer (mobile sidebar)| `translateY(100% → 0)` 300ms emphasized                                         |
+| Bulk-bar appear        | `fadeUp` 300ms                                                                  |
+| Tab switch             | underline slide 260ms standard                                                  |
+| Theme toggle           | body colors crossfade 240ms (no layout shift)                                   |
+| Form input focus       | border + ring fade-in 180ms, no shake                                           |
+| Form input invalid     | red ring + 1× horizontal shake 80ms (4px), with `aria-live` announcement        |
+
+### Keyframes registry
+
+Defined in the v4 layer of `public/styles.css`:
+
+| Keyframe          | What it animates                                        |
+|-------------------|---------------------------------------------------------|
+| `fadeUp`          | opacity 0 → 1, translateY 12 → 0                        |
+| `fadeIn`          | opacity 0 → 1                                           |
+| `slideInRight`    | opacity 0 → 1, translateX -10 → 0                       |
+| `scaleIn`         | opacity 0 → 1, scale 0.96 → 1                           |
+| `shimmer`         | background-position sweep (for skeleton)                |
+| `sparklineDraw`   | `stroke-dashoffset` 600 → 0                             |
+| `pulseGlow`       | box-shadow ring 0 → 8px → 0                             |
+| `floatY`          | translateY ±4px loop                                    |
+| `authBgDrift`     | scale 1.08 → 1.14, translate -12,-8                     |
+| `toastIn`         | opacity 0 → 1, translateY 20 → 0, scale 0.96 → 1        |
+
+### Constraints
+
+- No animation longer than **600ms** except ambient loops listed above.
+- No bounce, wobble, or spring oscillation. Only `standard` and `emphasized` easing.
+- `transform` and `opacity` only — never animate layout properties.
+- `prefers-reduced-motion: reduce` collapses all to `0.01ms`, except essential opacity state-change fades remain at 180ms.
+- All animations CSS-owned except `counterRoll` (rAF, one shot per mount).
+
+### Verification
+
+- DevTools **Animations** panel — confirm timing and easing match this table per element.
+- DevTools **Rendering → Emulate CSS media `prefers-reduced-motion`** — every motion collapses.
+- Performance profile on Moto G Power class device — every frame ≤ 16ms during entrance staggers.
+- Lighthouse Best Practices ≥ 95 (no jank flagged).
+
+---
+
+## 6. ASCII wireframes
 
 ### Dashboard
 
@@ -506,19 +641,6 @@ Nav item: 40px min-height, 12px radius, 0.88rem 600. Hover: `translateX(2px)` + 
 │       Page background: layered indigo/purple gradient            │
 └──────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## 6. Motion
-
-| Property | Duration | Easing |
-|---|---|---|
-| Hover transforms | 160ms | `cubic-bezier(0.4, 0, 0.2, 1)` |
-| Color/bg fades | 140ms | ease |
-| Card lift | 200ms | ease |
-| Toast in/out | 250ms | ease |
-
-`prefers-reduced-motion: reduce` clamps all to `0.01ms`.
 
 ---
 
