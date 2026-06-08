@@ -3,7 +3,32 @@
 // register(app, ctx). Block moved verbatim to preserve exact rendered output.
 module.exports.register = function register(app, ctx) {
   const { db, esc, pageHero, statsRow, filterCard, listCard, table,
-    requireAdmin, logActivity, layout, flash, PUBLIC_URL, ICON_EYE } = ctx;
+    requireAdmin, logActivity, layout, flash, PUBLIC_URL, ICON_EYE, ICON_PENCIL } = ctx;
+
+  // ---------- shared event form ---------- //
+  const EVENT_TYPES = ['service', 'prayer', 'bible_study', 'outreach', 'youth', 'wedding', 'funeral', 'baptism', 'other'];
+  function eventForm(ev, action) {
+    const e = ev || {};
+    const isoLocal = (v) => {
+      if (!v) return '';
+      // SQLite stores 'YYYY-MM-DD HH:MM[:SS]' — convert to datetime-local input value.
+      return String(v).replace(' ', 'T').slice(0, 16);
+    };
+    return `<form class="form" method="post" action="${action}">
+      <label>Title<input name="title" required value="${esc(e.title || '')}"></label>
+      <label>Type<select name="event_type">
+        ${EVENT_TYPES.map((t) => `<option value="${t}" ${t === (e.event_type || 'service') ? 'selected' : ''}>${t}</option>`).join('')}
+      </select></label>
+      <label>Starts<input type="datetime-local" name="starts_at" required value="${esc(isoLocal(e.starts_at))}"></label>
+      <label>Ends<input type="datetime-local" name="ends_at" value="${esc(isoLocal(e.ends_at))}"></label>
+      <label>Location<input name="location" value="${esc(e.location || '')}"></label>
+      <label class="wide">Notes<textarea name="notes" rows="2">${esc(e.notes || '')}</textarea></label>
+      <div class="actions form-actions">
+        <a class="btn ghost" href="${e.event_id ? `/events/${e.event_id}` : '/events'}">Cancel</a>
+        <button type="submit">${e.event_id ? 'Save changes' : 'Save event'}</button>
+      </div>
+    </form>`;
+  }
 
 app.get('/events', (req, res) => {
   const q = (req.query.q || '').trim();
@@ -41,6 +66,7 @@ app.get('/events', (req, res) => {
       <td data-label="Attendees"><span class="count-badge">${r.attendees}</span></td>
       <td data-label="Actions"><div class="row-actions">
         <a class="icon-btn view" href="/events/${r.event_id}" title="View" aria-label="View">${ICON_EYE}</a>
+        ${isAdmin ? `<a class="icon-btn edit" href="/events/${r.event_id}/edit" title="Edit" aria-label="Edit">${ICON_PENCIL}</a>` : ''}
       </div></td>
     </tr>`;
   }).join('');
@@ -108,20 +134,50 @@ app.get('/events/calendar', (req, res) => {
 });
 
 app.get('/events/new', requireAdmin, (req, res) => {
-  const body = `
-    <form class="form" method="post" action="/events">
-      <label>Title<input name="title" required></label>
-      <label>Type<select name="event_type">
-        ${['service', 'prayer', 'bible_study', 'outreach', 'youth', 'wedding', 'funeral', 'baptism', 'other']
-          .map((t) => `<option value="${t}">${t}</option>`).join('')}
-      </select></label>
-      <label>Starts<input type="datetime-local" name="starts_at" required></label>
-      <label>Ends<input type="datetime-local" name="ends_at"></label>
-      <label>Location<input name="location"></label>
-      <label class="wide">Notes<textarea name="notes" rows="2"></textarea></label>
-      <div class="actions"><button type="submit">Save</button></div>
-    </form>`;
-  res.page({ title: 'New event', active: '/events', body });
+  res.page({ title: 'New event', active: '/events', body: eventForm(null, '/events') });
+});
+
+app.get('/events/:id/edit', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const ev = db.prepare(`SELECT * FROM events WHERE event_id=?`).get(id);
+  if (!ev) return res.status(404).send('Not found');
+  res.page({
+    title: `Edit · ${ev.title}`,
+    active: '/events',
+    body: `<p><a href="/events/${id}">← Back to event</a></p>${eventForm(ev, `/events/${id}/edit`)}`,
+  });
+});
+
+app.post('/events/:id/edit', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const ev = db.prepare(`SELECT * FROM events WHERE event_id=?`).get(id);
+  if (!ev) return res.status(404).send('Not found');
+  const b = req.body;
+  if (!b.title || !b.starts_at) {
+    flash(req, 'Title and start time are required.');
+    return res.redirect(`/events/${id}/edit`);
+  }
+  db.prepare(`
+    UPDATE events
+       SET title = @title,
+           event_type = @event_type,
+           starts_at = @starts_at,
+           ends_at = @ends_at,
+           location = @location,
+           notes = @notes
+     WHERE event_id = @id
+  `).run({
+    id,
+    title: b.title,
+    event_type: EVENT_TYPES.includes(b.event_type) ? b.event_type : 'service',
+    starts_at: b.starts_at.replace('T', ' '),
+    ends_at: b.ends_at ? b.ends_at.replace('T', ' ') : null,
+    location: b.location || null,
+    notes: b.notes || null,
+  });
+  logActivity('event_updated', `Event updated: ${b.title}`, `/events/${id}`, res.locals.user.user_id);
+  flash(req, 'Event updated.', 'success');
+  res.redirect(`/events/${id}`);
 });
 
 app.post('/events', requireAdmin, (req, res) => {
@@ -211,7 +267,13 @@ app.get('/events/:id', (req, res) => {
     <a href="/rsvp/${esc(ev.checkin_token || '')}" target="_blank" rel="noopener">/rsvp/${esc(ev.checkin_token || '')}</a></p>`;
 
   const body = `
-    <p><strong>${esc(ev.event_type)}</strong> · ${esc(ev.starts_at)} · ${esc(ev.location) || ''}</p>
+    <div class="event-detail-head">
+      <div>
+        <div class="evt-type">${esc(ev.event_type)}</div>
+        <div class="event-detail-meta">${esc(ev.starts_at)}${ev.location ? ` · ${esc(ev.location)}` : ''}</div>
+      </div>
+      ${res.locals.isAdmin ? `<a class="btn primary" href="/events/${id}/edit">✎ Edit event</a>` : ''}
+    </div>
     ${qrButton}
     <div class="card" style="margin-bottom:1rem">
       <div class="card-head"><h2>RSVPs</h2>

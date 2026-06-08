@@ -1910,7 +1910,7 @@ require('./routes/bible-classes').register(app, {
 // ---------- events ----------
 require('./routes/events').register(app, {
   db, esc, pageHero, statsRow, filterCard, listCard, table,
-  requireAdmin, logActivity, layout, flash, PUBLIC_URL, ICON_EYE,
+  requireAdmin, logActivity, layout, flash, PUBLIC_URL, ICON_EYE, ICON_PENCIL,
 });
 
 // ---------- finance (record-only ledger) ----------
