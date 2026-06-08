@@ -74,13 +74,15 @@ app.get('/reports', (req, res) => {
          <div class="ico">${ico}</div>
          <div><div class="name">${esc(name)}</div><div class="desc">${esc(desc)}</div></div>
        </a>`).join('')}</div>
-    <h2>Print everything</h2>
-    <p>Build a single printable document containing every report section for a date range. Use your browser's Print dialog → "Save as PDF" to keep a copy.</p>
-    <form class="filters" method="get" action="/reports/print">
-      <label>From <input type="date" name="start" value="${esc(new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10))}"></label>
-      <label>To <input type="date" name="end" value="${esc(new Date().toISOString().slice(0, 10))}"></label>
-      <button type="submit">🖨 Open print view</button>
-    </form>`;
+    <div class="card" style="margin-top:1.5rem">
+      <div class="card-head"><h2>Print everything</h2><span class="meta">All sections, one document</span></div>
+      <p class="muted-text">Build a single printable document containing every report section for a date range. Use your browser's Print dialog → "Save as PDF" to keep a copy.</p>
+      <form class="filters" method="get" action="/reports/print">
+        <label>From <input type="date" name="start" value="${esc(new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10))}"></label>
+        <label>To <input type="date" name="end" value="${esc(new Date().toISOString().slice(0, 10))}"></label>
+        <button class="btn primary" type="submit">＋ Open print view</button>
+      </form>
+    </div>`;
   res.page({ title: 'Reports', active: '/reports', body });
 });
 
