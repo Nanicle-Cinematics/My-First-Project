@@ -35,7 +35,7 @@ module.exports.register = function register(app, ctx) {
       { cls: 'gold', icon: '📖', value: totalClasses.toLocaleString(), label: 'Bible Classes' },
       { cls: 'green', icon: '👥', value: enrolled.toLocaleString(), label: 'Members Enrolled' },
       { cls: 'blue', icon: '★', value: withLeader.toLocaleString(), label: 'Classes with a Leader' },
-    ], isAdmin ? `<a class="btn" href="#add-class">＋ Add Bible Class</a>` : '');
+    ], isAdmin ? `<a class="btn primary" href="#add-class">＋ Add Bible Class</a>` : '');
     const filters = filterCard({ q, placeholder: 'Search Bible classes by name…' });
 
     const rowHtml = rows.map((r) => `<tr>
@@ -60,11 +60,17 @@ module.exports.register = function register(app, ctx) {
     </tr>`).join('');
 
     const list = listCard({
-      title: '📖 All Bible Classes', count: rows.length, countLabel: 'classes',
+      title: 'All Bible Classes', count: rows.length, countLabel: 'classes',
       inner: rows.length ? `<table class="data-table members-table">
           <thead><tr><th>Bible class</th><th>Leader</th><th>Organization</th><th>Members</th>${isAdmin ? '<th>Edit</th>' : ''}</tr></thead>
           <tbody>${rowHtml}</tbody>
-        </table>` : '<div class="empty-state"><div class="empty-ico">📖</div><p>No Bible classes match your search.</p></div>',
+        </table>` : `<div class="empty-state">
+          <div class="empty-ico" aria-hidden="true">📖</div>
+          <h3>${q ? `No Bible classes match "${esc(q)}"` : 'No Bible classes yet'}</h3>
+          <p>${q ? 'Try a different search term, or add a new class below.' : 'Add your first Bible class using the form below.'}</p>
+          ${isAdmin ? '<a class="btn primary" href="#add-class">＋ Add Bible Class</a>' : ''}
+          ${q ? '<div style="margin-top:0.6rem"><a class="link" href="/bible-classes">Clear search →</a></div>' : ''}
+        </div>`,
     });
 
     const newForm = isAdmin
