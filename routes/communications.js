@@ -74,16 +74,20 @@ app.get('/communications', (req, res) => {
     LEFT JOIN users u ON u.user_id=a.posted_by
     ORDER BY a.posted_at DESC LIMIT 50`).all();
   const newForm = res.locals.isAdmin
-    ? `<h2>Post an announcement</h2>
-       <form class="form" method="post" action="/communications">
-         <label class="wide">Title<input name="title" required></label>
-         <label class="wide">Message<textarea name="body" rows="4" required></textarea></label>
-         <label>Audience<select name="audience">
-           <option value="all">Everyone</option>
-           <option value="members">Members only</option>
-         </select></label>
-         <div class="actions"><button type="submit">Post</button></div>
-       </form>` : '';
+    ? `<div class="card" style="margin-bottom:1rem">
+         <div class="card-head"><h2>Post an announcement</h2></div>
+         <form class="form" method="post" action="/communications" style="box-shadow:none;border:0;padding:0">
+           <label class="wide">Title<input name="title" required></label>
+           <label class="wide">Message<textarea name="body" rows="4" required></textarea></label>
+           <label>Audience<select name="audience">
+             <option value="all">Everyone</option>
+             <option value="members">Members only</option>
+           </select></label>
+           <div class="actions form-actions">
+             <button type="submit">Post announcement</button>
+           </div>
+         </form>
+       </div>` : '';
   const list = rows.length
     ? rows.map((a) => `
         <div class="card" style="margin-bottom:0.75rem">
@@ -94,7 +98,11 @@ app.get('/communications', (req, res) => {
           <p>${esc(a.body)}</p>
           <p class="muted-text">— ${esc(a.display_name || a.username || 'system')} · audience: ${esc(a.audience)}</p>
         </div>`).join('')
-    : '<p class="muted-text">No announcements yet.</p>';
+    : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">✉</div>
+        <h3>No announcements yet</h3>
+        <p>${res.locals.isAdmin ? 'Use the form above to post your first announcement.' : 'Once an admin posts an announcement it will appear here.'}</p>
+      </div>`;
   const stats = db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM announcements) AS announcements,
@@ -102,12 +110,12 @@ app.get('/communications', (req, res) => {
       (SELECT COUNT(*) FROM members WHERE deleted_at IS NULL AND preferred_channel != 'none') AS contactable
   `).get();
   const broadcastCta = res.locals.isAdmin
-    ? `<p style="margin-bottom:1rem">
-         <a class="btn" href="/communications/broadcast">📣 Send SMS/email broadcast</a>
+    ? `<div class="page-actions">
+         <a class="btn primary" href="/communications/broadcast">＋ Send SMS/email broadcast</a>
          <a class="btn ghost" href="/communications/broadcast?member_id=">Send to one member</a>
          <a class="btn ghost" href="/communications/broadcasts">View broadcast history</a>
          ${res.locals.isOwner ? '<a class="btn ghost" href="/communications/email-settings">Email settings</a>' : ''}
-       </p>` : '';
+       </div>` : '';
   res.page({
     title: 'Communications', active: '/communications', noHeader: true,
     body: `${pageHero('Communications', 'Announcements, broadcast history and member messaging readiness.')}
@@ -116,7 +124,7 @@ app.get('/communications', (req, res) => {
         { cls: 'green', icon: '📣', value: Number(stats.broadcasts).toLocaleString(), label: 'Broadcasts' },
         { cls: 'blue', icon: '✓', value: Number(stats.contactable).toLocaleString(), label: 'Contactable Members' },
       ])}
-      ${broadcastCta}${newForm}<h2>Recent announcements</h2>${list}`,
+      ${broadcastCta}${newForm}<div class="card-head" style="padding-top:0.5rem"><h2>Recent announcements</h2></div>${list}`,
   });
 });
 
@@ -620,7 +628,7 @@ app.get('/communications/broadcasts', (req, res) => {
     FROM broadcasts b LEFT JOIN users u ON u.user_id=b.sent_by
     ORDER BY b.sent_at DESC LIMIT 100`).all();
   const body = `
-    <p><a class="btn" href="/communications/broadcast">📣 Compose new broadcast</a></p>
+    <div class="page-actions"><a class="btn primary" href="/communications/broadcast">＋ Compose new broadcast</a></div>
     ${rows.length ? table(['Sent', 'Channel', 'Audience', 'Recipients', '✓ sent', '✗ failed', 'Status', 'By'],
       rows.map((b) => [esc(b.sent_at.slice(0, 16).replace('T', ' ')),
         esc(b.channel),
