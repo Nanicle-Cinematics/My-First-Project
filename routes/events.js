@@ -23,8 +23,8 @@ app.get('/events', (req, res) => {
     { cls: 'gold', icon: '📅', value: totalEvents.toLocaleString(), label: 'Total Events' },
     { cls: 'green', icon: '⏭', value: upcoming.toLocaleString(), label: 'Upcoming' },
     { cls: 'blue', icon: '✓', value: checkins.toLocaleString(), label: 'Check-ins Recorded' },
-  ], `<a class="btn ghost" href="/events/calendar">🗓 Calendar view</a>
-      ${isAdmin ? `<a class="btn" href="/events/new">＋ New Event</a>` : ''}`);
+  ], `<a class="btn ghost" href="/events/calendar">Calendar view</a>
+      ${isAdmin ? `<a class="btn primary" href="/events/new">＋ New Event</a>` : ''}`);
   const filters = filterCard({ q, placeholder: 'Search events by title…' });
 
   const rowHtml = rows.map((r) => {
@@ -46,12 +46,17 @@ app.get('/events', (req, res) => {
   }).join('');
 
   const list = listCard({
-    title: '📅 Events', count: rows.length, countLabel: 'events',
+    title: 'Events', count: rows.length, countLabel: 'events',
     inner: rows.length ? `<table class="data-table members-table">
         <thead><tr><th>When</th><th>Event</th><th>Location</th><th>Attendees</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
-      </table>` : `<div class="empty-state"><div class="empty-ico">📅</div><p>No events match your search.</p>
-        ${isAdmin ? '<a class="btn" href="/events/new">＋ New Event</a>' : ''}</div>`,
+      </table>` : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">📅</div>
+        <h3>${q ? `No events match "${esc(q)}"` : 'No events scheduled yet'}</h3>
+        <p>${q ? 'Try a different search term, or schedule a new event.' : 'Add your first event and it will appear here.'}</p>
+        ${isAdmin ? '<a class="btn primary" href="/events/new">＋ New Event</a>' : ''}
+        ${q ? '<div style="margin-top:0.6rem"><a class="link" href="/events">Clear search →</a></div>' : ''}
+      </div>`,
   });
 
   res.page({ title: 'Events', active: '/events', noHeader: true, body: `${hero}${stats}${filters}${list}` });
@@ -89,7 +94,8 @@ app.get('/events/calendar', (req, res) => {
   const body = `
     ${pageHero('Events Calendar', 'A month-at-a-glance view of every scheduled event.')}
     ${statsRow([{ cls: 'gold', icon: '🗓', value: events.length.toLocaleString(), label: `Events in ${monthLabel}` }],
-      `<a class="btn ghost" href="/events">📋 List view</a>`)}
+      `<a class="btn ghost" href="/events">List view</a>
+      ${res.locals.isAdmin ? `<a class="btn primary" href="/events/new">＋ New Event</a>` : ''}`)}
     <div class="card">
       <div class="card-head cal-nav">
         <a class="btn ghost" href="/events/calendar?month=${fmtMonthKey(prev)}">← ${prev.toLocaleString('en-GB', { month: 'short' })}</a>
