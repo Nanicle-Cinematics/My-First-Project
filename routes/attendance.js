@@ -1,9 +1,10 @@
 'use strict';
 // Attendance overview. register(app, ctx).
 module.exports.register = function register(app, ctx) {
-  const { db, esc, sparkline, table } = ctx;
+  const { db, esc, sparkline, table, pageHero, statsRow, listCard } = ctx;
 
   app.get('/attendance', (req, res) => {
+    const isAdmin = res.locals.isAdmin;
     const services = db.prepare(`
       SELECT e.event_id, e.title, e.starts_at, e.location,
              COUNT(a.member_id) attendees
@@ -14,24 +15,44 @@ module.exports.register = function register(app, ctx) {
       .map((r, i) => ({ label: `Wk ${i + 1}`, value: r.attendees }));
     const avg = trend.length
       ? Math.round(trend.reduce((a, b) => a + b.value, 0) / trend.length) : 0;
-    const body = `
-      <div class="stat-grid">
-        <div class="stat"><div class="ico purple">✓</div><div>
-          <div class="label">Avg attendance (last ${trend.length})</div>
-          <div class="value">${avg}</div></div></div>
-        <div class="stat"><div class="ico green">📅</div><div>
-          <div class="label">Services tracked</div>
-          <div class="value">${services.length}</div></div></div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>Attendance Trend</h2><span class="meta">Last ${trend.length} services</span></div>
-        ${sparkline(trend)}
-      </div>
-      <h2>Recent services</h2>
-      ${table(['When', 'Title', 'Location', 'Attendees', ''],
-        services.map((s) => [esc(s.starts_at), esc(s.title), esc(s.location),
-          s.attendees,
-          `<a class="btn ghost" href="/events/${s.event_id}">Open</a>`]))}`;
-    res.page({ title: 'Attendance', active: '/attendance', body });
+    const total = services.reduce((a, b) => a + b.attendees, 0);
+
+    const hero = pageHero('Attendance',
+      'Track service participation. Average, totals, and a per-service trend at a glance.');
+    const stats = statsRow([
+      { cls: 'gold', icon: '✓', value: avg.toLocaleString(), label: `Avg attendance (last ${trend.length})` },
+      { cls: 'green', icon: '📅', value: services.length.toLocaleString(), label: 'Services tracked' },
+      { cls: 'blue', icon: '👥', value: total.toLocaleString(), label: 'Total check-ins' },
+    ], isAdmin ? '<a class="btn primary" href="/events/new">＋ New Service</a>' : '');
+
+    const trendCard = `<div class="card">
+      <div class="card-head"><h2>Attendance trend</h2><span class="meta">Last ${trend.length} services</span></div>
+      ${sparkline(trend)}
+    </div>`;
+
+    const recent = services.length
+      ? table(['When', 'Title', 'Location', 'Attendees', 'Actions'],
+          services.map((s) => [esc(s.starts_at), esc(s.title), esc(s.location) || '<span class="muted-text">—</span>',
+            `<span class="count-badge">${s.attendees}</span>`,
+            `<a class="btn ghost" href="/events/${s.event_id}">Open →</a>`]))
+      : `<div class="empty-state">
+          <div class="empty-ico" aria-hidden="true">✓</div>
+          <h3>No services tracked yet</h3>
+          <p>Schedule a service event and start checking in members to populate this view.</p>
+          ${isAdmin ? '<a class="btn primary" href="/events/new">＋ New Service</a>' : ''}
+        </div>`;
+    const recentCard = listCard({
+      title: 'Recent services',
+      count: services.length,
+      countLabel: 'services',
+      inner: recent,
+    });
+
+    res.page({
+      title: 'Attendance',
+      active: '/attendance',
+      noHeader: true,
+      body: `${hero}${stats}${trendCard}${recentCard}`,
+    });
   });
 };
