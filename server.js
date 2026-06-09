@@ -1725,7 +1725,7 @@ app.get('/', (req, res) => {
         ${Object.keys(akanByDay).map((day) => {
           const info = akanByDay[day];
           const count = dayCounts.get(day) || 0;
-          return `<div class="day-card" data-card-href="/members" title="Akan Names: ${esc(info.names)}" aria-label="${esc(day)} day-born members">
+          return `<div class="day-card" data-card-href="/members?day_born=${encodeURIComponent(day)}" title="Akan Names: ${esc(info.names)}" aria-label="${esc(day)} day-born members">
             <div class="day-card-head">
               <strong>${esc(day)}</strong>
               <span>${esc(info.names)}</span>
