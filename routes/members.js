@@ -8,8 +8,9 @@ const { pageHero, statsRow, filterCard, listCard, table, pager,
 
 module.exports.register = function register(app, ctx) {
   const { db, requireAdmin, logActivity, flash, csrfValid, looksLikeImage,
-    photoUpload, EXT_FROM_MIME, PHOTO_DIR, PREF_LABELS, nextMemberId,
+    photoUpload, csvUpload, EXT_FROM_MIME, PHOTO_DIR, PREF_LABELS, nextMemberId,
     loadBibleClasses, loadOrganizations } = ctx;
+  const { parse: csvParse } = require('csv-parse/sync');
 
 function memberErrors(b) {
   if (!b.first_name || !b.first_name.trim()) return 'First name is required.';
@@ -101,6 +102,7 @@ app.get('/members', (req, res) => {
     { cls: 'green', icon: '✓', value: activeMembers.toLocaleString(), label: 'Active' },
     { cls: 'blue', icon: '＋', value: newMembers.toLocaleString(), label: 'New (30d)' },
   ], `${isAdmin ? `<a class="btn primary" href="/members/new">＋ Add New Member</a>` : ''}
+      ${isAdmin ? `<a class="btn ghost" href="/members/import">⇪ Import CSV</a>` : ''}
       <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>`);
   const filters = filterCard({
     q, placeholder: 'Search members by name, ID, email or phone…',
@@ -234,6 +236,329 @@ app.post('/members/bulk', requireAdmin, (req, res) => {
     return res.redirect('/members');
   }
   flash(req, 'Unknown bulk action.');
+  res.redirect('/members');
+});
+
+// ---------------- CSV IMPORT ---------------- //
+// Admins upload a members CSV → server parses & validates → dry-run preview
+// page → admin clicks Confirm → server writes inside a transaction.
+
+const IMPORT_COLUMNS = [
+  'external_id', 'first_name', 'last_name', 'gender', 'mobile_phone',
+  'email', 'membership_status', 'day_born', 'date_of_birth',
+  'marital_status', 'join_date', 'baptism_date', 'confirmation_date',
+];
+const IMPORT_TEMPLATE_HEADERS = IMPORT_COLUMNS.join(',');
+const IMPORT_TEMPLATE_SAMPLE = [
+  'DMS-101,Adwoa,Mensah,F,0244555101,adwoa.m@example.com,member,Monday,1990-03-12,married,2018-04-01,1992-05-10,1994-05-15',
+  ',Kwabena,Owusu,M,0244555102,,visitor,Tuesday,1985-07-23,,2026-05-20,,',
+].join('\n');
+const STATUS_VALUES = new Set(['member', 'regular', 'visitor', 'inactive', 'deceased', 'transferred']);
+const DAY_VALUES = new Set(DAYS_OF_WEEK); // Monday..Sunday
+const GENDER_VALUES = new Set(['M', 'F', 'O']);
+
+function normalizeHeader(s) {
+  return String(s || '').trim().toLowerCase().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
+function normalizeDay(s) {
+  if (!s) return null;
+  const t = String(s).trim();
+  for (const d of DAYS_OF_WEEK) if (d.toLowerCase() === t.toLowerCase()) return d;
+  return null;
+}
+function normalizeStatus(s) {
+  const t = String(s || '').trim().toLowerCase();
+  return STATUS_VALUES.has(t) ? t : null;
+}
+function normalizeGender(s) {
+  const t = String(s || '').trim().toUpperCase();
+  if (!t) return null;
+  if (t === 'MALE' || t === 'M') return 'M';
+  if (t === 'FEMALE' || t === 'F') return 'F';
+  if (t === 'O' || t === 'OTHER') return 'O';
+  return null;
+}
+function normalizeDate(s) {
+  if (!s) return null;
+  const t = String(s).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  // common alt formats: MM/DD/YYYY, DD/MM/YYYY (ambiguous — assume DD/MM/YYYY for Ghana)
+  let m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const dd = String(m[1]).padStart(2, '0');
+    const mm = String(m[2]).padStart(2, '0');
+    return `${m[3]}-${mm}-${dd}`;
+  }
+  return null;
+}
+
+// Parse + validate a CSV buffer into { rows, totals: {ok, create, update, skipped} }.
+function parseAndValidateCsv(buf) {
+  let records;
+  try {
+    records = csvParse(buf, {
+      bom: true, columns: true, skip_empty_lines: true, trim: true,
+      relax_column_count: true,
+    });
+  } catch (e) {
+    return { error: `Could not parse CSV: ${e.message}` };
+  }
+  if (!records.length) return { error: 'The CSV has no data rows.' };
+
+  // Build a lookup for existing members by external_id and by phone, so we can
+  // tell create vs update without N+1 queries.
+  const allByExt = new Map();
+  const allByPhone = new Map();
+  for (const m of db.prepare(`SELECT member_id, external_id, mobile_phone FROM members WHERE deleted_at IS NULL`).all()) {
+    if (m.external_id) allByExt.set(String(m.external_id).trim().toLowerCase(), m.member_id);
+    if (m.mobile_phone) allByPhone.set(String(m.mobile_phone).replace(/\D+/g, ''), m.member_id);
+  }
+
+  const rows = records.map((raw, i) => {
+    // Re-key incoming row by normalized header so "First Name" and "first_name"
+    // both work.
+    const r = {};
+    for (const k of Object.keys(raw)) r[normalizeHeader(k)] = raw[k];
+
+    const errors = [];
+    const first = (r.first_name || r.firstname || '').trim();
+    const last  = (r.last_name  || r.lastname  || r.surname || '').trim();
+    if (!first) errors.push('First name is required');
+    if (!last)  errors.push('Last name is required');
+
+    const phoneRaw = (r.mobile_phone || r.phone || '').trim();
+    const phoneDigits = phoneRaw.replace(/\D+/g, '');
+    if (!phoneDigits) errors.push('Mobile phone is required');
+    else if (phoneDigits.length < 7) errors.push('Phone must have at least 7 digits');
+
+    const email = (r.email || '').trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push('Email looks invalid');
+
+    const status = normalizeStatus(r.membership_status || r.status || 'visitor');
+    if (!status) errors.push('membership_status must be one of: ' + [...STATUS_VALUES].join(', '));
+
+    const gender = normalizeGender(r.gender);
+    if (r.gender && !gender) errors.push('gender must be M / F / O');
+
+    const day = normalizeDay(r.day_born);
+    if (r.day_born && !day) errors.push('day_born must be Monday..Sunday');
+
+    const dob = normalizeDate(r.date_of_birth || r.dob);
+    if ((r.date_of_birth || r.dob) && !dob) errors.push('date_of_birth must be YYYY-MM-DD or DD/MM/YYYY');
+
+    const joinDate = normalizeDate(r.join_date);
+    if (r.join_date && !joinDate) errors.push('join_date must be a valid date');
+    const baptism = normalizeDate(r.baptism_date);
+    if (r.baptism_date && !baptism) errors.push('baptism_date must be a valid date');
+    const confirmation = normalizeDate(r.confirmation_date);
+    if (r.confirmation_date && !confirmation) errors.push('confirmation_date must be a valid date');
+
+    const extId = (r.external_id || r.member_id || '').trim();
+    let action = 'create';
+    let matchId = null;
+    if (extId && allByExt.has(extId.toLowerCase())) {
+      action = 'update'; matchId = allByExt.get(extId.toLowerCase());
+    } else if (phoneDigits && allByPhone.has(phoneDigits)) {
+      action = 'update'; matchId = allByPhone.get(phoneDigits);
+    }
+
+    return {
+      lineNo: i + 2, // 1 = header, so first data row is line 2
+      action: errors.length ? 'skip' : action,
+      matchId,
+      errors,
+      record: {
+        external_id: extId || null,
+        first_name: first || null,
+        last_name: last || null,
+        gender,
+        mobile_phone: phoneRaw || null,
+        email: email || null,
+        membership_status: status,
+        day_born: day,
+        date_of_birth: dob,
+        marital_status: (r.marital_status || '').trim() || null,
+        join_date: joinDate,
+        baptism_date: baptism,
+        confirmation_date: confirmation,
+      },
+    };
+  });
+
+  const totals = {
+    rows: rows.length,
+    create: rows.filter((r) => r.action === 'create').length,
+    update: rows.filter((r) => r.action === 'update').length,
+    skip:   rows.filter((r) => r.action === 'skip').length,
+  };
+  return { rows, totals };
+}
+
+function actionPill(a) {
+  if (a === 'create') return '<span class="pill pill-new">Would create</span>';
+  if (a === 'update') return '<span class="pill pill-ok">Would update</span>';
+  return '<span class="pill pill-failed">Skipped</span>';
+}
+
+function importPage(introHtml) {
+  return `<form class="form" method="post" action="/members/import" enctype="multipart/form-data" data-no-confirm="1">
+    <div class="wide-cell">${introHtml}</div>
+    <label class="wide">
+      <span>CSV file</span>
+      <input type="file" name="csv" accept=".csv,text/csv" required>
+    </label>
+    <p class="muted-text wide-cell" style="margin:0">
+      Need a starting point? <a href="/members/import/template.csv">Download the template</a>.
+      Required columns: <code>first_name</code>, <code>last_name</code>, <code>mobile_phone</code>.
+      Match key: <code>external_id</code> then <code>mobile_phone</code>.
+    </p>
+    <div class="actions form-actions">
+      <a class="btn ghost" href="/members">Cancel</a>
+      <button type="submit">Preview import</button>
+    </div>
+  </form>`;
+}
+
+app.get('/members/import', requireAdmin, (req, res) => {
+  res.page({
+    title: 'Import members',
+    active: '/members',
+    body: importPage(`<h1>Import members</h1>
+      <p class="muted-text" style="margin:0 0 1rem">
+        Upload a CSV to add many members at once. The next page shows a row-by-row
+        preview before anything is written.
+      </p>`),
+  });
+});
+
+app.get('/members/import/template.csv', requireAdmin, (req, res) => {
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="members-import-template.csv"');
+  res.send(`${IMPORT_TEMPLATE_HEADERS}\n${IMPORT_TEMPLATE_SAMPLE}\n`);
+});
+
+app.post('/members/import', requireAdmin, csvUpload.single('csv'), (req, res) => {
+  if (!csrfValid(req)) {
+    flash(req, 'Stale form — please open the import page again.');
+    return res.redirect('/members/import');
+  }
+  if (!req.file) {
+    flash(req, 'Please choose a CSV file to import.');
+    return res.redirect('/members/import');
+  }
+  const result = parseAndValidateCsv(req.file.buffer);
+  if (result.error) {
+    flash(req, result.error);
+    return res.redirect('/members/import');
+  }
+  const previewBody = req.file.buffer.toString('utf8');
+  const rowsHtml = result.rows.map((r) => `<tr class="import-row import-row-${r.action}">
+    <td>${r.lineNo}</td>
+    <td>${actionPill(r.action)}</td>
+    <td>${esc((r.record.first_name || '') + ' ' + (r.record.last_name || '')).trim() || '<span class="muted-text">—</span>'}</td>
+    <td>${esc(r.record.mobile_phone || '')}</td>
+    <td>${esc(r.record.email || '')}</td>
+    <td>${esc(r.record.membership_status || '')}</td>
+    <td>${esc(r.record.day_born || '')}</td>
+    <td>${r.errors.length ? `<span class="muted-text">${esc(r.errors.join('; '))}</span>` : ''}</td>
+  </tr>`).join('');
+  const { totals } = result;
+  res.page({
+    title: 'Confirm member import',
+    active: '/members',
+    body: `<h1>Confirm member import</h1>
+      <p class="muted-text">Review the rows below, then click <strong>Commit import</strong> to write the changes. Skipped rows are not written.</p>
+      <div class="stat-grid mockup-kpis" style="margin-bottom:1rem">
+        <div class="stat mockup-stat" style="--stat-accent:var(--purple)">
+          <div class="stat-header"><div class="stat-label">Rows in file</div></div>
+          <div class="stat-value">${totals.rows}</div></div>
+        <div class="stat mockup-stat" style="--stat-accent:var(--blue)">
+          <div class="stat-header"><div class="stat-label">Would create</div></div>
+          <div class="stat-value">${totals.create}</div></div>
+        <div class="stat mockup-stat" style="--stat-accent:var(--green)">
+          <div class="stat-header"><div class="stat-label">Would update</div></div>
+          <div class="stat-value">${totals.update}</div></div>
+        <div class="stat mockup-stat" style="--stat-accent:var(--danger)">
+          <div class="stat-header"><div class="stat-label">Skipped (errors)</div></div>
+          <div class="stat-value">${totals.skip}</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Preview</h2><span class="meta">Row-by-row outcome</span></div>
+        <div style="overflow-x:auto">
+        <table class="data-table import-preview-table">
+          <thead><tr>
+            <th>Row</th><th>Outcome</th><th>Name</th><th>Phone</th>
+            <th>Email</th><th>Status</th><th>Day born</th><th>Issues</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        </div>
+        <form method="post" action="/members/import/commit" class="actions form-actions" style="margin-top:1rem">
+          <input type="hidden" name="csv_body" value="${esc(previewBody)}">
+          <a class="btn ghost" href="/members/import">Back</a>
+          <button type="submit" ${totals.create + totals.update === 0 ? 'disabled' : ''}>Commit import (${totals.create + totals.update})</button>
+        </form>
+      </div>`,
+  });
+});
+
+app.post('/members/import/commit', requireAdmin, (req, res) => {
+  const csv = String(req.body.csv_body || '');
+  if (!csv) {
+    flash(req, 'No preview data — please upload again.');
+    return res.redirect('/members/import');
+  }
+  const result = parseAndValidateCsv(Buffer.from(csv, 'utf8'));
+  if (result.error) {
+    flash(req, result.error);
+    return res.redirect('/members/import');
+  }
+  const writable = result.rows.filter((r) => r.action !== 'skip');
+  if (!writable.length) {
+    flash(req, 'No valid rows to import.');
+    return res.redirect('/members/import');
+  }
+  const ins = db.prepare(`INSERT INTO members
+    (external_id, first_name, last_name, gender, mobile_phone, email,
+     membership_status, day_born, date_of_birth, marital_status,
+     join_date, baptism_date, confirmation_date)
+    VALUES (@external_id, @first_name, @last_name, @gender, @mobile_phone, @email,
+            @membership_status, @day_born, @date_of_birth, @marital_status,
+            @join_date, @baptism_date, @confirmation_date)`);
+  const upd = db.prepare(`UPDATE members SET
+       first_name = @first_name, last_name = @last_name, gender = @gender,
+       mobile_phone = @mobile_phone, email = @email,
+       membership_status = @membership_status, day_born = @day_born,
+       date_of_birth = @date_of_birth, marital_status = @marital_status,
+       join_date = @join_date, baptism_date = @baptism_date,
+       confirmation_date = @confirmation_date
+     WHERE member_id = @member_id`);
+  let created = 0, updated = 0;
+  const tx = db.transaction(() => {
+    for (const row of writable) {
+      const rec = { ...row.record };
+      if (row.action === 'update' && row.matchId) {
+        upd.run({ ...rec, member_id: row.matchId });
+        updated++;
+      } else {
+        if (!rec.external_id) {
+          try { rec.external_id = nextMemberId(); } catch (_) { rec.external_id = null; }
+        }
+        ins.run(rec);
+        created++;
+      }
+    }
+  });
+  try { tx(); }
+  catch (e) {
+    flash(req, `Import failed: ${e.message}`);
+    return res.redirect('/members/import');
+  }
+  logActivity('members_imported',
+    `Imported members CSV · ${created} created, ${updated} updated`,
+    '/members',
+    res.locals.user.user_id);
+  flash(req, `Import committed — ${created} created, ${updated} updated.`, 'success');
   res.redirect('/members');
 });
 

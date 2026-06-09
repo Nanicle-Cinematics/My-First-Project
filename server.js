@@ -858,6 +858,17 @@ const EXT_FROM_MIME = {
 };
 // Uploader for restoring a database backup (.db file).
 const dbUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
+
+// Uploader for CSV imports (members list).
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB — covers ~50k member rows
+  fileFilter: (req, file, cb) => {
+    const ok = /^(text\/csv|application\/vnd\.ms-excel|text\/plain|application\/octet-stream)$/i.test(file.mimetype)
+      || /\.csv$/i.test(file.originalname || '');
+    cb(ok ? null : new Error('Only .csv files are accepted'), ok);
+  },
+});
 // ---------- SMS (Arkesel) + Email (SMTP) helpers ----------
 const ARKESEL_API_KEY = process.env.ARKESEL_API_KEY || '';
 const ARKESEL_SENDER  = process.env.ARKESEL_SENDER  || 'DUNWELL';
@@ -2021,7 +2032,7 @@ require('./routes/communications').register(app, {
 // ---------- members ----------
 require('./routes/members').register(app, {
   db, requireAdmin, logActivity, flash, csrfValid, looksLikeImage,
-  photoUpload, EXT_FROM_MIME, PHOTO_DIR, PREF_LABELS, nextMemberId,
+  photoUpload, csvUpload, EXT_FROM_MIME, PHOTO_DIR, PREF_LABELS, nextMemberId,
   loadBibleClasses, loadOrganizations,
 });
 
