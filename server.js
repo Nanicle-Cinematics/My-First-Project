@@ -1986,7 +1986,10 @@ require('./routes/reports').register(app, { db, CHURCH_NAME });
 
 // ---------- attendance (cross-event view) ----------
 // ---------- attendance ----------
-require('./routes/attendance').register(app, { db, esc, sparkline, table, pageHero, statsRow, listCard });
+require('./routes/attendance').register(app, {
+  db, esc, sparkline, table, pageHero, statsRow, listCard,
+  requireAdmin, logActivity, flash,
+});
 
 // ---------- organizations ----------
 // ---------- organizations ----------

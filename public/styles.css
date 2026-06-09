@@ -5938,3 +5938,53 @@ body {
   border-bottom-color: #e0392b !important;
   box-shadow: 0 1px 0 rgba(224, 57, 43, 0.30), 0 6px 24px -12px rgba(0, 0, 0, 0.5);
 }
+
+/* ============================================================
+   v8 — Attendance self-contained add/edit service form
+   ============================================================ */
+
+.attendance-service-form label > span:first-child {
+  display: block;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+.attendance-service-form .req-star {
+  color: var(--danger);
+  font-weight: 700;
+  margin-left: 0.15rem;
+}
+.attendance-service-form .form-section {
+  margin: 0.4rem 0 0.4rem;
+  font-size: 0.95rem;
+  font-family: var(--p-font-display);
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--p-border);
+}
+.attendance-service-form .form-extra-actions {
+  padding-top: 0.8rem;
+  margin-top: 0.4rem;
+  border-top: 1px dashed var(--p-border);
+}
+.attendance-service-form .form-extra-actions .danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  padding: 0.55rem 1.1rem;
+  border-radius: var(--e-radius);
+  font-weight: 650;
+  font-size: 0.86rem;
+  cursor: pointer;
+  transition: all 0.16s var(--ease);
+}
+.attendance-service-form .form-extra-actions .danger:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: transparent;
+}
