@@ -783,31 +783,59 @@ app.use((req, res, next) => {
   next();
 });
 
+// Standardized "Access Denied" dialog used by every role gate. Whenever a
+// viewer / editor hits a route they aren't allowed to use, we render the same
+// modal-styled card: title, body, and a Back action — instead of a bare 403.
+function denyAccess(req, res, opts) {
+  const back = (typeof req.get === 'function' && req.get('referer')) || opts.back || '/';
+  const safeBack = /^\/[^\s]*$/.test(back) ? back : (opts.back || '/');
+  const userName = (res.locals.user && (res.locals.user.display_name || res.locals.user.username)) || '';
+  res.status(403).send(layout({
+    title: 'Access Denied or Permission Required',
+    user: res.locals.user,
+    active: null,
+    body: `
+      <div class="access-denied-shell" role="alertdialog" aria-modal="true"
+           aria-labelledby="ad-title" aria-describedby="ad-body">
+        <div class="access-denied-card">
+          <div class="access-denied-icon" aria-hidden="true">🔒</div>
+          <h1 id="ad-title" class="access-denied-title">Access Denied or Permission Required</h1>
+          <p id="ad-body" class="access-denied-body">
+            You don't have permission to view or edit this field. Please contact your system administrator.
+          </p>
+          ${opts.detail ? `<p class="access-denied-meta">${esc(opts.detail)}</p>` : ''}
+          ${userName ? `<p class="access-denied-meta">Signed in as <strong>${esc(userName)}</strong>${res.locals.user && res.locals.user.role ? ` (${esc(res.locals.user.role)})` : ''}</p>` : ''}
+          <div class="access-denied-actions">
+            <a class="btn ghost" href="${esc(safeBack)}">← Back</a>
+            <a class="btn primary" href="/">Go to dashboard</a>
+          </div>
+        </div>
+      </div>`,
+  }));
+}
+
 function requireOwner(req, res, next) {
   if (res.locals.isOwner) return next();
-  res.status(403).send(layout({
-    title: 'Administrators only', user: res.locals.user, active: null,
-    body: '<p>This area is reserved for administrators. Editors can manage records but not'
-         + ' users, backups or settings.</p><p><a href="/">Back to dashboard</a></p>',
-  }));
+  return denyAccess(req, res, {
+    detail: 'This area is reserved for administrators. Editors can manage records but not users, backups or settings.',
+    back: '/',
+  });
 }
 
 function requireAdmin(req, res, next) {
   if (res.locals.isAdmin) return next();
-  res.status(403).send(layout({
-    title: 'Read-only access', user: res.locals.user, active: null,
-    body: '<p>Your account has read-only access. Ask an admin to make this change.</p>'
-         + '<p><a href="/">Back to dashboard</a></p>',
-  }));
+  return denyAccess(req, res, {
+    detail: 'Your account has read-only access. Ask an admin to make this change.',
+    back: '/',
+  });
 }
 
 function requireUserManager(req, res, next) {
   if (res.locals.isUserManager) return next();
-  res.status(403).send(layout({
-    title: 'Not allowed', user: res.locals.user, active: null,
-    body: '<p>Only the main administrator (<strong>dunwelladmin</strong>) can add or delete user accounts and reset passwords.</p>'
-         + '<p><a href="/users">Back to users</a></p>',
-  }));
+  return denyAccess(req, res, {
+    detail: 'Only the main administrator (dunwelladmin) can add or delete user accounts and reset passwords.',
+    back: '/users',
+  });
 }
 
 // ---------- helpers ----------
