@@ -513,6 +513,45 @@ runOnce('wipe_old_contributions_v1', () => {
   db.exec(`DELETE FROM contributions`);
 });
 
+// Expand event_type CHECK to include 'confirmation' and add attendance count
+// columns (men / women / children / total). SQLite can't ALTER a CHECK
+// constraint in place, so we rebuild the events table.
+runOnce('events_add_confirmation_and_attendance_counts_v1', () => {
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE events_new (
+          event_id     INTEGER PRIMARY KEY,
+          title        TEXT    NOT NULL,
+          event_type   TEXT    NOT NULL DEFAULT 'service'
+                          CHECK (event_type IN
+                          ('service','prayer','bible_study','outreach','youth','wedding','funeral','baptism','confirmation','other')),
+          starts_at    TEXT    NOT NULL,
+          ends_at      TEXT,
+          location     TEXT,
+          ministry_id  INTEGER REFERENCES ministries(ministry_id) ON DELETE SET NULL,
+          notes        TEXT,
+          checkin_token TEXT,
+          attendance_men      INTEGER,
+          attendance_women    INTEGER,
+          attendance_children INTEGER,
+          attendance_total    INTEGER
+        );
+        INSERT INTO events_new
+          (event_id, title, event_type, starts_at, ends_at, location, ministry_id, notes, checkin_token)
+          SELECT event_id, title, event_type, starts_at, ends_at, location, ministry_id, notes, checkin_token FROM events;
+        DROP TABLE events;
+        ALTER TABLE events_new RENAME TO events;
+        CREATE INDEX IF NOT EXISTS idx_events_starts ON events(starts_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_events_checkin ON events(checkin_token) WHERE checkin_token IS NOT NULL;
+      `);
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+});
+
 // Widen the users.role CHECK to add an 'editor' role (rebuild — SQLite can't ALTER a CHECK).
 runOnce('users_role_add_editor_v1', () => {
   const allowsEditor = (() => {
@@ -759,9 +798,9 @@ const NAV = [
   ['/inventory',       'Inventory',      '📦'],
   ['/events',          'Events',         '📅'],
   ['/preaching',       'Preaching Plan', '🎤'],
-  ['/sacraments',      'Sacraments',     '⛪'],
   ['/communications',  'Communications', '✉'],
   ['/reports',         'Reports',        '📊'],
+  ['/help',            'Help',           '?'],
   ['/operations',      'Operations',     '◎', 'admin'],
   ['/users',           'Users & Roles',  '🔑', 'admin'],
   ['/security/audit',  'Security Audit', '🛡', 'admin'],
@@ -1264,13 +1303,6 @@ app.get('/', (req, res) => {
   const visitorsThisWeek = db.prepare(
     `SELECT COUNT(*) c FROM members WHERE membership_status='visitor'
        AND join_date >= date('now','-7 days')`
-  ).get().c;
-
-  const sacramentsYtd = db.prepare(
-    `SELECT COUNT(*) c FROM sacraments WHERE substr(occurred_on,1,4) = strftime('%Y','now')`
-  ).get().c;
-  const sacramentsThisMonth = db.prepare(
-    `SELECT COUNT(*) c FROM sacraments WHERE substr(occurred_on,1,7) = strftime('%Y-%m','now')`
   ).get().c;
 
   // Birthdays in the next 7 days (today inclusive). Uses a day-of-year window
@@ -1873,7 +1905,7 @@ app.get('/', (req, res) => {
   const dashboardUser = res.locals.user.display_name || res.locals.user.username;
   const firstName = (dashboardUser || '').trim().split(/\s+/)[0] || dashboardUser || 'there';
   const welcome = `
-    <div class="dash-welcome dash-welcome-cover" aria-hidden="false">
+    <div class="dash-welcome dash-welcome-plain">
       <div class="dash-welcome-text">
         <div class="dash-welcome-kicker">Today · ${esc(dashboardDate)}</div>
         <h1 class="dash-h1">Welcome back, ${esc(firstName)}</h1>
@@ -2033,66 +2065,135 @@ app.post('/webhooks/arkesel-inbound', (req, res) => {
   res.json({ ok: true, action: 'no_match', phone: incoming });
 });
 
-// ---------- sacraments ----------
-app.get('/sacraments', (req, res) => {
-  const counts = db.prepare(`
-    SELECT sacrament_type t, COUNT(*) c FROM sacraments GROUP BY sacrament_type`).all();
-  const total = counts.reduce((a, b) => a + b.c, 0);
-  const rows = db.prepare(`
-    SELECT s.sacrament_id, s.sacrament_type, s.occurred_on, s.location,
-           s.member_id, m.first_name || ' ' || m.last_name AS member,
-           s.spouse_id, sp.first_name || ' ' || sp.last_name AS spouse
-    FROM sacraments s
-    LEFT JOIN members m  ON m.member_id  = s.member_id
-    LEFT JOIN members sp ON sp.member_id = s.spouse_id
-    ORDER BY s.occurred_on DESC LIMIT 100`).all();
-  const typeChips = [
-    ['baptism', 'Baptisms'],
-    ['dedication', 'Dedications'],
-    ['confirmation', 'Confirmations'],
-    ['marriage', 'Marriages'],
-    ['funeral', 'Funerals'],
-  ].map(([value, label]) => {
-    const row = counts.find((c) => c.t === value);
-    const style = value === 'funeral'
-      ? 'background:var(--danger-soft);color:var(--danger);'
-      : value === 'marriage'
-        ? 'background:var(--purple-soft);color:var(--purple-dark);'
-        : 'background:var(--gold-soft);color:var(--gold-dark);';
-    return `<span class="chip" style="display:inline-flex;align-items:center;padding:0.35rem 0.7rem;${style}">${esc(label)} · ${row ? row.c : 0}</span>`;
-  }).join('');
-  const body = `
-    ${pageHero('Sacraments', 'Reference register for baptisms, confirmations, marriages, funerals and dedications.')}
-    <div class="dashboard-row dashboard-row-split" style="margin-bottom:1rem">
-      <div class="card">
-        <div class="card-head"><h2>Register summary</h2><span class="meta">Current records</span></div>
-        <dl class="stats">
-          <dt>Total recorded</dt><dd><strong>${total}</strong></dd>
-          <dt>Most recent type</dt><dd>${rows[0] ? esc(rows[0].sacrament_type) : '—'}</dd>
-          <dt>Latest date</dt><dd>${rows[0] ? esc(rows[0].occurred_on) : '—'}</dd>
-        </dl>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>Sacrament guide</h2><span class="meta">Quick reference</span></div>
-        <div style="display:flex;flex-wrap:wrap;gap:0.5rem">${typeChips}</div>
-        <p class="muted-text" style="margin-top:0.75rem">Use this register for life events that need an official church record. The list below is sorted with the newest entry first.</p>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h2>Records</h2><span class="meta">${rows.length} entries shown</span></div>
-      ${rows.length
-        ? table(['Type', 'Date', 'Member', 'Spouse', 'Location'],
-            rows.map((r) => [esc(r.sacrament_type), esc(r.occurred_on),
-              r.member_id ? `<a href="/members/${r.member_id}">${esc(r.member)}</a>` : '—',
-              r.spouse_id ? `<a href="/members/${r.spouse_id}">${esc(r.spouse)}</a>` : '—',
-              esc(r.location)]))
-        : `<div class="empty-state">
-            <div class="empty-ico" aria-hidden="true">✝</div>
-            <h3>No sacraments recorded yet</h3>
-            <p>Baptisms, confirmations, marriages, funerals and dedications recorded against members will appear here. Open a member to add one.</p>
-          </div>`}
+// ---------- help ----------
+app.get('/help', (req, res) => {
+  const helpSection = (id, icon, title, summary, steps) => `
+    <div class="card help-card" id="${id}">
+      <div class="card-head"><h2>${icon} ${esc(title)}</h2></div>
+      <p>${summary}</p>
+      ${steps ? `<ol class="help-steps">${steps.map((s) => `<li>${s}</li>`).join('')}</ol>` : ''}
     </div>`;
-  res.page({ title: 'Sacraments', active: '/sacraments', noHeader: true, body });
+  const body = `
+    ${pageHero('Help & Guide', 'How to use the Dunwell Methodist church management system, page by page.')}
+    <div class="card help-toc">
+      <div class="card-head"><h2>On this page</h2><span class="meta">Jump to a section</span></div>
+      <ul class="help-toc-list">
+        <li><a href="#help-overview">Overview</a></li>
+        <li><a href="#help-dashboard">Dashboard</a></li>
+        <li><a href="#help-members">Members</a></li>
+        <li><a href="#help-attendance">Attendance</a></li>
+        <li><a href="#help-events">Events</a></li>
+        <li><a href="#help-finance">Finance</a></li>
+        <li><a href="#help-communications">Communications</a></li>
+        <li><a href="#help-bible-classes">Bible Classes &amp; Organizations</a></li>
+        <li><a href="#help-preaching">Preaching Plan</a></li>
+        <li><a href="#help-reports">Reports &amp; Operations</a></li>
+        <li><a href="#help-admin">Admin · Users · Backups</a></li>
+        <li><a href="#help-tips">Daily &amp; weekly tips</a></li>
+      </ul>
+    </div>
+
+    ${helpSection('help-overview', '📖', 'Overview',
+      `<strong>Dunwell Methodist Management System</strong> is one place for every operational job in the parish: keep the member directory, run check-ins, record giving, plan services, send broadcasts, and review reports. The left sidebar groups every page; the top bar has the global search, theme toggle, and your profile menu.`,
+      [
+        'Use the <strong>search bar</strong> at the top of any page to jump straight to a member by name, phone, or email.',
+        'Click the <strong>🌙 / ☀</strong> button to flip between light and dark mode — your choice persists per device.',
+        'Your role (Administrator · Editor · Viewer) controls what you can edit. Viewers can browse everything; editors can manage records; administrators can run the whole system.',
+      ])}
+
+    ${helpSection('help-dashboard', '▥', 'Dashboard',
+      `The dashboard is your daily snapshot: a welcome banner with today's date and quick actions, four KPI cards (Total Members · Attendance·This Week · Offering·<Month> · Birthdays·This Week), an attendance trend chart, upcoming events for the next 7 days, the Akan day-born groups, and the most recently registered members.`,
+      [
+        'Click any KPI card to drill into the relevant page (e.g. Total Members → Members directory).',
+        '<strong>＋ New Event</strong> or <strong>⊕ Record Service</strong> in the welcome banner are the fastest way to start a common task.',
+        'The Day-born Groups card shows the Akan fellowship grouping with member counts per day. Use it to coordinate small-group leaders.',
+      ])}
+
+    ${helpSection('help-members', '👥', 'Members',
+      `The Members directory holds every person in the parish. Filter by Bible class, status (Member · Regular · Visitor · Inactive), search by phone or email, and act in bulk.`,
+      [
+        '<strong>＋ Add New Member</strong> opens a form for identity, contact, sacraments and emergency contact.',
+        "Click a row to open the member's full profile: photo, sacraments timeline, organizations, giving history, attendance heat-map.",
+        'Admins can <strong>archive</strong> a member with the trash icon — the record stays for audit but hides from the directory.',
+        'The <strong>MoMo ready</strong> badge means the member has a phone on file, so SMS broadcasts can reach them.',
+      ])}
+
+    ${helpSection('help-attendance', '✓', 'Attendance',
+      `Attendance records who showed up to each service. Now you can also log the head-count broken down by Men, Women, Children, and a Total.`,
+      [
+        'Open a service event under <strong>Events</strong>, then enter the per-segment count (Men · Women · Children). The Total updates automatically.',
+        'Counts are <strong>editable</strong> — open the same service later, change a number, and save. The trend chart on the dashboard updates immediately.',
+        'For per-person check-ins, use the QR check-in page (admin-only).',
+        'Last 3 service averages and a sparkline trend live at the top of the Attendance page.',
+      ])}
+
+    ${helpSection('help-events', '📅', 'Events',
+      `Schedule services, rehearsals, weddings, confirmations and other parish events. Each event has a type, date/time, location, and an editable record.`,
+      [
+        '<strong>＋ New Event</strong> creates a fresh event. Pick a type — <em>service · prayer · bible_study · outreach · youth · wedding · funeral · baptism · confirmation · other</em>.',
+        'Open an event and click <strong>✎ Edit event</strong> to change any field after the fact.',
+        "The calendar view (top-right toggle) shows a month-at-a-glance grid; click any day to see what's on.",
+        "RSVPs collect responses (Going / Maybe / Can't) and the public RSVP link can be shared by SMS or email broadcast.",
+      ])}
+
+    ${helpSection('help-finance', '₵', 'Finance',
+      `Track giving across services, tithes, harvests, special offerings, pledges, statements and expenses. Sub-tabs across the top of the Finance page navigate between them.`,
+      [
+        '<strong>＋ Record Service</strong> on the Finance overview captures a service offering total plus the day-born breakdown.',
+        'Tithes are linked to specific members so per-member statements work; harvests run as multi-week campaigns.',
+        'Special Offerings track named campaigns (e.g. Building Fund). Expenses log outgoings.',
+        'Generate <strong>statements</strong> per member or pull a <strong>print view</strong> of every report from the Reports page.',
+      ])}
+
+    ${helpSection('help-communications', '✉', 'Communications',
+      `Post announcements to the website, broadcast SMS / email to members, and review delivery logs.`,
+      [
+        'Use <strong>＋ Send SMS/email broadcast</strong> to message a group — filter by Bible class, status, or specific organizations.',
+        'Configure your SMS sender (Arkesel) and SMTP from <a href="/settings">Settings</a>. Until configured, broadcasts run in dry-run mode and nothing is actually sent.',
+        'The broadcasts log shows delivery state per recipient: Sent · Failed · Pending · Skipped.',
+      ])}
+
+    ${helpSection('help-bible-classes', '📖', 'Bible Classes & Organizations',
+      `Bible Classes are small groups led by a teacher; Organizations are bigger ministries (Choir, Boys' Brigade, Women's Fellowship, etc.).`,
+      [
+        "Edit a Bible class's leader and parent organization inline from the list.",
+        'Open an organization to manage its roster, leader and meeting time.',
+        'Both pages support search and quick add (admins only).',
+      ])}
+
+    ${helpSection('help-preaching', '🎤', 'Preaching Plan',
+      `Schedule who preaches when. The "Next up" callout at the top of the page highlights the next assignment.`,
+      [
+        '<strong>＋ Send reminder</strong> on the Next up callout sends an SMS / email to the preacher (requires phone or email).',
+        'Past assignments are kept for record-keeping — search the table to find a sermon topic or scripture reference.',
+      ])}
+
+    ${helpSection('help-reports', '📊', 'Reports & Operations',
+      `Reports compiles every analytical view (Day-born totals, Collections, Harvests, Special, Expenses, Financial Summary, Members) with a date-range filter. Operations is owner-only and shows production-readiness checks.`,
+      [
+        'On each report, set a From / To date range and click Apply.',
+        'Print or save as PDF from the browser dialog — every report has print-optimized styles.',
+        '<strong>Operations</strong> aggregates: database readiness, backup freshness, audit signal, error volume in the last 24 hours, and integration configuration.',
+      ])}
+
+    ${helpSection('help-admin', '🔑', 'Admin · Users · Backups',
+      `Owner-only pages for setting up the system and keeping it safe.`,
+      [
+        '<strong>Users & Roles</strong>: add staff, set roles, reset passwords. Only the main administrator can add or delete accounts.',
+        '<strong>Backups</strong>: take an immediate snapshot, verify integrity, restore from a previous one. Always keep at least one off-site copy.',
+        '<strong>Security Audit</strong>: review every login, password change, and role update.',
+        '<strong>Error Log</strong>: server-side errors land here with the request URL and stack — share with support when reporting an issue.',
+      ])}
+
+    ${helpSection('help-tips', '✨', 'Daily & weekly tips', `A few habits that keep the data clean.`,
+      [
+        '<strong>Daily</strong>: glance at the dashboard for Pending Follow-ups (drilling into Reports).',
+        '<strong>Sunday</strong>: enter the Men / Women / Children counts for the service while the data is fresh, and check in any visitors on the spot.',
+        '<strong>Weekly</strong>: review the Birthdays card; the system can also auto-send personalized birthday SMS at a daily run time (Settings → Birthday automation).',
+        '<strong>Monthly</strong>: open Reports and confirm Finance totals match the bank reconciliation.',
+        '<strong>Anytime</strong>: if anything looks off, the Error Log captures the most recent server-side errors.',
+      ])}`;
+  res.page({ title: 'Help & Guide', active: '/help', noHeader: true, body });
 });
 
 // ---------- settings ----------

@@ -357,11 +357,12 @@ test('reports + communications (extracted modules) render and post', async () =>
   assert.match((await get('/communications')).body, /Welcome/);
 });
 
-test('sacraments page shows improved register summary', async () => {
-  const page = await get('/sacraments');
+test('help page renders with the documentation sections', async () => {
+  const page = await get('/help');
   assert.strictEqual(page.status, 200);
-  assert.match(page.body, /Sacrament guide/);
-  assert.match(page.body, /Register summary/);
+  assert.match(page.body, /Help &amp; Guide|Help &amp;amp; Guide|Help &amp; Guide/);
+  assert.match(page.body, /Dashboard/);
+  assert.match(page.body, /Attendance/);
 });
 
 test('login page links to /forgot, which renders without auth', async () => {
@@ -466,7 +467,7 @@ test('operational command centers render for core owner and ministry pages', asy
     '/members',
     '/finance',
     '/preaching',
-    '/sacraments',
+    '/help',
     '/operations',
     '/users',
     '/profile',

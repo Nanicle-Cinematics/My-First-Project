@@ -113,12 +113,16 @@ CREATE TABLE events (
     title        TEXT    NOT NULL,
     event_type   TEXT    NOT NULL DEFAULT 'service'
                     CHECK (event_type IN
-                    ('service','prayer','bible_study','outreach','youth','wedding','funeral','baptism','other')),
+                    ('service','prayer','bible_study','outreach','youth','wedding','funeral','baptism','confirmation','other')),
     starts_at    TEXT    NOT NULL,  -- ISO8601 datetime
     ends_at      TEXT,
     location     TEXT,
     ministry_id  INTEGER REFERENCES ministries(ministry_id) ON DELETE SET NULL,
-    notes        TEXT
+    notes        TEXT,
+    attendance_men      INTEGER,
+    attendance_women    INTEGER,
+    attendance_children INTEGER,
+    attendance_total    INTEGER
 );
 
 CREATE INDEX idx_events_starts ON events(starts_at);
