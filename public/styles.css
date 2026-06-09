@@ -5870,3 +5870,71 @@ body {
   margin-bottom: 0.5rem;
 }
 .help-steps li::marker { color: var(--purple-dark); font-weight: 700; }
+
+/* ============================================================
+   v7 — more visible background, translucent cards, dark-mode
+   Export button fix, red accent on the topbar
+   ============================================================ */
+
+/* 1. Background image more visible after sign-in
+      Drop the wash from ~92% to ~70% so the worship scene shows through */
+body {
+  background:
+    linear-gradient(180deg, rgba(246, 247, 251, 0.72), rgba(246, 247, 251, 0.78)),
+    url('/static/worship-bg.jpg') center / cover no-repeat fixed;
+}
+:root[data-theme="dark"] body {
+  background:
+    linear-gradient(180deg, rgba(13, 19, 32, 0.78), rgba(13, 19, 32, 0.82)),
+    url('/static/worship-bg.jpg') center / cover no-repeat fixed;
+}
+
+/* 2. Cards on every menu are slightly translucent so the background
+      worship image shows subtly through them */
+.card,
+.stat,
+.mockup-stat,
+.filters-card,
+.trend-card,
+.upcoming-card,
+.recent-members-card,
+.report-tile,
+.day-card,
+.help-card,
+.attendance-counts-card {
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: saturate(120%) blur(6px);
+  -webkit-backdrop-filter: saturate(120%) blur(6px);
+}
+
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .stat,
+:root[data-theme="dark"] .mockup-stat,
+:root[data-theme="dark"] .filters-card,
+:root[data-theme="dark"] .trend-card,
+:root[data-theme="dark"] .upcoming-card,
+:root[data-theme="dark"] .recent-members-card,
+:root[data-theme="dark"] .report-tile,
+:root[data-theme="dark"] .day-card,
+:root[data-theme="dark"] .help-card,
+:root[data-theme="dark"] .attendance-counts-card {
+  background: rgba(23, 29, 43, 0.82);
+}
+
+/* 3. Dark-mode Export button — keep its background light and text black */
+:root[data-theme="dark"] .dash-welcome.dash-welcome-plain .btn.ghost,
+:root[data-theme="dark"] .dash-welcome-actions .btn.ghost {
+  background: #ffffff !important;
+  color: #0f1420 !important;
+  border-color: rgba(255, 255, 255, 0.30) !important;
+}
+
+/* 4. Red accent line under the topbar (where dark-mode toggle + search sit) */
+.topbar {
+  border-bottom: 2px solid #c8261a !important;
+  box-shadow: 0 1px 0 rgba(200, 38, 26, 0.18), 0 6px 24px -12px rgba(30, 36, 60, 0.10);
+}
+:root[data-theme="dark"] .topbar {
+  border-bottom-color: #e0392b !important;
+  box-shadow: 0 1px 0 rgba(224, 57, 43, 0.30), 0 6px 24px -12px rgba(0, 0, 0, 0.5);
+}

@@ -517,9 +517,27 @@ runOnce('wipe_old_contributions_v1', () => {
 // columns (men / women / children / total). SQLite can't ALTER a CHECK
 // constraint in place, so we rebuild the events table.
 runOnce('events_add_confirmation_and_attendance_counts_v1', () => {
+  // Skip if the table already has both the new columns AND 'confirmation'
+  // in the event_type CHECK — i.e. a fresh DB created from the new schema.sql.
+  const hasNewCols = ['attendance_men', 'attendance_women', 'attendance_children', 'attendance_total']
+    .every((c) => db.prepare(`SELECT 1 FROM pragma_table_info('events') WHERE name=?`).get(c));
+  const tableSql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='events'`).get() || {}).sql || '';
+  const hasConfirmation = /'confirmation'/.test(tableSql);
+  if (hasNewCols && hasConfirmation) return; // nothing to do
+
+  // Detect which legacy columns the existing table has, so we can copy them
+  // over without losing data from older deployments.
+  const existing = db.prepare(`SELECT name FROM pragma_table_info('events')`).all().map((r) => r.name);
+  const copyCols = ['event_id', 'title', 'event_type', 'starts_at', 'ends_at',
+    'location', 'ministry_id', 'notes', 'checkin_token',
+    'attendance_men', 'attendance_women', 'attendance_children', 'attendance_total']
+    .filter((c) => existing.includes(c));
+  const colList = copyCols.join(', ');
+
   db.pragma('foreign_keys = OFF');
   try {
     db.transaction(() => {
+      db.exec(`DROP VIEW IF EXISTS v_event_attendance_counts;`);
       db.exec(`
         CREATE TABLE events_new (
           event_id     INTEGER PRIMARY KEY,
@@ -538,19 +556,32 @@ runOnce('events_add_confirmation_and_attendance_counts_v1', () => {
           attendance_children INTEGER,
           attendance_total    INTEGER
         );
-        INSERT INTO events_new
-          (event_id, title, event_type, starts_at, ends_at, location, ministry_id, notes, checkin_token)
-          SELECT event_id, title, event_type, starts_at, ends_at, location, ministry_id, notes, checkin_token FROM events;
+      `);
+      db.exec(`INSERT INTO events_new (${colList}) SELECT ${colList} FROM events;`);
+      db.exec(`
         DROP TABLE events;
         ALTER TABLE events_new RENAME TO events;
         CREATE INDEX IF NOT EXISTS idx_events_starts ON events(starts_at);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_events_checkin ON events(checkin_token) WHERE checkin_token IS NOT NULL;
+        CREATE VIEW IF NOT EXISTS v_event_attendance_counts AS
+          SELECT e.event_id, e.title, e.starts_at, COUNT(a.member_id) AS attendee_count
+          FROM events e LEFT JOIN attendance a USING (event_id)
+          GROUP BY e.event_id;
       `);
     })();
   } finally {
     db.pragma('foreign_keys = ON');
   }
 });
+
+// Defensive: ensure the four attendance columns exist on events even if the
+// migration above never committed (e.g. due to a transient view dependency on
+// an older DB). On a fresh schema the columns are already present and these
+// are no-ops; on a partially-migrated DB they add what's missing.
+addColumnIfMissing('events', 'attendance_men',      `attendance_men INTEGER`);
+addColumnIfMissing('events', 'attendance_women',    `attendance_women INTEGER`);
+addColumnIfMissing('events', 'attendance_children', `attendance_children INTEGER`);
+addColumnIfMissing('events', 'attendance_total',    `attendance_total INTEGER`);
 
 // Widen the users.role CHECK to add an 'editor' role (rebuild — SQLite can't ALTER a CHECK).
 runOnce('users_role_add_editor_v1', () => {
