@@ -6011,3 +6011,105 @@ body {
 .import-row-skip   { background: rgba(220, 38, 38, 0.05); }
 .import-preview-table .pill { font-size: 0.66rem; padding: 0.18rem 0.5rem; white-space: nowrap; }
 .import-preview-table .pill.pill-failed { background: var(--danger-soft); color: var(--danger); }
+
+/* ============================================================
+   v10 — Stage worship background, KPI top-stripe removed,
+   smoother sparkline area + universal card hover animation
+   ============================================================ */
+
+/* 1. Swap the app background image to the new stage/cross worship scene */
+body {
+  background:
+    linear-gradient(180deg, rgba(246, 247, 251, 0.74), rgba(246, 247, 251, 0.82)),
+    url('/static/worship-stage.webp') center / cover no-repeat fixed;
+}
+:root[data-theme="dark"] body {
+  background:
+    linear-gradient(180deg, rgba(13, 19, 32, 0.78), rgba(13, 19, 32, 0.85)),
+    url('/static/worship-stage.webp') center / cover no-repeat fixed;
+}
+.auth-shell {
+  background:
+    linear-gradient(135deg, rgba(12, 44, 90, 0.55) 0%, rgba(12, 44, 90, 0.40) 45%, rgba(12, 44, 90, 0.72) 100%),
+    url('/static/worship-stage.webp') center / cover no-repeat fixed;
+}
+.dash-welcome.dash-welcome-cover {
+  background:
+    linear-gradient(120deg, rgba(12, 44, 90, 0.86) 0%, rgba(12, 44, 90, 0.55) 45%, rgba(12, 44, 90, 0.20) 100%),
+    url('/static/worship-stage.webp') center 22% / cover no-repeat;
+}
+
+/* 2. Remove the colored top stripe from the dashboard KPI cards */
+.mockup-stat::before { content: none !important; }
+
+/* 3. KPI sparkline area: more presence + smoother stroke */
+.mockup-stat .stat-spark svg { height: 56px; }
+.mockup-stat .mini-area { opacity: 0.22; }
+.mockup-stat .mini-line { stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 4. Universal card hover — lift + glow + crisper border, on every card */
+.card,
+.stat,
+.mockup-stat,
+.filters-card,
+.trend-card,
+.upcoming-card,
+.recent-members-card,
+.report-tile,
+.day-card,
+.help-card,
+.attendance-counts-card {
+  transition:
+    transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
+}
+
+.card:hover,
+.stat:hover,
+.mockup-stat:hover,
+.filters-card:hover,
+.trend-card:hover,
+.upcoming-card:hover,
+.recent-members-card:hover,
+.report-tile:hover,
+.day-card:hover,
+.help-card:hover,
+.attendance-counts-card:hover {
+  transform: translateY(-4px);
+  box-shadow:
+    0 18px 38px -12px rgba(15, 23, 42, 0.22),
+    0 6px 14px -8px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(124, 92, 252, 0.15);
+  border-color: rgba(124, 92, 252, 0.30);
+  background: rgba(255, 255, 255, 0.94);
+}
+:root[data-theme="dark"] .card:hover,
+:root[data-theme="dark"] .stat:hover,
+:root[data-theme="dark"] .mockup-stat:hover,
+:root[data-theme="dark"] .filters-card:hover,
+:root[data-theme="dark"] .trend-card:hover,
+:root[data-theme="dark"] .upcoming-card:hover,
+:root[data-theme="dark"] .recent-members-card:hover,
+:root[data-theme="dark"] .report-tile:hover,
+:root[data-theme="dark"] .day-card:hover,
+:root[data-theme="dark"] .help-card:hover,
+:root[data-theme="dark"] .attendance-counts-card:hover {
+  background: rgba(23, 29, 43, 0.92);
+  border-color: rgba(169, 139, 255, 0.36);
+  box-shadow:
+    0 22px 44px -14px rgba(0, 0, 0, 0.55),
+    0 6px 14px -8px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(169, 139, 255, 0.22);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card:hover, .stat:hover, .mockup-stat:hover,
+  .filters-card:hover, .trend-card:hover, .upcoming-card:hover,
+  .recent-members-card:hover, .report-tile:hover, .day-card:hover,
+  .help-card:hover, .attendance-counts-card:hover {
+    transform: none;
+  }
+}
