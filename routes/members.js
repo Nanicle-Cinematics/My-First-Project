@@ -24,7 +24,7 @@ function memberErrors(b) {
 }
 
 // ---------- members ----------
-function memberWhere({ q, status, classId }) {
+function memberWhere({ q, status, classId, dayBorn }) {
   const where = ['m.deleted_at IS NULL'];
   const params = {};
   if (q) {
@@ -34,6 +34,7 @@ function memberWhere({ q, status, classId }) {
   }
   if (status) { where.push(`m.membership_status = @status`); params.status = status; }
   if (classId) { where.push(`m.bible_class_id = @classId`); params.classId = Number(classId); }
+  if (dayBorn && DAYS_OF_WEEK.includes(dayBorn)) { where.push(`m.day_born = @dayBorn`); params.dayBorn = dayBorn; }
   return { clause: where.join(' AND '), params };
 }
 function selectMembers(filters) {
@@ -75,10 +76,11 @@ app.get('/members', (req, res) => {
   const q = (req.query.q || '').trim();
   const status = (req.query.status || '').trim();
   const classId = (req.query.class || '').trim();
-  const matched = countMembers({ q, status, classId });
+  const dayBorn = (req.query.day_born || '').trim();
+  const matched = countMembers({ q, status, classId, dayBorn });
   const pages = Math.max(1, Math.ceil(matched / MEMBERS_PER_PAGE));
   const page = Math.min(pages, Math.max(1, parseInt(req.query.page, 10) || 1));
-  const rows = selectMembers({ q, status, classId, limit: MEMBERS_PER_PAGE, offset: (page - 1) * MEMBERS_PER_PAGE });
+  const rows = selectMembers({ q, status, classId, dayBorn, limit: MEMBERS_PER_PAGE, offset: (page - 1) * MEMBERS_PER_PAGE });
   const isAdmin = res.locals.isAdmin;
 
   const totalMembers = db.prepare(`SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL`).get().c;
@@ -93,7 +95,9 @@ app.get('/members', (req, res) => {
   const statuses = ['', 'visitor', 'regular', 'member', 'inactive', 'transferred', 'deceased', 'other'];
   const statusOpts = statuses.map((s) =>
     `<option value="${s}" ${s === status ? 'selected' : ''}>${s ? MEMBER_STATUS_LABELS[s] : 'All statuses'}</option>`).join('');
-  const exportQs = new URLSearchParams({ q, status, class: classId }).toString();
+  const dayBornOpts = `<option value="">All day-born</option>` + DAYS_OF_WEEK.map((d) =>
+    `<option value="${d}" ${d === dayBorn ? 'selected' : ''}>${d} (${esc(AKAN_NAMES[d] || d)})</option>`).join('');
+  const exportQs = new URLSearchParams({ q, status, class: classId, day_born: dayBorn }).toString();
 
   const hero = pageHero('Members Directory',
     'Manage and view all church members in one place. Search, filter, and act on member records.');
@@ -108,6 +112,7 @@ app.get('/members', (req, res) => {
     q, placeholder: 'Search members by name, ID, email or phone…',
     controls: `<select name="class" aria-label="Filter by Bible class">${classOpts}</select>
       <select name="status" aria-label="Filter by status">${statusOpts}</select>
+      <select name="day_born" aria-label="Filter by day-born">${dayBornOpts}</select>
       <details class="export">
         <summary>⋯ Export</summary>
         <a href="/members.csv?${exportQs}">Export CSV</a>
@@ -175,12 +180,12 @@ app.get('/members', (req, res) => {
         <thead><tr>${isAdmin ? '<th class="bulk-cell"><input type="checkbox" class="bulk-all" aria-label="Select all"></th>' : ''}<th>Name</th><th>Contact</th><th>Day Name</th><th>Group</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
       </table>
-      ${pager('/members', { q, status, class: classId }, page, pages)}` : `<div class="empty-state">
+      ${pager('/members', { q, status, class: classId, day_born: dayBorn }, page, pages)}` : `<div class="empty-state">
         <div class="empty-ico" aria-hidden="true">👥</div>
-        <h3>${q || classId || status ? 'No members match your search' : 'No members yet'}</h3>
-        <p>${q || classId || status ? 'Try clearing filters or searching by phone number.' : 'Add your first member and the directory will start populating.'}</p>
+        <h3>${q || classId || status || dayBorn ? 'No members match your search' : 'No members yet'}</h3>
+        <p>${q || classId || status || dayBorn ? 'Try clearing filters or searching by phone number.' : 'Add your first member and the directory will start populating.'}</p>
         ${isAdmin ? '<a class="btn primary" href="/members/new">＋ Add New Member</a>' : ''}
-        ${q || classId || status ? '<div style="margin-top:0.6rem"><a class="link" href="/members">Clear filters →</a></div>' : ''}
+        ${q || classId || status || dayBorn ? '<div style="margin-top:0.6rem"><a class="link" href="/members">Clear filters →</a></div>' : ''}
       </div>`,
   });
 
