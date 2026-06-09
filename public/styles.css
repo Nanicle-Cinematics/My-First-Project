@@ -5988,3 +5988,26 @@ body {
   color: #fff;
   border-color: transparent;
 }
+
+/* ============================================================
+   v9 — Members CSV import preview
+   ============================================================ */
+
+.import-preview-table { width: 100%; font-size: 0.84rem; }
+.import-preview-table thead th {
+  font-size: 0.66rem; letter-spacing: 0.14em; text-transform: uppercase;
+  font-weight: 700; color: var(--muted);
+  padding: 0.7rem 0.8rem;
+  background: linear-gradient(180deg, rgba(124, 92, 252, 0.025), transparent);
+  border-bottom: 1px solid var(--p-border-strong);
+}
+.import-preview-table tbody td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--p-border);
+  vertical-align: top;
+}
+.import-row-create { background: rgba(59, 130, 246, 0.04); }
+.import-row-update { background: rgba(22, 163, 74, 0.04); }
+.import-row-skip   { background: rgba(220, 38, 38, 0.05); }
+.import-preview-table .pill { font-size: 0.66rem; padding: 0.18rem 0.5rem; white-space: nowrap; }
+.import-preview-table .pill.pill-failed { background: var(--danger-soft); color: var(--danger); }

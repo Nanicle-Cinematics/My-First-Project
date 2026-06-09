@@ -434,6 +434,16 @@ test('SMS broadcast send path works (dry-run, all members)', async () => {
   assert.ok([302, 200].includes(r.status), `expected redirect/ok, got ${r.status}`);
 });
 
+test('members import page + template download work for admins', async () => {
+  const page = await get('/members/import');
+  assert.strictEqual(page.status, 200);
+  assert.match(page.body, /Import members/);
+  assert.match(page.body, /Preview import/);
+  const tmpl = await get('/members/import/template.csv');
+  assert.strictEqual(tmpl.status, 200);
+  assert.match(tmpl.body, /first_name,last_name/);
+});
+
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
