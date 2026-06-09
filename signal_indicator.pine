@@ -1,0 +1,265 @@
+//@version=6
+indicator("Signal Indicator with T1/T2/T3 + Stop", shorttitle="SIG·TP·SL", overlay=true,
+          max_labels_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════
+grp_trend = "── Trend (SuperTrend) ──"
+grp_sig   = "── Signal (UT Bot style) ──"
+grp_risk  = "── Targets / Stop (ATR) ──"
+grp_vis   = "── Visuals ──"
+
+// SuperTrend trend filter (the red/green cloud)
+st_atr_len = input.int(10,  "SuperTrend ATR Length", minval=1, group=grp_trend)
+st_mult    = input.float(3.0, "SuperTrend Multiplier", step=0.1, group=grp_trend)
+
+// UT Bot style signal (the ▲▼ arrows)
+key_value  = input.float(1.0, "Signal Sensitivity (key)", step=0.1, group=grp_sig, tooltip="Lower = more signals, higher = stricter")
+atr_period = input.int(10, "Signal ATR Period", minval=1, group=grp_sig)
+use_heikin = input.bool(false, "Use Heikin Ashi for signals", group=grp_sig)
+use_trend_filter = input.bool(false, "Require SuperTrend agreement", group=grp_sig, tooltip="If ON, longs only fire when trend is up and shorts only when trend is down. If OFF (default), every UT Bot crossover fires a signal.")
+
+// ATR-based targets and stop
+atr_tp_len = input.int(14, "TP/SL ATR Length", minval=1, group=grp_risk)
+sl_mult    = input.float(1.5, "Stop = ATR ×", step=0.1, group=grp_risk)
+t1_mult    = input.float(1.0, "T1 = ATR ×",   step=0.1, group=grp_risk)
+t2_mult    = input.float(2.0, "T2 = ATR ×",   step=0.1, group=grp_risk)
+t3_mult    = input.float(3.0, "T3 = ATR ×",   step=0.1, group=grp_risk)
+
+show_cloud   = input.bool(true, "Show trend cloud",   group=grp_vis)
+show_levels  = input.bool(true, "Show TP/SL lines",   group=grp_vis)
+show_labels  = input.bool(true, "Show price labels",  group=grp_vis)
+
+// ══════════════════════════════════════════════════════════════
+// TREND CLOUD (SuperTrend)
+// ══════════════════════════════════════════════════════════════
+[st_line, st_dir] = ta.supertrend(st_mult, st_atr_len)
+trend_up   = st_dir < 0
+trend_down = st_dir > 0
+
+up_plot   = plot(show_cloud and trend_up   ? st_line : na, "ST Up",   color.new(color.green, 0), style=plot.style_linebr)
+down_plot = plot(show_cloud and trend_down ? st_line : na, "ST Down", color.new(color.red,   0), style=plot.style_linebr)
+price_plot = plot(show_cloud ? close : na, "Price", display=display.none)
+fill(price_plot, up_plot,   color = show_cloud and trend_up   ? color.new(color.green, 85) : na)
+fill(price_plot, down_plot, color = show_cloud and trend_down ? color.new(color.red,   85) : na)
+
+// ══════════════════════════════════════════════════════════════
+// SIGNAL ENGINE (UT Bot)
+// ══════════════════════════════════════════════════════════════
+src      = use_heikin ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close) : close
+xATR     = ta.atr(atr_period)
+nLoss    = key_value * xATR
+
+var float trail = 0.0
+trail := src > nz(trail[1]) and src[1] > nz(trail[1]) ? math.max(nz(trail[1]), src - nLoss) :
+         src < nz(trail[1]) and src[1] < nz(trail[1]) ? math.min(nz(trail[1]), src + nLoss) :
+         src > nz(trail[1])                            ? src - nLoss : src + nLoss
+
+ema1    = ta.ema(src, 1)
+above   = ta.crossover(ema1, trail)
+below   = ta.crossunder(ema1, trail)
+
+long_sig  = above and (not use_trend_filter or trend_up)
+short_sig = below and (not use_trend_filter or trend_down)
+
+plotshape(long_sig,  "Long",  shape.triangleup,   location.belowbar, color.green, size=size.small)
+plotshape(short_sig, "Short", shape.triangledown, location.abovebar, color.red,   size=size.small)
+
+// ══════════════════════════════════════════════════════════════
+// TP / SL LEVELS (only on fresh signal, persist until next)
+// ══════════════════════════════════════════════════════════════
+atr_risk = ta.atr(atr_tp_len)
+
+var float entry = na
+var float stop  = na
+var float t1    = na
+var float t2    = na
+var float t3    = na
+var int   dir   = 0   // 1 = long, -1 = short
+
+if long_sig
+    entry := close
+    stop  := close - sl_mult * atr_risk
+    t1    := close + t1_mult * atr_risk
+    t2    := close + t2_mult * atr_risk
+    t3    := close + t3_mult * atr_risk
+    dir   := 1
+
+if short_sig
+    entry := close
+    stop  := close + sl_mult * atr_risk
+    t1    := close - t1_mult * atr_risk
+    t2    := close - t2_mult * atr_risk
+    t3    := close - t3_mult * atr_risk
+    dir   := -1
+
+// Only the most recent signal's levels are shown. On each new signal,
+// previous lines/labels are deleted and fresh ones drawn at the signal bar.
+// They then extend with each new bar so they trail the current price.
+var line  ln_entry = na
+var line  ln_stop  = na
+var line  ln_t1    = na
+var line  ln_t2    = na
+var line  ln_t3    = na
+var label lb_entry = na
+var label lb_stop  = na
+var label lb_t1    = na
+var label lb_t2    = na
+var label lb_t3    = na
+
+new_signal = long_sig or short_sig
+
+// Direction-coded colors: longs = green TPs / red SL, shorts = red TPs / green SL
+tp_color = dir == 1 ? color.green : color.red
+sl_color = dir == 1 ? color.red   : color.green
+
+if new_signal and show_levels
+    line.delete(ln_entry)
+    line.delete(ln_stop)
+    line.delete(ln_t1)
+    line.delete(ln_t2)
+    line.delete(ln_t3)
+    ln_entry := line.new(bar_index, entry, bar_index + 1, entry, color=color.new(color.blue, 0),  width=2)
+    ln_stop  := line.new(bar_index, stop,  bar_index + 1, stop,  color=color.new(sl_color,    0), width=2)
+    ln_t1    := line.new(bar_index, t1,    bar_index + 1, t1,    color=color.new(tp_color,   30))
+    ln_t2    := line.new(bar_index, t2,    bar_index + 1, t2,    color=color.new(tp_color,   15))
+    ln_t3    := line.new(bar_index, t3,    bar_index + 1, t3,    color=color.new(tp_color,    0))
+
+if new_signal and show_labels
+    label.delete(lb_entry)
+    label.delete(lb_stop)
+    label.delete(lb_t1)
+    label.delete(lb_t2)
+    label.delete(lb_t3)
+    lb_entry := label.new(bar_index, entry, "Entry " + str.tostring(entry, format.mintick),
+                          style=label.style_label_left, color=color.new(color.blue, 20), textcolor=color.white)
+    lb_stop  := label.new(bar_index, stop,  "Stop "  + str.tostring(stop,  format.mintick),
+                          style=label.style_label_left, color=color.new(sl_color,  20), textcolor=color.white)
+    lb_t1    := label.new(bar_index, t1,    "T1 "    + str.tostring(t1,    format.mintick),
+                          style=label.style_label_left, color=color.new(tp_color, 40), textcolor=color.white)
+    lb_t2    := label.new(bar_index, t2,    "T2 "    + str.tostring(t2,    format.mintick),
+                          style=label.style_label_left, color=color.new(tp_color, 25), textcolor=color.white)
+    lb_t3    := label.new(bar_index, t3,    "T3 "    + str.tostring(t3,    format.mintick),
+                          style=label.style_label_left, color=color.new(tp_color, 10), textcolor=color.white)
+
+// ── Hit detection: remove a level once price reaches it ──
+// Long: TP hit when high >= level, SL hit when low <= stop
+// Short: TP hit when low <= level, SL hit when high >= stop
+// SL hit removes the whole trade (it's over).
+hit_long(level)  => not na(level) and high >= level
+hit_short(level) => not na(level) and low  <= level
+sl_long_hit  = dir ==  1 and not na(stop) and low  <= stop
+sl_short_hit = dir == -1 and not na(stop) and high >= stop
+sl_hit       = sl_long_hit or sl_short_hit
+
+if sl_hit
+    line.delete(ln_entry)
+    line.delete(ln_stop)
+    line.delete(ln_t1)
+    line.delete(ln_t2)
+    line.delete(ln_t3)
+    label.delete(lb_entry)
+    label.delete(lb_stop)
+    label.delete(lb_t1)
+    label.delete(lb_t2)
+    label.delete(lb_t3)
+    ln_entry := na
+    ln_stop  := na
+    ln_t1    := na
+    ln_t2    := na
+    ln_t3    := na
+    lb_entry := na
+    lb_stop  := na
+    lb_t1    := na
+    lb_t2    := na
+    lb_t3    := na
+    dir      := 0
+
+t1_hit_now = dir != 0 and (dir == 1 ? hit_long(t1) : hit_short(t1))
+t2_hit_now = dir != 0 and (dir == 1 ? hit_long(t2) : hit_short(t2))
+t3_hit_now = dir != 0 and (dir == 1 ? hit_long(t3) : hit_short(t3))
+
+// Track which TPs have already been reached. Lines stay visible
+// until ALL three have been hit, then they're cleared together.
+var bool t1_done = false
+var bool t2_done = false
+var bool t3_done = false
+
+if new_signal
+    t1_done := false
+    t2_done := false
+    t3_done := false
+
+if t1_hit_now
+    t1_done := true
+if t2_hit_now
+    t2_done := true
+if t3_hit_now
+    t3_done := true
+
+if dir != 0 and t1_done and t2_done and t3_done
+    line.delete(ln_t1)
+    line.delete(ln_t2)
+    line.delete(ln_t3)
+    line.delete(ln_entry)
+    line.delete(ln_stop)
+    label.delete(lb_t1)
+    label.delete(lb_t2)
+    label.delete(lb_t3)
+    label.delete(lb_entry)
+    label.delete(lb_stop)
+    ln_t1    := na
+    ln_t2    := na
+    ln_t3    := na
+    ln_entry := na
+    ln_stop  := na
+    lb_t1    := na
+    lb_t2    := na
+    lb_t3    := na
+    lb_entry := na
+    lb_stop  := na
+    dir      := 0
+
+// Extend any remaining lines and slide labels rightward on every bar
+if show_levels
+    if not na(ln_entry)
+        line.set_x2(ln_entry, bar_index + 1)
+    if not na(ln_stop)
+        line.set_x2(ln_stop,  bar_index + 1)
+    if not na(ln_t1)
+        line.set_x2(ln_t1,    bar_index + 1)
+    if not na(ln_t2)
+        line.set_x2(ln_t2,    bar_index + 1)
+    if not na(ln_t3)
+        line.set_x2(ln_t3,    bar_index + 1)
+
+if show_labels
+    if not na(lb_entry)
+        label.set_x(lb_entry, bar_index + 1)
+    if not na(lb_stop)
+        label.set_x(lb_stop,  bar_index + 1)
+    if not na(lb_t1)
+        label.set_x(lb_t1,    bar_index + 1)
+    if not na(lb_t2)
+        label.set_x(lb_t2,    bar_index + 1)
+    if not na(lb_t3)
+        label.set_x(lb_t3,    bar_index + 1)
+
+// ══════════════════════════════════════════════════════════════
+// STATUS TABLE — always-on scan state in the top-right corner
+// ══════════════════════════════════════════════════════════════
+var table status = table.new(position.top_right, 1, 1, border_width=1)
+
+state_txt = dir == 1 ? "LONG ACTIVE" : dir == -1 ? "SHORT ACTIVE" : "SCANNING FOR ENTRY"
+state_col = dir == 1 ? color.new(color.green, 20) : dir == -1 ? color.new(color.red, 20) : color.new(color.blue, 20)
+
+if barstate.islast
+    table.cell(status, 0, 0, state_txt, text_color=color.white, bgcolor=state_col, text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════
+// ALERTS
+// ══════════════════════════════════════════════════════════════
+alertcondition(long_sig, "Long Signal", "LONG {{ticker}} @ {{close}}")
+alertcondition(short_sig, "Short Signal", "SHORT {{ticker}} @ {{close}}")
+alertcondition(sl_hit, "Stop Loss Hit - scanning for re-entry", "SL HIT {{ticker}} @ {{close}} - looking for next entry")
