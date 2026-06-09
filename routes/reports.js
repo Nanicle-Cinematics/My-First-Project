@@ -1,7 +1,7 @@
 'use strict';
 // Reports: overview, print-all, day-born, collections, harvests, special,
 // expenses, financial summary, members. Read-only. register(app, ctx).
-const { esc, fmtMoney, fmtOutstanding } = require('../lib/format');
+const { esc, fmtMoney, fmtOutstanding, fmtDobShort } = require('../lib/format');
 const { table } = require('../lib/views');
 
 module.exports.register = function register(app, ctx) {
