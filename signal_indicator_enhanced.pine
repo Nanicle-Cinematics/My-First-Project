@@ -67,7 +67,8 @@ fill(price_plot, down_plot, color = show_cloud and trend_down ? color.new(color.
 // ══════════════════════════════════════════════════════════════
 // SIGNAL FILTERS
 // ══════════════════════════════════════════════════════════════
-vol_ok = not use_volume_filter or (volume > ta.sma(volume, vol_ma_len))
+vol_ma = ta.sma(volume, vol_ma_len)
+vol_ok = not use_volume_filter or (volume > vol_ma)
 
 rsi_val = ta.rsi(close, rsi_len)
 rsi_long_ok  = not use_rsi_filter or (rsi_val < rsi_ob)
@@ -377,8 +378,8 @@ if barstate.islast and show_panel
 // ══════════════════════════════════════════════════════════════
 // ALERTS
 // ══════════════════════════════════════════════════════════════
-alertcondition(long_sig, "Long Signal", "LONG {{ticker}} @ {{close}} | Risk $" + str.tostring(risk_amount))
-alertcondition(short_sig, "Short Signal", "SHORT {{ticker}} @ {{close}} | Risk $" + str.tostring(risk_amount))
+alertcondition(long_sig, "Long Signal", "LONG {{ticker}} @ {{close}}")
+alertcondition(short_sig, "Short Signal", "SHORT {{ticker}} @ {{close}}")
 alertcondition(sl_hit, "Stop Loss Hit", "SL HIT {{ticker}} @ {{close}} — scanning for re-entry")
 alertcondition(t1_hit_now, "T1 Hit — Move Stop to BE", "T1 HIT {{ticker}} — stop moved to breakeven")
 alertcondition(not daily_loss_ok, "Daily Loss Limit", "DAILY LOSS LIMIT REACHED — stop trading")
