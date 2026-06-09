@@ -7,22 +7,25 @@ module.exports.register = function register(app, ctx) {
     const isAdmin = res.locals.isAdmin;
     const services = db.prepare(`
       SELECT e.event_id, e.title, e.starts_at, e.location,
-             COUNT(a.member_id) attendees
+             COUNT(a.member_id) attendees,
+             e.attendance_men, e.attendance_women, e.attendance_children, e.attendance_total
       FROM   events e LEFT JOIN attendance a USING(event_id)
       WHERE  e.event_type='service'
       GROUP BY e.event_id ORDER BY e.starts_at DESC LIMIT 20`).all();
     const trend = services.slice(0, 8).reverse()
-      .map((r, i) => ({ label: `Wk ${i + 1}`, value: r.attendees }));
+      .map((r, i) => ({ label: `Wk ${i + 1}`, value: r.attendance_total ?? r.attendees }));
     const avg = trend.length
       ? Math.round(trend.reduce((a, b) => a + b.value, 0) / trend.length) : 0;
-    const total = services.reduce((a, b) => a + b.attendees, 0);
+    const total = services.reduce((a, b) => a + (b.attendance_total ?? b.attendees), 0);
+    const recorded = services.filter((s) => s.attendance_total !== null && s.attendance_total !== undefined).length;
 
     const hero = pageHero('Attendance',
-      'Track service participation. Average, totals, and a per-service trend at a glance.');
+      'Track service participation. Record Men / Women / Children counts per service — each row is editable.');
     const stats = statsRow([
       { cls: 'gold', icon: '✓', value: avg.toLocaleString(), label: `Avg attendance (last ${trend.length})` },
       { cls: 'green', icon: '📅', value: services.length.toLocaleString(), label: 'Services tracked' },
-      { cls: 'blue', icon: '👥', value: total.toLocaleString(), label: 'Total check-ins' },
+      { cls: 'blue', icon: '🧮', value: recorded.toLocaleString(), label: 'Counts recorded' },
+      { cls: 'purple', icon: '👥', value: total.toLocaleString(), label: 'Total attendance' },
     ], isAdmin ? '<a class="btn primary" href="/events/new">＋ New Service</a>' : '');
 
     const trendCard = `<div class="card">
@@ -30,11 +33,19 @@ module.exports.register = function register(app, ctx) {
       ${sparkline(trend)}
     </div>`;
 
+    const cell = (v) => v == null || v === '' ? '<span class="muted-text">—</span>' : `<strong>${esc(String(v))}</strong>`;
     const recent = services.length
-      ? table(['When', 'Title', 'Location', 'Attendees', 'Actions'],
-          services.map((s) => [esc(s.starts_at), esc(s.title), esc(s.location) || '<span class="muted-text">—</span>',
-            `<span class="count-badge">${s.attendees}</span>`,
-            `<a class="btn ghost" href="/events/${s.event_id}">Open →</a>`]))
+      ? table(
+          ['When', 'Title', 'Men', 'Women', 'Children', 'Total', 'Actions'],
+          services.map((s) => [
+            esc(s.starts_at),
+            `<a href="/events/${s.event_id}">${esc(s.title)}</a>`,
+            cell(s.attendance_men),
+            cell(s.attendance_women),
+            cell(s.attendance_children),
+            cell(s.attendance_total),
+            `<a class="btn ghost" href="/events/${s.event_id}#attendance">Edit →</a>`,
+          ]))
       : `<div class="empty-state">
           <div class="empty-ico" aria-hidden="true">✓</div>
           <h3>No services tracked yet</h3>

@@ -6,7 +6,7 @@ module.exports.register = function register(app, ctx) {
     requireAdmin, logActivity, layout, flash, PUBLIC_URL, ICON_EYE, ICON_PENCIL } = ctx;
 
   // ---------- shared event form ---------- //
-  const EVENT_TYPES = ['service', 'prayer', 'bible_study', 'outreach', 'youth', 'wedding', 'funeral', 'baptism', 'other'];
+  const EVENT_TYPES = ['service', 'prayer', 'bible_study', 'outreach', 'youth', 'wedding', 'funeral', 'baptism', 'confirmation', 'other'];
   function eventForm(ev, action) {
     const e = ev || {};
     const isoLocal = (v) => {
@@ -266,6 +266,39 @@ app.get('/events/:id', (req, res) => {
   const rsvpLink = `<p class="muted-text" style="margin-top:0.4rem">Public RSVP link:
     <a href="/rsvp/${esc(ev.checkin_token || '')}" target="_blank" rel="noopener">/rsvp/${esc(ev.checkin_token || '')}</a></p>`;
 
+  // Attendance segment counts: editable per service.
+  const men = ev.attendance_men ?? '';
+  const women = ev.attendance_women ?? '';
+  const children = ev.attendance_children ?? '';
+  const totalEntered = ev.attendance_total ?? '';
+  const hasCounts = (men !== '' || women !== '' || children !== '' || totalEntered !== '');
+  const countsCard = `
+    <div class="card attendance-counts-card" style="margin-bottom:1rem">
+      <div class="card-head">
+        <div>
+          <h2>Attendance counts</h2>
+          <div class="meta">Head-count for the service · editable</div>
+        </div>
+        ${hasCounts ? `<span class="pill pill-ok">⚬ Recorded</span>` : ''}
+      </div>
+      ${res.locals.isAdmin ? `<form method="post" action="/events/${id}/counts" class="counts-form" data-no-confirm="1">
+        <label class="counts-field"><span>Men</span><input type="number" name="attendance_men" min="0" step="1" value="${esc(men)}"></label>
+        <label class="counts-field"><span>Women</span><input type="number" name="attendance_women" min="0" step="1" value="${esc(women)}"></label>
+        <label class="counts-field"><span>Children</span><input type="number" name="attendance_children" min="0" step="1" value="${esc(children)}"></label>
+        <label class="counts-field counts-total"><span>Total</span><input type="number" name="attendance_total" min="0" step="1" value="${esc(totalEntered)}" placeholder="auto"></label>
+        <div class="counts-actions">
+          <button class="btn primary" type="submit">${hasCounts ? 'Update counts' : 'Save counts'}</button>
+          ${hasCounts ? `<button class="btn ghost" type="submit" name="clear" value="1" formnovalidate>Clear</button>` : ''}
+        </div>
+        <p class="muted-text counts-hint">Leave Total blank and we'll add Men + Women + Children for you.</p>
+      </form>` : `<dl class="counts-readonly">
+        <div><dt>Men</dt><dd>${men === '' ? '—' : esc(men)}</dd></div>
+        <div><dt>Women</dt><dd>${women === '' ? '—' : esc(women)}</dd></div>
+        <div><dt>Children</dt><dd>${children === '' ? '—' : esc(children)}</dd></div>
+        <div><dt>Total</dt><dd>${totalEntered === '' ? '—' : esc(totalEntered)}</dd></div>
+      </dl>`}
+    </div>`;
+
   const body = `
     <div class="event-detail-head">
       <div>
@@ -275,6 +308,7 @@ app.get('/events/:id', (req, res) => {
       ${res.locals.isAdmin ? `<a class="btn primary" href="/events/${id}/edit">✎ Edit event</a>` : ''}
     </div>
     ${qrButton}
+    ${countsCard}
     <div class="card" style="margin-bottom:1rem">
       <div class="card-head"><h2>RSVPs</h2>
         <span class="meta">✅ ${rsvpCounts.going} going · 🤔 ${rsvpCounts.maybe} maybe · ✖ ${rsvpCounts.no} can't</span></div>
@@ -293,6 +327,38 @@ app.get('/events/:id', (req, res) => {
       </section>
     </div>`;
   res.page({ title: ev.title, active: '/events', body });
+});
+
+app.post('/events/:id/counts', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const ev = db.prepare(`SELECT event_id FROM events WHERE event_id=?`).get(id);
+  if (!ev) return res.status(404).send('Not found');
+  if (req.body.clear === '1') {
+    db.prepare(`UPDATE events SET attendance_men=NULL, attendance_women=NULL,
+      attendance_children=NULL, attendance_total=NULL WHERE event_id=?`).run(id);
+    flash(req, 'Attendance counts cleared.', 'success');
+    return res.redirect(`/events/${id}`);
+  }
+  const toIntOrNull = (v) => {
+    if (v === undefined || v === null || String(v).trim() === '') return null;
+    const n = Number(v);
+    return (Number.isFinite(n) && n >= 0) ? Math.floor(n) : null;
+  };
+  const men = toIntOrNull(req.body.attendance_men);
+  const women = toIntOrNull(req.body.attendance_women);
+  const children = toIntOrNull(req.body.attendance_children);
+  let total = toIntOrNull(req.body.attendance_total);
+  if (total === null && (men !== null || women !== null || children !== null)) {
+    total = (men || 0) + (women || 0) + (children || 0);
+  }
+  db.prepare(`UPDATE events
+    SET attendance_men = ?, attendance_women = ?, attendance_children = ?, attendance_total = ?
+    WHERE event_id = ?`).run(men, women, children, total, id);
+  logActivity('attendance_recorded',
+    `Counts saved · M:${men ?? '—'} W:${women ?? '—'} C:${children ?? '—'} Total:${total ?? '—'}`,
+    `/events/${id}`, res.locals.user.user_id);
+  flash(req, 'Attendance counts saved.', 'success');
+  res.redirect(`/events/${id}`);
 });
 
 app.post('/events/:id/rsvp', requireAdmin, (req, res) => {

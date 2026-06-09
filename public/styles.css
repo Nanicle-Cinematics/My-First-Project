@@ -5671,3 +5671,202 @@ body {
   .event-detail-head { align-items: stretch; }
   .event-detail-head > div:last-child .btn { width: 100%; justify-content: center; }
 }
+
+/* ============================================================
+   v6 — worship-bg.jpg (color) as the main app + sign-in cover,
+   plain welcome (no card), refined KPIs, attendance counts form,
+   help page styling
+   ============================================================ */
+
+body {
+  background:
+    linear-gradient(180deg, rgba(246, 247, 251, 0.92), rgba(246, 247, 251, 0.95)),
+    url('/static/worship-bg.jpg') center / cover no-repeat fixed;
+}
+:root[data-theme="dark"] body {
+  background:
+    linear-gradient(180deg, rgba(13, 19, 32, 0.92), rgba(13, 19, 32, 0.95)),
+    url('/static/worship-bg.jpg') center / cover no-repeat fixed;
+}
+
+.auth-shell {
+  background:
+    linear-gradient(135deg, rgba(12, 44, 90, 0.55) 0%, rgba(12, 44, 90, 0.38) 45%, rgba(12, 44, 90, 0.72) 100%),
+    url('/static/worship-bg.jpg') center / cover no-repeat fixed;
+}
+
+/* Plain welcome header (no card style) */
+.dash-welcome.dash-welcome-plain {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 0 0.4rem !important;
+  min-height: 0 !important;
+  color: var(--ink);
+}
+.dash-welcome.dash-welcome-plain::before,
+.dash-welcome.dash-welcome-plain::after { content: none !important; }
+
+.dash-welcome.dash-welcome-plain .dash-welcome-kicker {
+  background: rgba(124, 92, 252, 0.10);
+  border: 1px solid rgba(124, 92, 252, 0.18);
+  color: var(--purple-dark);
+  backdrop-filter: none;
+}
+.dash-welcome.dash-welcome-plain .dash-h1 {
+  color: var(--ink);
+  text-shadow: none;
+  font-size: clamp(1.65rem, 2.4vw, 2.1rem);
+}
+.dash-welcome.dash-welcome-plain .dash-sub {
+  color: var(--muted);
+  text-shadow: none;
+}
+.dash-welcome.dash-welcome-plain .dash-sub strong { color: var(--ink); }
+
+.dash-welcome.dash-welcome-plain .btn.ghost {
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--ink);
+  border: 1px solid var(--p-border-strong);
+  backdrop-filter: none;
+}
+
+/* KPI cards: larger headline value, more prominent chips */
+.mockup-stat .stat-value {
+  font-size: clamp(1.85rem, 2.4vw, 2.25rem);
+  font-weight: 900;
+  letter-spacing: -0.034em;
+}
+.mockup-stat .stat-trend .trend-chip {
+  font-size: 0.72rem;
+  padding: 0.22rem 0.6rem;
+}
+.mockup-stat .stat-spark svg { height: 46px; }
+.mockup-stat .mini-area { opacity: 0.18; }
+.mockup-stat .mini-line { stroke-width: 2.6; }
+
+/* Attendance counts form (event detail) */
+.attendance-counts-card .counts-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem 1rem;
+  align-items: end;
+}
+.attendance-counts-card .counts-field {
+  display: flex; flex-direction: column; gap: 0.35rem;
+  min-width: 0;
+}
+.attendance-counts-card .counts-field span {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+.attendance-counts-card .counts-field input {
+  height: 44px;
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  border-radius: 12px;
+  border: 1px solid var(--p-border-strong);
+  background: var(--field);
+}
+.attendance-counts-card .counts-field.counts-total input {
+  background: linear-gradient(180deg, var(--gold-soft), #fff8e0);
+  border-color: rgba(212, 160, 23, 0.4);
+  color: var(--gold-deep);
+}
+.attendance-counts-card .counts-actions {
+  grid-column: 1 / -1;
+  display: flex; gap: 0.5rem; flex-wrap: wrap;
+}
+.attendance-counts-card .counts-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.78rem;
+}
+.attendance-counts-card .counts-readonly {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.9rem 1rem;
+  margin: 0;
+}
+.attendance-counts-card .counts-readonly > div {
+  background: var(--soft);
+  border-radius: 12px;
+  padding: 0.7rem 0.9rem;
+  text-align: center;
+}
+.attendance-counts-card .counts-readonly dt {
+  font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase;
+  font-weight: 700; color: var(--muted);
+}
+.attendance-counts-card .counts-readonly dd {
+  margin: 0.25rem 0 0;
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .attendance-counts-card .counts-form,
+  .attendance-counts-card .counts-readonly {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Help page */
+.help-toc {
+  background: linear-gradient(135deg, rgba(124, 92, 252, 0.08), rgba(212, 160, 23, 0.06));
+  border: 1px solid rgba(124, 92, 252, 0.18);
+}
+.help-toc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.5rem 1rem;
+}
+.help-toc-list a {
+  display: inline-block;
+  padding: 0.4rem 0.7rem;
+  border-radius: 9px;
+  color: var(--purple-dark);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+.help-toc-list a:hover {
+  background: var(--purple-soft);
+  text-decoration: none;
+}
+
+.help-card {
+  margin-bottom: 1rem;
+  scroll-margin-top: 1.5rem;
+}
+.help-card .card-head h2 {
+  font-family: var(--p-font-display);
+  font-weight: 800;
+  font-size: 1.05rem;
+}
+.help-card p {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  margin: 0.3rem 0 0.8rem;
+}
+.help-steps {
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+.help-steps li {
+  margin-bottom: 0.5rem;
+}
+.help-steps li::marker { color: var(--purple-dark); font-weight: 700; }
