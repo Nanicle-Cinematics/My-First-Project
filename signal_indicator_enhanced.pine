@@ -1,5 +1,5 @@
 //@version=6
-indicator("Signal Indicator with T1/T2/T3 + Stop [Enhanced]", shorttitle="SIG·TP·SL·PRO", overlay=true,
+indicator("Signal Indicator with T1/T2/T3/T4 + Stop [Enhanced]", shorttitle="SIG·TP·SL·PRO", overlay=true,
           max_labels_count=500, max_lines_count=500)
 
 // ══════════════════════════════════════════════════════════════
@@ -28,6 +28,7 @@ sl_mult    = input.float(1.5, "Stop = ATR ×", step=0.1, group=grp_risk)
 t1_mult    = input.float(1.0, "T1 = ATR ×",   step=0.1, group=grp_risk)
 t2_mult    = input.float(2.0, "T2 = ATR ×",   step=0.1, group=grp_risk)
 t3_mult    = input.float(3.0, "T3 = ATR ×",   step=0.1, group=grp_risk)
+t4_mult    = input.float(4.0, "T4 = ATR ×",   step=0.1, group=grp_risk)
 
 // Position sizing
 account_size = input.float(50.0, "Account Size ($)", minval=1, group=grp_money)
@@ -57,6 +58,7 @@ show_panel   = input.bool(true, "Show risk panel",    group=grp_vis)
 [st_line, st_dir] = ta.supertrend(st_mult, st_atr_len)
 trend_up   = st_dir < 0
 trend_down = st_dir > 0
+trend_changed = trend_up != trend_up[1]
 
 up_plot   = plot(show_cloud and trend_up   ? st_line : na, "ST Up",   color.new(color.green, 0), style=plot.style_linebr)
 down_plot = plot(show_cloud and trend_down ? st_line : na, "ST Down", color.new(color.red,   0), style=plot.style_linebr)
@@ -149,6 +151,7 @@ var float stop  = na
 var float t1    = na
 var float t2    = na
 var float t3    = na
+var float t4    = na
 var int   dir   = 0
 var float pos_size = na
 var float sl_distance = na
@@ -160,6 +163,7 @@ if long_sig
     t1    := close + t1_mult * atr_risk
     t2    := close + t2_mult * atr_risk
     t3    := close + t3_mult * atr_risk
+    t4    := close + t4_mult * atr_risk
     pos_size := sl_distance > 0 ? risk_amount / sl_distance : 0
     dir   := 1
 
@@ -170,6 +174,7 @@ if short_sig
     t1    := close - t1_mult * atr_risk
     t2    := close - t2_mult * atr_risk
     t3    := close - t3_mult * atr_risk
+    t4    := close - t4_mult * atr_risk
     pos_size := sl_distance > 0 ? risk_amount / sl_distance : 0
     dir   := -1
 
@@ -178,39 +183,51 @@ var line  ln_stop  = na
 var line  ln_t1    = na
 var line  ln_t2    = na
 var line  ln_t3    = na
+var line  ln_t4    = na
 var label lb_entry = na
 var label lb_stop  = na
 var label lb_t1    = na
 var label lb_t2    = na
 var label lb_t3    = na
+var label lb_t4    = na
 
 new_signal = long_sig or short_sig
 
 tp_color = dir == 1 ? color.green : color.red
 sl_color = dir == 1 ? color.red   : color.green
 
-if new_signal and show_levels
+// Helper to clean up all drawings and reset state
+clear_all_drawings() =>
     line.delete(ln_entry)
     line.delete(ln_stop)
     line.delete(ln_t1)
     line.delete(ln_t2)
     line.delete(ln_t3)
-    ln_entry := line.new(bar_index, entry, bar_index + 1, entry, color=color.new(color.blue, 0),  width=2)
-    ln_stop  := line.new(bar_index, stop,  bar_index + 1, stop,  color=color.new(sl_color,    0), width=2)
-    ln_t1    := line.new(bar_index, t1,    bar_index + 1, t1,    color=color.new(tp_color,   30))
-    ln_t2    := line.new(bar_index, t2,    bar_index + 1, t2,    color=color.new(tp_color,   15))
-    ln_t3    := line.new(bar_index, t3,    bar_index + 1, t3,    color=color.new(tp_color,    0))
-
-if new_signal and show_labels
+    line.delete(ln_t4)
     label.delete(lb_entry)
     label.delete(lb_stop)
     label.delete(lb_t1)
     label.delete(lb_t2)
     label.delete(lb_t3)
+    label.delete(lb_t4)
+    true
+
+if new_signal and show_levels
+    clear_all_drawings()
+    ln_entry := line.new(bar_index, entry, bar_index + 1, entry, color=color.new(color.blue, 0),  width=2)
+    ln_stop  := line.new(bar_index, stop,  bar_index + 1, stop,  color=color.new(sl_color,    0), width=2)
+    ln_t1    := line.new(bar_index, t1,    bar_index + 1, t1,    color=color.new(tp_color,   30))
+    ln_t2    := line.new(bar_index, t2,    bar_index + 1, t2,    color=color.new(tp_color,   20))
+    ln_t3    := line.new(bar_index, t3,    bar_index + 1, t3,    color=color.new(tp_color,   10))
+    ln_t4    := line.new(bar_index, t4,    bar_index + 1, t4,    color=color.new(tp_color,    0), width=2)
+
+if new_signal and show_labels
+    clear_all_drawings()
     size_str = str.tostring(pos_size, "#.####")
     rr_t1 = str.tostring(t1_mult / sl_mult, "#.#")
     rr_t2 = str.tostring(t2_mult / sl_mult, "#.#")
     rr_t3 = str.tostring(t3_mult / sl_mult, "#.#")
+    rr_t4 = str.tostring(t4_mult / sl_mult, "#.#")
     lb_entry := label.new(bar_index, entry, "Entry " + str.tostring(entry, format.mintick) + " | Size: " + size_str,
                           style=label.style_label_left, color=color.new(color.blue, 20), textcolor=color.white)
     lb_stop  := label.new(bar_index, stop,  "Stop "  + str.tostring(stop,  format.mintick) + " | Risk: $" + str.tostring(risk_amount, "#.##"),
@@ -218,8 +235,10 @@ if new_signal and show_labels
     lb_t1    := label.new(bar_index, t1,    "T1 "    + str.tostring(t1,    format.mintick) + " (R:R " + rr_t1 + ")",
                           style=label.style_label_left, color=color.new(tp_color, 40), textcolor=color.white)
     lb_t2    := label.new(bar_index, t2,    "T2 "    + str.tostring(t2,    format.mintick) + " (R:R " + rr_t2 + ")",
-                          style=label.style_label_left, color=color.new(tp_color, 25), textcolor=color.white)
+                          style=label.style_label_left, color=color.new(tp_color, 30), textcolor=color.white)
     lb_t3    := label.new(bar_index, t3,    "T3 "    + str.tostring(t3,    format.mintick) + " (R:R " + rr_t3 + ")",
+                          style=label.style_label_left, color=color.new(tp_color, 20), textcolor=color.white)
+    lb_t4    := label.new(bar_index, t4,    "T4 "    + str.tostring(t4,    format.mintick) + " (R:R " + rr_t4 + ")",
                           style=label.style_label_left, color=color.new(tp_color, 10), textcolor=color.white)
 
 // ══════════════════════════════════════════════════════════════
@@ -231,43 +250,45 @@ sl_long_hit  = dir ==  1 and not na(stop) and low  <= stop
 sl_short_hit = dir == -1 and not na(stop) and high >= stop
 sl_hit       = sl_long_hit or sl_short_hit
 
+// Trend changed while in a trade — invalidates current position, scan for new entry
+trend_invalidate = dir != 0 and trend_changed
+
 // Track daily P&L from SL hits
 if sl_hit
     daily_pnl -= risk_amount
-    line.delete(ln_entry)
-    line.delete(ln_stop)
-    line.delete(ln_t1)
-    line.delete(ln_t2)
-    line.delete(ln_t3)
-    label.delete(lb_entry)
-    label.delete(lb_stop)
-    label.delete(lb_t1)
-    label.delete(lb_t2)
-    label.delete(lb_t3)
+
+// Reset to scanning on SL hit or trend change
+if sl_hit or trend_invalidate
+    clear_all_drawings()
     ln_entry := na
     ln_stop  := na
     ln_t1    := na
     ln_t2    := na
     ln_t3    := na
+    ln_t4    := na
     lb_entry := na
     lb_stop  := na
     lb_t1    := na
     lb_t2    := na
     lb_t3    := na
+    lb_t4    := na
     dir      := 0
 
 t1_hit_now = dir != 0 and (dir == 1 ? hit_long(t1) : hit_short(t1))
 t2_hit_now = dir != 0 and (dir == 1 ? hit_long(t2) : hit_short(t2))
 t3_hit_now = dir != 0 and (dir == 1 ? hit_long(t3) : hit_short(t3))
+t4_hit_now = dir != 0 and (dir == 1 ? hit_long(t4) : hit_short(t4))
 
 var bool t1_done = false
 var bool t2_done = false
 var bool t3_done = false
+var bool t4_done = false
 
 if new_signal
     t1_done := false
     t2_done := false
     t3_done := false
+    t4_done := false
 
 if t1_hit_now and not t1_done
     t1_done := true
@@ -278,8 +299,11 @@ if t2_hit_now and not t2_done
 if t3_hit_now and not t3_done
     t3_done := true
     daily_pnl += risk_amount * (t3_mult / sl_mult) * 0.25
+if t4_hit_now and not t4_done
+    t4_done := true
+    daily_pnl += risk_amount * (t4_mult / sl_mult) * 0.15
 
-// Move stop to breakeven after T1 hit (trail protection)
+// Move stop to breakeven after T1 hit
 if t1_done and dir == 1 and not na(stop) and stop < entry
     stop  := entry
     if not na(ln_stop)
@@ -298,29 +322,24 @@ if t1_done and dir == -1 and not na(stop) and stop > entry
         label.set_y(lb_stop, entry)
         label.set_text(lb_stop, "Stop → BE " + str.tostring(entry, format.mintick))
 
-if dir != 0 and t1_done and t2_done and t3_done
-    line.delete(ln_t1)
-    line.delete(ln_t2)
-    line.delete(ln_t3)
-    line.delete(ln_entry)
-    line.delete(ln_stop)
-    label.delete(lb_t1)
-    label.delete(lb_t2)
-    label.delete(lb_t3)
-    label.delete(lb_entry)
-    label.delete(lb_stop)
+// All 4 TPs hit — trade complete, back to scanning
+if dir != 0 and t1_done and t2_done and t3_done and t4_done
+    clear_all_drawings()
     ln_t1    := na
     ln_t2    := na
     ln_t3    := na
+    ln_t4    := na
     ln_entry := na
     ln_stop  := na
     lb_t1    := na
     lb_t2    := na
     lb_t3    := na
+    lb_t4    := na
     lb_entry := na
     lb_stop  := na
     dir      := 0
 
+// Extend lines and slide labels on every bar
 if show_levels
     if not na(ln_entry)
         line.set_x2(ln_entry, bar_index + 1)
@@ -332,6 +351,8 @@ if show_levels
         line.set_x2(ln_t2,    bar_index + 1)
     if not na(ln_t3)
         line.set_x2(ln_t3,    bar_index + 1)
+    if not na(ln_t4)
+        line.set_x2(ln_t4,    bar_index + 1)
 
 if show_labels
     if not na(lb_entry)
@@ -344,11 +365,13 @@ if show_labels
         label.set_x(lb_t2,    bar_index + 1)
     if not na(lb_t3)
         label.set_x(lb_t3,    bar_index + 1)
+    if not na(lb_t4)
+        label.set_x(lb_t4,    bar_index + 1)
 
 // ══════════════════════════════════════════════════════════════
 // STATUS + RISK PANEL
 // ══════════════════════════════════════════════════════════════
-var table panel = table.new(position.top_right, 2, 8, border_width=1)
+var table panel = table.new(position.top_right, 2, 9, border_width=1)
 
 if barstate.islast and show_panel
     state_txt = dir == 1 ? "LONG ACTIVE" : dir == -1 ? "SHORT ACTIVE" : "SCANNING"
@@ -371,15 +394,22 @@ if barstate.islast and show_panel
     table.cell(panel, 0, 6, "Session",       text_color=color.white, bgcolor=color.new(color.gray, 40), text_size=size.small)
     table.cell(panel, 1, 6, in_session ? "ACTIVE" : "CLOSED", text_color=color.white, bgcolor=in_session ? color.new(color.green, 40) : color.new(color.red, 40), text_size=size.small)
 
+    trend_txt = trend_up ? "BULLISH" : "BEARISH"
+    trend_col = trend_up ? color.new(color.green, 20) : color.new(color.red, 20)
+    table.cell(panel, 0, 7, "Trend",         text_color=color.white, bgcolor=color.new(color.gray, 40), text_size=size.small)
+    table.cell(panel, 1, 7, trend_txt,        text_color=color.white, bgcolor=trend_col,                 text_size=size.small)
+
     lock_txt = not daily_loss_ok ? "DAILY LOSS LIMIT" : not trades_ok ? "MAX TRADES HIT" : "OK"
-    table.cell(panel, 0, 7, "Guard",         text_color=color.white, bgcolor=color.new(color.gray, 40), text_size=size.small)
-    table.cell(panel, 1, 7, lock_txt,        text_color=color.white, bgcolor=locked_col,                text_size=size.small)
+    table.cell(panel, 0, 8, "Guard",         text_color=color.white, bgcolor=color.new(color.gray, 40), text_size=size.small)
+    table.cell(panel, 1, 8, lock_txt,        text_color=color.white, bgcolor=locked_col,                text_size=size.small)
 
 // ══════════════════════════════════════════════════════════════
 // ALERTS
 // ══════════════════════════════════════════════════════════════
 alertcondition(long_sig, "Long Signal", "LONG {{ticker}} @ {{close}}")
 alertcondition(short_sig, "Short Signal", "SHORT {{ticker}} @ {{close}}")
-alertcondition(sl_hit, "Stop Loss Hit", "SL HIT {{ticker}} @ {{close}} — scanning for re-entry")
-alertcondition(t1_hit_now, "T1 Hit — Move Stop to BE", "T1 HIT {{ticker}} — stop moved to breakeven")
+alertcondition(sl_hit, "Stop Loss Hit — Scanning", "SL HIT {{ticker}} @ {{close}} — scanning for re-entry")
+alertcondition(trend_invalidate, "Trend Changed — Scanning", "TREND FLIP {{ticker}} — trade invalidated, scanning")
+alertcondition(t1_hit_now, "T1 Hit — Stop to BE", "T1 HIT {{ticker}} — stop moved to breakeven")
+alertcondition(t4_hit_now, "T4 Hit — Trade Complete", "T4 HIT {{ticker}} — all targets reached")
 alertcondition(not daily_loss_ok, "Daily Loss Limit", "DAILY LOSS LIMIT REACHED — stop trading")
