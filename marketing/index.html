@@ -15,13 +15,16 @@
       <span class="logo">⛪</span>
       <span class="name">Church Manager</span>
     </a>
-    <nav>
+    <nav id="main-nav">
       <a href="#features">Features</a>
       <a href="#pricing">Pricing</a>
       <a href="#trust">Trust</a>
       <a href="#faq">FAQ</a>
       <a class="btn-primary" href="#contact">Request a demo</a>
     </nav>
+    <button class="nav-toggle" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
   </div>
 </header>
 
@@ -279,6 +282,50 @@
   </div>
 </section>
 
+<section id="testimonials" class="testimonials">
+  <div class="container">
+    <h2>Trusted by church leaders across Ghana.</h2>
+    <p class="section-lead">
+      Pastors, secretaries, and treasurers who switched from paper and spreadsheets.
+    </p>
+    <div class="testimonial-grid">
+      <div class="testimonial-card">
+        <div class="testimonial-quote">"</div>
+        <p>We used to spend three Sundays a year just tallying harvest pledges on paper. Now it takes one afternoon and the report is ready to print. The day-born breakdown alone saved us hours every month.</p>
+        <div class="testimonial-author">
+          <div class="testimonial-avatar">EA</div>
+          <div>
+            <strong>Elder Ama</strong>
+            <span>Treasurer, Methodist Church — Koforidua</span>
+          </div>
+        </div>
+      </div>
+      <div class="testimonial-card">
+        <div class="testimonial-quote">"</div>
+        <p>Our secretary can now pull up any member's giving history or attendance in seconds — what used to take a filing cabinet search. The birthday SMS has become something our members look forward to every year.</p>
+        <div class="testimonial-author">
+          <div class="testimonial-avatar">PK</div>
+          <div>
+            <strong>Pastor Kweku</strong>
+            <span>Senior Pastor, Assemblies of God — Accra</span>
+          </div>
+        </div>
+      </div>
+      <div class="testimonial-card">
+        <div class="testimonial-quote">"</div>
+        <p>Getting SMS out to 400 members used to mean the secretary calling people one by one. Now I type a message, pick the group, and it's delivered in under a minute at a fraction of the cost we were paying before.</p>
+        <div class="testimonial-author">
+          <div class="testimonial-avatar">DE</div>
+          <div>
+            <strong>Deaconess Efua</strong>
+            <span>Communications Officer, Presbyterian Church — Kumasi</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section id="pricing" class="pricing">
   <div class="container">
     <h2>Simple, honest pricing.</h2>
@@ -494,7 +541,51 @@
   </div>
 </footer>
 
-<script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+<script>
+  // Year
+  document.getElementById('year').textContent = new Date().getFullYear();
+
+  // Hamburger menu
+  const toggle = document.getElementById('nav-toggle');
+  const nav = document.getElementById('main-nav');
+  toggle.addEventListener('click', () => {
+    const open = nav.classList.toggle('open');
+    toggle.classList.toggle('open', open);
+    toggle.setAttribute('aria-expanded', open);
+  });
+  // Close nav when a link is clicked
+  nav.querySelectorAll('a').forEach(a => {
+    a.addEventListener('click', () => {
+      nav.classList.remove('open');
+      toggle.classList.remove('open');
+      toggle.setAttribute('aria-expanded', 'false');
+    });
+  });
+
+  // Scroll-reveal via IntersectionObserver
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.12 });
+
+  document.querySelectorAll(
+    '.why-item, .gallery-card, .feature, .how-step, .trust-card, .testimonial-card, .plan'
+  ).forEach((el, i) => {
+    el.style.transitionDelay = (i % 4) * 80 + 'ms';
+    el.classList.add('reveal');
+    observer.observe(el);
+  });
+
+  // Sticky header shadow on scroll
+  const header = document.querySelector('.site-header');
+  window.addEventListener('scroll', () => {
+    header.classList.toggle('scrolled', window.scrollY > 10);
+  }, { passive: true });
+</script>
 
 </body>
 </html>
