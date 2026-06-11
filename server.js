@@ -12,11 +12,19 @@ const {
   memberGivingForYear: financeMemberGiving,
 } = require('./lib/finance');
 const memberGivingForYear = (memberId, year) => financeMemberGiving(db, memberId, year);
+const { signHandoffToken } = require('./lib/sso');
 
 const PORT = process.env.PORT || 3000;
 const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
 const PUBLIC_URL  = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 const PREF_LABELS = { either: 'Both', sms_only: 'SMS only', email_only: 'Email only', none: 'Do not contact' };
+
+// SSO handoff to the external finance app (church-finance). Active only when both
+// the shared secret and the finance origin are configured; otherwise the local
+// /finance pages stay in use and the handoff endpoint is disabled.
+const SSO_SECRET     = process.env.SSO_SECRET || '';
+const FINANCE_ORIGIN = (process.env.FINANCE_ORIGIN || '').replace(/\/$/, '');
+const SSO_ENABLED    = Boolean(SSO_SECRET && FINANCE_ORIGIN);
 
 function validateEnvironment(env) {
   const required = ['SESSION_SECRET'];
@@ -783,6 +791,28 @@ app.use((req, res, next) => {
   next();
 });
 
+// SSO handoff: send the signed-in user to the external finance app. The auth gate
+// above has already populated res.locals.user (or redirected to /login). We mint a
+// short-lived signed token and redirect back to the finance app's callback, only
+// ever to the configured FINANCE_ORIGIN (open-redirect guard).
+app.get('/sso/authorize', (req, res) => {
+  if (!SSO_ENABLED) return res.status(503).send('Finance SSO is not configured.');
+  const user = res.locals.user;
+  const requested = String(req.query.redirect || `${FINANCE_ORIGIN}/sso/callback`);
+  let target;
+  try { target = new URL(requested); } catch (_) { return res.status(400).send('Invalid redirect.'); }
+  if (target.origin !== FINANCE_ORIGIN) {
+    logSecurityEvent(req, 'sso_redirect_blocked', target.origin, user && user.user_id);
+    return res.status(400).send('Redirect not allowed.');
+  }
+  const token = signHandoffToken(
+    { sub: user.user_id, name: user.display_name || user.username, role: user.role },
+    SSO_SECRET,
+  );
+  target.searchParams.set('token', token);
+  return res.redirect(target.toString());
+});
+
 // Standardized "Access Denied" dialog used by every role gate. Whenever a
 // viewer / editor hits a route they aren't allowed to use, we render the same
 // modal-styled card: title, body, and a Back action — instead of a bare 403.
@@ -851,7 +881,7 @@ const NAV = [
   ['/',                'Dashboard',      '▥'],
   ['/members',         'Members',        '👥'],
   ['/attendance',      'Attendance',     '✓'],
-  ['/finance',         'Finance',        '₵'],
+  [SSO_ENABLED ? '/sso/authorize' : '/finance', 'Finance', '₵'],
   ['/bible-classes',   'Bible Classes',  '📖'],
   ['/organizations',   'Organizations',  '♫'],
   ['/inventory',       'Inventory',      '📦'],
