@@ -27,3 +27,9 @@ backups/
 photos/
 photos/
 main
+# Unrelated sibling project kept alongside this repo — not part of the mgmt app.
+makeup-artist-site/
+# Scratch / exploratory output — never committed.
+_explore.out
+outputs/
+spreadsheet_work/
