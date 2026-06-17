@@ -34,3 +34,6 @@ deploy/churches/
 # Docs and dev-only files (image doesn't need them)
 README.md
 marketing/
+# Unrelated sibling project kept in this repo — never part of the mgmt image.
+makeup-artist-site/
+_explore.out
