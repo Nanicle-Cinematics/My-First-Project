@@ -5,7 +5,6 @@ cloudflare/workers-autoconfig
 !.dev.vars.example
 .env*
 !.env.example
-=======
 church.db
 demo.db
 dev.db
@@ -25,8 +24,6 @@ deploys/
 # DB backups should never be committed — push to S3/Backblaze instead.
 backups/
 photos/
-photos/
-main
 # Unrelated sibling project kept alongside this repo — not part of the mgmt app.
 makeup-artist-site/
 # Scratch / exploratory output — never committed.
