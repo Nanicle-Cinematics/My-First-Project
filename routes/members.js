@@ -107,7 +107,10 @@ app.get('/members', (req, res) => {
     { cls: 'blue', icon: '＋', value: newMembers.toLocaleString(), label: 'New (30d)' },
   ], `${isAdmin ? `<a class="btn primary" href="/members/new">＋ Add New Member</a>` : ''}
       ${isAdmin ? `<a class="btn ghost" href="/members/import">⇪ Import CSV</a>` : ''}
-      <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>`);
+      <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>
+      ${res.locals.ssoEnabled && isAdmin ? `<form method="post" action="/sync/members" class="inline-form" style="display:inline" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Syncing…';">
+        <button class="btn ghost" type="submit" title="Push members to the Finance app">🔄 Sync to Finance</button>
+      </form>` : ''}`);
   const filters = filterCard({
     q, placeholder: 'Search members by name, ID, email or phone…',
     controls: `<select name="class" aria-label="Filter by Bible class">${classOpts}</select>

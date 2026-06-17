@@ -13,6 +13,7 @@ const {
 } = require('./lib/finance');
 const memberGivingForYear = (memberId, year) => financeMemberGiving(db, memberId, year);
 const { signHandoffToken } = require('./lib/sso');
+const { signSyncToken } = require('./lib/sync');
 
 const PORT = process.env.PORT || 3000;
 const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
@@ -785,6 +786,7 @@ app.use((req, res, next) => {
   // isAdmin here means "can create/edit content" — admins and editors. Owner-only
   // areas (users, roles, backups, settings) use requireOwner instead.
   res.locals.isAdmin = res.locals.user.role === 'admin' || res.locals.user.role === 'editor';
+  res.locals.ssoEnabled = SSO_ENABLED;
   // Adding/deleting accounts and resetting passwords is reserved for the main administrator.
   res.locals.isUserManager = res.locals.isOwner
     && String(res.locals.user.username || '').toLowerCase() === 'dunwelladmin';
@@ -811,6 +813,59 @@ app.get('/sso/authorize', (req, res) => {
   );
   target.searchParams.set('token', token);
   return res.redirect(target.toString());
+});
+
+// Member sync: this app is the system of record for members; push them to the
+// finance app's /api/sync/members. Owner-only. Sends every member (including
+// archived/inactive, flagged active:false) so finance can mirror deactivations.
+// Authenticated with a short-lived member-sync token signed with SSO_SECRET.
+app.post('/sync/members', requireOwner, async (req, res) => {
+  if (!SSO_ENABLED) { flash(req, 'Finance integration is not configured.'); return res.redirect('/members'); }
+  try {
+    const rows = db.prepare(`
+      SELECT m.member_id, m.external_id, m.first_name, m.last_name, m.email, m.mobile_phone,
+             m.day_born, m.membership_status, m.deleted_at,
+             mn.name AS bible_class, h.family_name AS family
+        FROM members m
+        LEFT JOIN ministries mn ON mn.ministry_id = m.bible_class_id
+        LEFT JOIN households  h ON h.household_id  = m.household_id
+       ORDER BY m.member_id
+    `).all();
+    const INACTIVE = new Set(['inactive', 'transferred', 'deceased']);
+    const members = rows.map((r) => ({
+      // external_id is the church member number (e.g. DMS-001); fall back to a
+      // stable synthetic key so every member upserts deterministically.
+      memberNo: (r.external_id && String(r.external_id).trim()) || `MGMT-${r.member_id}`,
+      firstName: r.first_name,
+      lastName: r.last_name,
+      phone: r.mobile_phone || null,
+      email: r.email || null,
+      dayBorn: r.day_born || null,
+      bibleClass: r.bible_class || null,
+      family: r.family || null,
+      active: !r.deleted_at && !INACTIVE.has(r.membership_status),
+    }));
+
+    const token = signSyncToken(SSO_SECRET);
+    const resp = await fetch(`${FINANCE_ORIGIN}/api/sync/members`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ members }),
+    });
+    const out = await resp.json().catch(() => ({}));
+    if (!resp.ok || !out.ok) {
+      logSecurityEvent(req, 'member_sync_failed', `status:${resp.status}`, res.locals.user.user_id);
+      flash(req, `Member sync failed (${resp.status}). ${out.error || ''}`.trim());
+    } else {
+      logActivity('member_sync',
+        `Synced ${members.length} members to finance (${out.created} new, ${out.updated} updated)`,
+        '/members', res.locals.user.user_id);
+      flash(req, `Synced ${members.length} members to Finance — ${out.created} new, ${out.updated} updated.`, 'success');
+    }
+  } catch (e) {
+    flash(req, `Member sync error: ${e.message}`);
+  }
+  return res.redirect('/members');
 });
 
 // Standardized "Access Denied" dialog used by every role gate. Whenever a
