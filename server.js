@@ -12,20 +12,28 @@ const {
   memberGivingForYear: financeMemberGiving,
 } = require('./lib/finance');
 const memberGivingForYear = (memberId, year) => financeMemberGiving(db, memberId, year);
-const { signHandoffToken } = require('./lib/sso');
-const { signSyncToken } = require('./lib/sync');
+const { ensureLedgerSchema } = require('./lib/ledger');
 
 const PORT = process.env.PORT || 3000;
 const CHURCH_NAME = process.env.CHURCH_NAME || 'Dunwell Methodist';
 const PUBLIC_URL  = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+const TRIAL_LENGTH_DAYS = Number(process.env.TRIAL_LENGTH_DAYS || 7);
 const PREF_LABELS = { either: 'Both', sms_only: 'SMS only', email_only: 'Email only', none: 'Do not contact' };
-
-// SSO handoff to the external finance app (church-finance). Active only when both
-// the shared secret and the finance origin are configured; otherwise the local
-// /finance pages stay in use and the handoff endpoint is disabled.
-const SSO_SECRET     = process.env.SSO_SECRET || '';
-const FINANCE_ORIGIN = (process.env.FINANCE_ORIGIN || '').replace(/\/$/, '');
-const SSO_ENABLED    = Boolean(SSO_SECRET && FINANCE_ORIGIN);
+const FINANCE_ROLE_LABELS = {
+  none: 'No finance access',
+  cashier: 'Cashier',
+  treasurer: 'Steward / Treasurer',
+  auditor: 'Auditor',
+  finance_admin: 'Finance admin',
+};
+const PLAN_LIMITS = {
+  starter: { label: 'Starter', members: 150, users: 3, branches: 1, support: 'Standard support' },
+  pro: { label: 'Pro', members: 800, users: 10, branches: 1, support: 'Priority support' },
+  enterprise: { label: 'Enterprise', members: 5000, users: 50, branches: 10, support: 'Dedicated onboarding' },
+};
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@churchmanager.local';
+const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || '';
+const ALERT_EMAIL = process.env.ALERT_EMAIL || '';
 
 function validateEnvironment(env) {
   const required = ['SESSION_SECRET'];
@@ -49,10 +57,11 @@ function listBackups() {
   } catch (_) { return []; }
 }
 async function createBackup() {
-  const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+  const stamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 17);
   const name = `church-${stamp}.db`;
   const full = path.join(BACKUP_DIR, name);
   await db.backup(full);
+  verifyBackupFile(full);
   for (const old of listBackups().slice(BACKUP_KEEP)) {
     try { fs.unlinkSync(path.join(BACKUP_DIR, old.name)); } catch (_) {}
   }
@@ -93,6 +102,7 @@ db.exec(`
     display_name  TEXT,
     role          TEXT    NOT NULL DEFAULT 'admin'
                   CHECK (role IN ('admin','editor','viewer')),
+    finance_role  TEXT    NOT NULL DEFAULT 'none',
     created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 `);
@@ -178,6 +188,7 @@ addColumnIfMissing('members', 'bible_class_id',    `bible_class_id INTEGER REFER
 addColumnIfMissing('members', 'day_born',          `day_born TEXT`);
 addColumnIfMissing('members', 'deleted_at',        `deleted_at TEXT`);
 addColumnIfMissing('users',   'deleted_at',        `deleted_at TEXT`);
+addColumnIfMissing('users',   'finance_role',      `finance_role TEXT NOT NULL DEFAULT 'none'`);
 addColumnIfMissing('ministries', 'org_id',         `org_id INTEGER REFERENCES organizations(org_id)`);
 addColumnIfMissing('expenses', 'paid_to',          `paid_to TEXT`);
 addColumnIfMissing('expenses', 'payment_method',   `payment_method TEXT`);
@@ -186,6 +197,17 @@ addColumnIfMissing('expenses', 'receipt_attached', `receipt_attached INTEGER NOT
 addColumnIfMissing('expenses', 'reference_number', `reference_number TEXT`);
 addColumnIfMissing('expenses', 'expense_cat_id',   `expense_cat_id INTEGER REFERENCES expense_categories(expense_cat_id)`);
 addColumnIfMissing('expenses', 'notes',            `notes TEXT`);
+addColumnIfMissing('expenses', 'journal_entry_id', `journal_entry_id INTEGER`);
+addColumnIfMissing('expenses', 'approval_status',  `approval_status TEXT NOT NULL DEFAULT 'PAID'`);
+addColumnIfMissing('expenses', 'submitted_at',     `submitted_at TEXT`);
+addColumnIfMissing('expenses', 'approved_at',      `approved_at TEXT`);
+addColumnIfMissing('expenses', 'paid_at',          `paid_at TEXT`);
+addColumnIfMissing('expenses', 'rejected_at',      `rejected_at TEXT`);
+addColumnIfMissing('expenses', 'approval_note',    `approval_note TEXT`);
+addColumnIfMissing('services', 'journal_entry_id', `journal_entry_id INTEGER`);
+addColumnIfMissing('harvests', 'journal_entry_id', `journal_entry_id INTEGER`);
+addColumnIfMissing('special_offerings', 'journal_entry_id', `journal_entry_id INTEGER`);
+addColumnIfMissing('pledge_payments', 'journal_entry_id', `journal_entry_id INTEGER`);
 addColumnIfMissing('inventory_items', 'acquired_on',`acquired_on TEXT`);
 addColumnIfMissing('members', 'preferred_channel',`preferred_channel TEXT NOT NULL DEFAULT 'none'`);
 addColumnIfMissing('members', 'unsubscribe_token',`unsubscribe_token TEXT`);
@@ -194,6 +216,93 @@ addColumnIfMissing('members', 'photo_filename',   `photo_filename TEXT`);
 addColumnIfMissing('members', 'emergency_contact_name',     `emergency_contact_name TEXT`);
 addColumnIfMissing('members', 'emergency_contact_phone',    `emergency_contact_phone TEXT`);
 addColumnIfMissing('members', 'emergency_contact_relation', `emergency_contact_relation TEXT`);
+ensureLedgerSchema(db);
+db.exec(`CREATE TABLE IF NOT EXISTS payment_vouchers (
+  voucher_id         INTEGER PRIMARY KEY,
+  voucher_no         TEXT NOT NULL UNIQUE,
+  expense_id         INTEGER NOT NULL UNIQUE REFERENCES expenses(expense_id) ON DELETE CASCADE,
+  voucher_date       TEXT NOT NULL,
+  amount_in_words    TEXT NOT NULL,
+  supporting_doc_ref TEXT,
+  prepared_by        INTEGER REFERENCES users(user_id),
+  checked_by         TEXT,
+  approved_by        INTEGER REFERENCES users(user_id),
+  paid_by            INTEGER REFERENCES users(user_id),
+  received_by        TEXT,
+  notes              TEXT,
+  created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_payment_vouchers_date ON payment_vouchers(voucher_date);`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS finance_settings (
+  setting_id         INTEGER PRIMARY KEY CHECK (setting_id = 1),
+  receipt_prefix     TEXT NOT NULL DEFAULT 'DMC-RCT',
+  voucher_prefix     TEXT NOT NULL DEFAULT 'DMC-PV',
+  small_expense_max  REAL NOT NULL DEFAULT 500 CHECK (small_expense_max >= 0),
+  medium_expense_max REAL NOT NULL DEFAULT 5000 CHECK (medium_expense_max >= 0),
+  updated_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO finance_settings (setting_id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS income_records (
+  income_id        INTEGER PRIMARY KEY,
+  transaction_date TEXT NOT NULL,
+  category         TEXT NOT NULL,
+  subcategory      TEXT,
+  received_from    TEXT,
+  member_id        INTEGER REFERENCES members(member_id),
+  amount           REAL NOT NULL CHECK (amount > 0),
+  payment_method   TEXT NOT NULL DEFAULT 'Cash',
+  fund_id          INTEGER REFERENCES funds(fund_id),
+  project_id       INTEGER REFERENCES finance_projects(project_id),
+  reference_number TEXT,
+  description      TEXT,
+  receipt_number   TEXT UNIQUE,
+  recorded_by      INTEGER REFERENCES users(user_id),
+  journal_entry_id INTEGER REFERENCES journal_entries(entry_id),
+  deleted_at       TEXT,
+  created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_income_records_date ON income_records(transaction_date);
+CREATE INDEX IF NOT EXISTS idx_income_records_category ON income_records(category);
+
+CREATE TABLE IF NOT EXISTS day_born_collections (
+  collection_id    INTEGER PRIMARY KEY,
+  collection_date  TEXT NOT NULL,
+  day_born         TEXT NOT NULL CHECK (day_born IN ('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')),
+  amount           REAL NOT NULL CHECK (amount > 0),
+  head_count       INTEGER NOT NULL DEFAULT 0 CHECK (head_count >= 0),
+  payment_method   TEXT NOT NULL DEFAULT 'Cash',
+  fund_id          INTEGER REFERENCES funds(fund_id),
+  reference_number TEXT,
+  receipt_number   TEXT UNIQUE,
+  recorded_by      INTEGER REFERENCES users(user_id),
+  journal_entry_id INTEGER REFERENCES journal_entries(entry_id),
+  notes            TEXT,
+  deleted_at       TEXT,
+  created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_day_born_collections_date ON day_born_collections(collection_date);
+CREATE INDEX IF NOT EXISTS idx_day_born_collections_day ON day_born_collections(day_born);
+
+CREATE TABLE IF NOT EXISTS finance_receipts (
+  receipt_id     INTEGER PRIMARY KEY,
+  receipt_number TEXT NOT NULL UNIQUE,
+  source_type    TEXT NOT NULL,
+  source_id      INTEGER NOT NULL,
+  receipt_date   TEXT NOT NULL,
+  received_from  TEXT,
+  amount         REAL NOT NULL CHECK (amount > 0),
+  description    TEXT,
+  created_by     INTEGER REFERENCES users(user_id),
+  created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  voided_at      TEXT,
+  void_reason    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_finance_receipts_date ON finance_receipts(receipt_date);
+CREATE INDEX IF NOT EXISTS idx_finance_receipts_source ON finance_receipts(source_type, source_id);
+`);
 
 // Server-side error log (captured by the global error handler) for visibility.
 db.exec(`CREATE TABLE IF NOT EXISTS error_log (
@@ -205,6 +314,26 @@ db.exec(`CREATE TABLE IF NOT EXISTS error_log (
   stack       TEXT,
   user_id     INTEGER
 );`);
+db.exec(`CREATE TABLE IF NOT EXISTS trial_signups (
+  signup_id    INTEGER PRIMARY KEY,
+  church_name  TEXT NOT NULL,
+  contact_name TEXT NOT NULL,
+  role         TEXT,
+  phone        TEXT NOT NULL,
+  email        TEXT,
+  plan         TEXT NOT NULL DEFAULT 'pro'
+               CHECK (plan IN ('starter','pro','enterprise')),
+  member_count TEXT,
+  notes        TEXT,
+  status       TEXT NOT NULL DEFAULT 'new',
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`);
+addColumnIfMissing('trial_signups', 'activation_token', `activation_token TEXT`);
+addColumnIfMissing('trial_signups', 'activation_sent_at', `activation_sent_at TEXT`);
+addColumnIfMissing('trial_signups', 'activation_expires_at', `activation_expires_at TEXT`);
+addColumnIfMissing('trial_signups', 'activated_at', `activated_at TEXT`);
+addColumnIfMissing('trial_signups', 'activated_user_id', `activated_user_id INTEGER`);
+try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_signups_activation_token ON trial_signups(activation_token) WHERE activation_token IS NOT NULL`); } catch (_) {}
 
 // Persistent app state for scheduled jobs (last birthday run, etc.).
 db.exec(`CREATE TABLE IF NOT EXISTS app_state (
@@ -259,6 +388,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS tithes (
 );
 CREATE INDEX IF NOT EXISTS idx_tithes_member ON tithes(member_id);
 CREATE INDEX IF NOT EXISTS idx_tithes_date   ON tithes(tithe_date);`);
+addColumnIfMissing('tithes', 'journal_entry_id', `journal_entry_id INTEGER`);
 
 // Event RSVPs — a member's intended response to an event (going / maybe / no).
 db.exec(`CREATE TABLE IF NOT EXISTS event_rsvps (
@@ -625,6 +755,7 @@ runOnce('users_role_add_editor_v1', () => {
     db.pragma('foreign_keys = ON');
   }
 });
+addColumnIfMissing('users', 'finance_role', `finance_role TEXT NOT NULL DEFAULT 'none'`);
 
 // Households are no longer used — clean them up if anything is left.
 try {
@@ -770,102 +901,46 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/webhooks/')) return next(); // inbound webhooks (Arkesel STOP)
   if (req.path.startsWith('/checkin/')) return next();  // public QR check-in
   if (req.path.startsWith('/rsvp/')) return next();     // public RSVP
+  if (req.path.startsWith('/activate')) return next();  // public signup activation
+  if (req.path.startsWith('/billing')) return next();
+  if (['/privacy', '/terms', '/support'].includes(req.path)) return next();
   const userCount = db.prepare('SELECT COUNT(*) c FROM users').get().c;
   if (userCount === 0) {
     if (req.path === '/setup') return next();
     return res.redirect('/setup');
   }
   if (req.path === '/login' || req.path === '/logout' || req.path === '/forgot') return next();
+  if ((req.path === '/' || req.path === '/signup' || req.path === '/trial-signup') && !req.session.userId) return next();
   if (!req.session.userId) return res.redirect('/login');
   res.locals.user = db.prepare(
-    'SELECT user_id, username, display_name, role FROM users WHERE user_id=? AND deleted_at IS NULL'
+    'SELECT user_id, username, display_name, role, finance_role FROM users WHERE user_id=? AND deleted_at IS NULL'
   ).get(req.session.userId);
   if (!res.locals.user) { req.session.destroy(() => {}); return res.redirect('/login'); }
+  const forceTrialExpired = process.env.NODE_ENV === 'test' && String(req.query.__trial || '') === 'expired';
+  const trial = ensureTrialWindow();
+  res.locals.trial = trial;
+  res.locals.trialExpired = forceTrialExpired || trialHasExpired();
+  if (res.locals.trialExpired && req.path !== '/logout' && !req.path.startsWith('/activate')) return res.redirect('/billing');
   res.locals.role = res.locals.user.role;
   res.locals.isOwner = res.locals.user.role === 'admin';
   // isAdmin here means "can create/edit content" — admins and editors. Owner-only
   // areas (users, roles, backups, settings) use requireOwner instead.
   res.locals.isAdmin = res.locals.user.role === 'admin' || res.locals.user.role === 'editor';
-  res.locals.ssoEnabled = SSO_ENABLED;
+  res.locals.financeRole = res.locals.user.finance_role || 'none';
+  res.locals.canFinanceWrite = res.locals.isOwner
+    || ['finance_admin', 'treasurer', 'cashier'].includes(res.locals.financeRole);
+  res.locals.canFinanceAccounting = res.locals.isOwner
+    || ['finance_admin', 'treasurer', 'auditor'].includes(res.locals.financeRole);
+  res.locals.canFinanceManageFunds = res.locals.isOwner
+    || ['finance_admin', 'treasurer'].includes(res.locals.financeRole);
+  res.locals.canPermanentDeleteAll = res.locals.isOwner
+    || res.locals.financeRole === 'treasurer'
+    || String(res.locals.user.username || '').toLowerCase().includes('steward');
+  res.locals.user.canPermanentDeleteAll = res.locals.canPermanentDeleteAll;
   // Adding/deleting accounts and resetting passwords is reserved for the main administrator.
   res.locals.isUserManager = res.locals.isOwner
     && String(res.locals.user.username || '').toLowerCase() === 'dunwelladmin';
   next();
-});
-
-// SSO handoff: send the signed-in user to the external finance app. The auth gate
-// above has already populated res.locals.user (or redirected to /login). We mint a
-// short-lived signed token and redirect back to the finance app's callback, only
-// ever to the configured FINANCE_ORIGIN (open-redirect guard).
-app.get('/sso/authorize', (req, res) => {
-  if (!SSO_ENABLED) return res.status(503).send('Finance SSO is not configured.');
-  const user = res.locals.user;
-  const requested = String(req.query.redirect || `${FINANCE_ORIGIN}/sso/callback`);
-  let target;
-  try { target = new URL(requested); } catch (_) { return res.status(400).send('Invalid redirect.'); }
-  if (target.origin !== FINANCE_ORIGIN) {
-    logSecurityEvent(req, 'sso_redirect_blocked', target.origin, user && user.user_id);
-    return res.status(400).send('Redirect not allowed.');
-  }
-  const token = signHandoffToken(
-    { sub: user.user_id, name: user.display_name || user.username, role: user.role },
-    SSO_SECRET,
-  );
-  target.searchParams.set('token', token);
-  return res.redirect(target.toString());
-});
-
-// Member sync: this app is the system of record for members; push them to the
-// finance app's /api/sync/members. Owner-only. Sends every member (including
-// archived/inactive, flagged active:false) so finance can mirror deactivations.
-// Authenticated with a short-lived member-sync token signed with SSO_SECRET.
-app.post('/sync/members', requireOwner, async (req, res) => {
-  if (!SSO_ENABLED) { flash(req, 'Finance integration is not configured.'); return res.redirect('/members'); }
-  try {
-    const rows = db.prepare(`
-      SELECT m.member_id, m.external_id, m.first_name, m.last_name, m.email, m.mobile_phone,
-             m.day_born, m.membership_status, m.deleted_at,
-             mn.name AS bible_class, h.family_name AS family
-        FROM members m
-        LEFT JOIN ministries mn ON mn.ministry_id = m.bible_class_id
-        LEFT JOIN households  h ON h.household_id  = m.household_id
-       ORDER BY m.member_id
-    `).all();
-    const INACTIVE = new Set(['inactive', 'transferred', 'deceased']);
-    const members = rows.map((r) => ({
-      // external_id is the church member number (e.g. DMS-001); fall back to a
-      // stable synthetic key so every member upserts deterministically.
-      memberNo: (r.external_id && String(r.external_id).trim()) || `MGMT-${r.member_id}`,
-      firstName: r.first_name,
-      lastName: r.last_name,
-      phone: r.mobile_phone || null,
-      email: r.email || null,
-      dayBorn: r.day_born || null,
-      bibleClass: r.bible_class || null,
-      family: r.family || null,
-      active: !r.deleted_at && !INACTIVE.has(r.membership_status),
-    }));
-
-    const token = signSyncToken(SSO_SECRET);
-    const resp = await fetch(`${FINANCE_ORIGIN}/api/sync/members`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ members }),
-    });
-    const out = await resp.json().catch(() => ({}));
-    if (!resp.ok || !out.ok) {
-      logSecurityEvent(req, 'member_sync_failed', `status:${resp.status}`, res.locals.user.user_id);
-      flash(req, `Member sync failed (${resp.status}). ${out.error || ''}`.trim());
-    } else {
-      logActivity('member_sync',
-        `Synced ${members.length} members to finance (${out.created} new, ${out.updated} updated)`,
-        '/members', res.locals.user.user_id);
-      flash(req, `Synced ${members.length} members to Finance — ${out.created} new, ${out.updated} updated.`, 'success');
-    }
-  } catch (e) {
-    flash(req, `Member sync error: ${e.message}`);
-  }
-  return res.redirect('/members');
 });
 
 // Standardized "Access Denied" dialog used by every role gate. Whenever a
@@ -915,12 +990,116 @@ function requireAdmin(req, res, next) {
   });
 }
 
+function requireFinanceWrite(req, res, next) {
+  if (res.locals.canFinanceWrite) return next();
+  return denyAccess(req, res, {
+    detail: 'Finance recording is limited to finance admins, treasurers and cashiers.',
+    back: '/finance',
+  });
+}
+
+function requireFinanceAccounting(req, res, next) {
+  if (res.locals.canFinanceAccounting) return next();
+  return denyAccess(req, res, {
+    detail: 'Accounting reports are limited to finance admins, treasurers and auditors.',
+    back: '/finance',
+  });
+}
+
 function requireUserManager(req, res, next) {
   if (res.locals.isUserManager) return next();
   return denyAccess(req, res, {
     detail: 'Only the main administrator (dunwelladmin) can add or delete user accounts and reset passwords.',
     back: '/users',
   });
+}
+
+function requirePermanentDeleteAll(req, res, next) {
+  if (res.locals.canPermanentDeleteAll) return next();
+  return denyAccess(req, res, {
+    detail: 'Permanent delete-all actions are limited to Administrators and Steward / Treasurer accounts.',
+    back: '/',
+  });
+}
+
+function tableExists(name) {
+  return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name);
+}
+
+function tableCount(name) {
+  if (!tableExists(name)) return 0;
+  return db.prepare(`SELECT COUNT(*) c FROM ${name}`).get().c;
+}
+
+function quoteIdentifier(name) {
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+function databaseTableNames() {
+  return db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type='table' AND name NOT LIKE 'sqlite_%'
+    ORDER BY name`).all().map((row) => row.name);
+}
+
+function clearReferencesToTable(parentTable, skippedTables = []) {
+  const skipped = new Set(skippedTables);
+  for (const tableName of databaseTableNames()) {
+    if (tableName === parentTable || skipped.has(tableName)) continue;
+    const quotedTable = quoteIdentifier(tableName);
+    const fks = db.prepare(`PRAGMA foreign_key_list(${quotedTable})`).all()
+      .filter((fk) => fk.table === parentTable);
+    if (!fks.length) continue;
+    const columns = new Map(db.prepare(`PRAGMA table_info(${quotedTable})`).all()
+      .map((column) => [column.name, column]));
+    for (const fk of fks) {
+      const column = columns.get(fk.from);
+      if (!column) continue;
+      const quotedColumn = quoteIdentifier(fk.from);
+      if (column.notnull || column.pk) db.prepare(`DELETE FROM ${quotedTable}`).run();
+      else db.prepare(`UPDATE ${quotedTable} SET ${quotedColumn}=NULL`).run();
+    }
+  }
+}
+
+function deleteAllPreview(scope) {
+  return (scope.tables || []).filter(tableExists).map((name) => ({
+    name,
+    count: tableCount(name),
+  }));
+}
+
+function resetSequences(names) {
+  if (!tableExists('sqlite_sequence')) return;
+  const del = db.prepare(`DELETE FROM sqlite_sequence WHERE name=?`);
+  for (const name of names) {
+    if (tableExists(name)) del.run(name);
+  }
+}
+
+function performPermanentDelete(scopeKey, actorId) {
+  const scope = DELETE_ALL_SCOPES[scopeKey];
+  if (!scope) throw new Error('Unknown delete scope.');
+  const rows = deleteAllPreview(scope);
+  const sequenceNames = new Set(scope.tables || []);
+  const result = db.transaction(() => {
+    if (typeof scope.beforeDelete === 'function') scope.beforeDelete();
+    for (const tableName of scope.tables || []) {
+      if (tableExists(tableName)) db.prepare(`DELETE FROM ${tableName}`).run();
+    }
+    if (typeof scope.afterDelete === 'function') scope.afterDelete();
+    for (const name of scope.resetTables || []) sequenceNames.add(name);
+    resetSequences(Array.from(sequenceNames));
+    return rows;
+  })();
+  db.prepare(`
+    INSERT INTO activity_log (user_id, kind, description, link)
+    VALUES (?, 'permanent_delete_all', ?, ?)`).run(
+    actorId || null,
+    `Permanent delete-all executed for ${scope.label}`,
+    `/delete-all/${scopeKey}`
+  );
+  return result;
 }
 
 // ---------- helpers ----------
@@ -936,7 +1115,7 @@ const NAV = [
   ['/',                'Dashboard',      '▥'],
   ['/members',         'Members',        '👥'],
   ['/attendance',      'Attendance',     '✓'],
-  [SSO_ENABLED ? '/sso/authorize' : '/finance', 'Finance', '₵'],
+  ['/finance',          'Finance',        '₵'],
   ['/bible-classes',   'Bible Classes',  '📖'],
   ['/organizations',   'Organizations',  '♫'],
   ['/inventory',       'Inventory',      '📦'],
@@ -946,12 +1125,173 @@ const NAV = [
   ['/reports',         'Reports',        '📊'],
   ['/help',            'Help',           '?'],
   ['/operations',      'Operations',     '◎', 'admin'],
+  ['/tenant',          'Tenant',         '▣', 'admin'],
   ['/users',           'Users & Roles',  '🔑', 'admin'],
   ['/security/audit',  'Security Audit', '🛡', 'admin'],
   ['/backups',         'Backups',        '💾', 'admin'],
   ['/errors',          'Error Log',      '⚠', 'admin'],
   ['/settings',        'Settings',       '⚙'],
 ];
+
+const DELETE_ALL_SCOPES = {
+  members: {
+    label: 'Members',
+    active: ['/members'],
+    phrase: 'DELETE ALL MEMBERS',
+    description: 'Permanently deletes every member profile and member-linked records such as attendance links, member tithes, pledges, notes, welfare cases, sacraments and group memberships.',
+    tables: [
+      'broadcast_recipients',
+      'event_rsvps',
+      'attendance',
+      'organization_memberships',
+      'ministry_memberships',
+      'pastoral_notes',
+      'welfare_cases',
+      'sacraments',
+      'contributions',
+      'tithes',
+      'pledge_payments',
+      'pledges',
+      'income_records',
+    ],
+    beforeDelete: () => {
+      clearReferencesToTable('members', [
+        'broadcast_recipients',
+        'event_rsvps',
+        'attendance',
+        'organization_memberships',
+        'ministry_memberships',
+        'pastoral_notes',
+        'welfare_cases',
+        'sacraments',
+        'contributions',
+        'tithes',
+        'pledges',
+      ]);
+      db.prepare(`UPDATE organizations SET leader_id=NULL`).run();
+      db.prepare(`UPDATE ministries SET leader_id=NULL`).run();
+      db.prepare(`UPDATE members SET bible_class_id=NULL`).run();
+      db.prepare(`UPDATE special_offerings SET donor_id=NULL`).run();
+      db.prepare(`UPDATE pastoral_notes SET recorded_by=NULL`).run();
+    },
+    afterDelete: () => {
+      const members = db.prepare(`SELECT photo_filename FROM members WHERE photo_filename IS NOT NULL`).all();
+      db.prepare(`DELETE FROM members`).run();
+      for (const m of members) {
+        const file = path.basename(String(m.photo_filename || ''));
+        if (file) { try { fs.unlinkSync(path.join(PHOTO_DIR, file)); } catch (_) {} }
+      }
+    },
+    resetTables: ['members'],
+  },
+  attendance: {
+    label: 'Attendance',
+    active: ['/attendance'],
+    phrase: 'DELETE ALL ATTENDANCE',
+    description: 'Permanently deletes all attendance check-in rows. Events and members stay in place.',
+    tables: ['attendance'],
+  },
+  finance: {
+    label: 'Finance',
+    active: ['/finance'],
+    phrase: 'DELETE ALL FINANCE',
+    description: 'Permanently deletes finance transaction data including income, tithes, services, harvests, pledges, receipts, expenses, vouchers, projects, budgets, funds and journal entries. Finance settings and lookup categories remain.',
+    tables: [
+      'payment_vouchers',
+      'finance_receipts',
+      'finance_budget_lines',
+      'finance_budgets',
+      'expenses',
+      'income_records',
+      'day_born_collections',
+      'pledge_payments',
+      'pledges',
+      'day_born_splits',
+      'special_offerings',
+      'harvests',
+      'services',
+      'tithes',
+      'contributions',
+      'journal_lines',
+      'journal_entries',
+      'financial_periods',
+      'finance_projects',
+      'funds',
+    ],
+  },
+  bible_classes: {
+    label: 'Bible Classes',
+    active: ['/bible-classes'],
+    phrase: 'DELETE ALL BIBLE CLASSES',
+    description: 'Permanently deletes all Bible classes and their membership links.',
+    tables: ['ministry_memberships'],
+    beforeDelete: () => db.prepare(`UPDATE members SET bible_class_id=NULL`).run(),
+    afterDelete: () => db.prepare(`DELETE FROM ministries`).run(),
+    resetTables: ['ministries'],
+  },
+  organizations: {
+    label: 'Organizations',
+    active: ['/organizations'],
+    phrase: 'DELETE ALL ORGANIZATIONS',
+    description: 'Permanently deletes all organizations and organization membership links. Related finance/broadcast records keep their money and message history but lose the organization link.',
+    tables: ['organization_memberships'],
+    beforeDelete: () => {
+      db.prepare(`UPDATE harvests SET org_id=NULL`).run();
+      db.prepare(`UPDATE broadcasts SET org_id=NULL`).run();
+    },
+    afterDelete: () => db.prepare(`DELETE FROM organizations`).run(),
+    resetTables: ['organizations'],
+  },
+  inventory: {
+    label: 'Inventory',
+    active: ['/inventory'],
+    phrase: 'DELETE ALL INVENTORY',
+    description: 'Permanently deletes all inventory items and categories.',
+    tables: ['inventory_items', 'inventory_categories'],
+  },
+  events: {
+    label: 'Events',
+    active: ['/events'],
+    phrase: 'DELETE ALL EVENTS',
+    description: 'Permanently deletes all events, RSVPs and event attendance rows.',
+    tables: ['event_rsvps', 'attendance', 'events'],
+  },
+  preaching: {
+    label: 'Preaching Plan',
+    active: ['/preaching'],
+    phrase: 'DELETE ALL PREACHING',
+    description: 'Permanently deletes the preaching plan.',
+    tables: ['preaching_plan'],
+  },
+  communications: {
+    label: 'Communications',
+    active: ['/communications'],
+    phrase: 'DELETE ALL COMMUNICATIONS',
+    description: 'Permanently deletes announcements, broadcast history, broadcast recipients and email send logs. Email/SMS settings stay in place.',
+    tables: ['broadcast_recipients', 'broadcasts', 'announcements', 'email_logs'],
+  },
+  activity: {
+    label: 'Activity History',
+    active: ['/operations'],
+    phrase: 'DELETE ALL ACTIVITY',
+    description: 'Permanently deletes operational activity history. It does not delete church records.',
+    tables: ['activity_log'],
+  },
+  security_audit: {
+    label: 'Security Audit',
+    active: ['/security/audit'],
+    phrase: 'DELETE ALL SECURITY AUDIT',
+    description: 'Permanently deletes security audit events.',
+    tables: ['security_audit_log'],
+  },
+  errors: {
+    label: 'Error Log',
+    active: ['/errors'],
+    phrase: 'DELETE ALL ERRORS',
+    description: 'Permanently deletes captured server error records.',
+    tables: ['error_log'],
+  },
+};
 
 // ---------- Photo storage (member photos saved next to the DB) ----------
 const PHOTO_DIR = process.env.PHOTO_DIR || path.join(path.dirname(DB_PATH), 'photos');
@@ -1111,6 +1451,54 @@ function setState(key, value) {
   db.prepare(`INSERT INTO app_state (key, value) VALUES (?, ?)
               ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, String(value));
 }
+function currentPlanKey() {
+  const raw = String(getState('current_plan') || getState('subscription_plan') || 'pro').toLowerCase();
+  return Object.hasOwn(PLAN_LIMITS, raw) ? raw : 'pro';
+}
+function currentPlan() {
+  return PLAN_LIMITS[currentPlanKey()];
+}
+function tenantUsage() {
+  const scalar = (sql) => {
+    try { return db.prepare(sql).get().c || 0; } catch (_) { return 0; }
+  };
+  return {
+    members: scalar(`SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL`),
+    users: scalar(`SELECT COUNT(*) c FROM users WHERE deleted_at IS NULL`),
+    branches: 1,
+  };
+}
+
+function ensureTrialWindow() {
+  let started = getState('trial_started_at');
+  let expires = getState('trial_expires_at');
+  let status = getState('subscription_status');
+  if (!started || !expires || !status) {
+    if (process.env.NODE_ENV === 'test') {
+      return { started: started || null, expires: expires || null, status: status || 'trial' };
+    }
+    const firstUser = db.prepare(`SELECT MIN(created_at) AS started FROM users WHERE deleted_at IS NULL`).get();
+    started = (firstUser && firstUser.started) || db.prepare(`SELECT datetime('now') AS now`).get().now;
+    setState('trial_started_at', started);
+    if (!expires) {
+      expires = db.prepare(`SELECT datetime(?, '+${TRIAL_LENGTH_DAYS} days') AS expires`).get(started).expires;
+      setState('trial_expires_at', expires);
+    }
+    if (!status) {
+      status = 'trial';
+      setState('subscription_status', status);
+    }
+    return { started, expires, status };
+  }
+  return { started, expires, status };
+}
+
+function trialHasExpired() {
+  const trial = ensureTrialWindow();
+  if (trial.status === 'active') return false;
+  if (!trial.expires) return false;
+  return !!db.prepare(`SELECT datetime('now') >= datetime(?) AS expired`).get(trial.expires).expired;
+}
 
 function todaysBirthdayMembers() {
   // Members whose date_of_birth has today's month-day, active, contactable by SMS.
@@ -1238,6 +1626,7 @@ async function sendEmailEach(recipients, subject, body, opts = {}) {
           subject,
           text: body + footer,
         };
+        if (opts.html) payload.html = opts.html + (footer ? `<p style="margin-top:16px;color:#6b7280;font-size:12px">${esc(footer).replace(/\n/g, '<br>')}</p>` : '');
         if (replyTo) payload.reply_to = replyTo;
         const res = await fetch(RESEND_API_URL, {
           method: 'POST',
@@ -1257,6 +1646,7 @@ async function sendEmailEach(recipients, subject, body, opts = {}) {
           to: r.addr,
           subject,
           text: body + footer,
+          html: opts.html ? opts.html + (footer ? `<p style="margin-top:16px;color:#6b7280;font-size:12px">${esc(footer).replace(/\n/g, '<br>')}</p>` : '') : undefined,
           replyTo: replyTo || undefined,
         });
       }
@@ -1287,6 +1677,21 @@ async function sendEmailEach(recipients, subject, body, opts = {}) {
     }
   }
   return { ok: failed === 0, sent, failed, errors, provider: delivery.provider };
+}
+
+function publicBaseUrl(req) {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const host = req.get('host');
+  return host ? `${req.protocol}://${host}` : '';
+}
+
+function createSignupActivationToken() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+function signupActivationUrl(req, token) {
+  const base = publicBaseUrl(req);
+  return base ? `${base}/activate/${encodeURIComponent(token)}` : `/activate/${encodeURIComponent(token)}`;
 }
 
 // Resolve a preaching appointment's preacher contact: a linked member's details
@@ -1408,13 +1813,503 @@ const {
 
 const { layout, authPage } = require('./lib/shell').createShell({
   CHURCH_NAME, NAV, esc, initials, flashHtml, scriptureOfDay, listBackups,
+  deleteAllScopes: DELETE_ALL_SCOPES,
 });
 
 
 // ---------- routes: dashboard ----------
 const { sparkline, miniSpark, donut, lastMonths, seriesOn } = require('./lib/charts');
 
+function publicLandingPage(req, opts = {}) {
+  const selectedPlan = ['starter', 'pro', 'enterprise'].includes(String(req.query.plan || opts.plan || '').toLowerCase())
+    ? String(req.query.plan || opts.plan).toLowerCase()
+    : 'pro';
+  const selectedBilling = ['monthly', 'yearly'].includes(String(req.query.billing || opts.billing || '').toLowerCase())
+    ? String(req.query.billing || opts.billing).toLowerCase()
+    : 'monthly';
+  const planOption = (value, label) => `<option value="${value}"${selectedPlan === value ? ' selected' : ''}>${label}</option>`;
+  const received = req.query.trial === 'received' || opts.received;
+  const error = opts.error || '';
+  const topCta = req.session.userId
+    ? { href: '/', label: 'Go to dashboard' }
+    : { href: '/login', label: 'Sign in' };
+  const price = (monthly, yearly) => selectedBilling === 'yearly' ? yearly : monthly;
+  const billingLabel = selectedBilling === 'yearly' ? '/ year' : '/ month';
+  const billingBadge = selectedBilling === 'yearly' ? 'Save 17%' : 'Monthly';
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>7-day trial · Church Manager</title>
+<meta name="description" content="Start a 7-day trial of Church Manager for members, attendance, finance, harvests, reports and church communication.">
+<script>(function(){try{var mq=window.matchMedia&&matchMedia('(prefers-color-scheme:dark)');function apply(){document.documentElement.setAttribute('data-theme',mq&&mq.matches?'dark':'light');}try{localStorage.removeItem('theme');}catch(e){}apply();if(mq){if(mq.addEventListener)mq.addEventListener('change',apply);else if(mq.addListener)mq.addListener(apply);}}catch(e){}})();</script>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="public-landing">
+  <header class="public-nav">
+    <a class="public-brand" href="/">
+      <img src="/static/logo.png" alt="">
+      <span>Church Manager</span>
+    </a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
+      <a href="/support">Support</a>
+      <a href="#signup">Start trial</a>
+      <a class="public-login" href="${topCta.href}">${topCta.label}</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="landing-hero">
+      <div class="landing-kicker">For church admin teams</div>
+      <h1>Run your church like a pro</h1>
+      <p>Keep members, attendance, finance, communications and reports in one clean workspace built for pastors, secretaries and treasurers.</p>
+      <div class="landing-actions">
+        <a class="btn primary" href="#signup">Start free</a>
+        <a class="btn ghost" href="#pricing">View pricing</a>
+      </div>
+      <div class="landing-chips" aria-label="Platform highlights">
+        <span>7-day free trial</span>
+        <span>Members & attendance</span>
+        <span>Finance & reports</span>
+        <span>Private church setup</span>
+      </div>
+    </section>
+
+    <section id="features" class="public-section">
+      <div class="section-head">
+        <span>Platform</span>
+        <h2>Everything your office needs in one place.</h2>
+      </div>
+      <div class="public-feature-grid">
+        <article><span>01</span><h3>Members</h3><p>Profiles, contacts, Bible classes, organizations and member import.</p></article>
+        <article><span>02</span><h3>Attendance</h3><p>Track services, events and weekly trends from one view.</p></article>
+        <article><span>03</span><h3>Finance</h3><p>Record offerings, expenses, pledges and fund balances cleanly.</p></article>
+        <article><span>04</span><h3>Reports</h3><p>Export CSV reports and review everything without hunting through menus.</p></article>
+      </div>
+    </section>
+
+    <section id="pricing" class="public-section pricing-section">
+      <div class="section-head">
+        <span>Pricing</span>
+        <h2>Simple pricing that keeps the 7-day trial front and center.</h2>
+      </div>
+      <div class="pricing-switch" role="tablist" aria-label="Billing cycle">
+        <a class="${selectedBilling === 'monthly' ? 'active' : ''}" href="/?billing=monthly#pricing">Monthly</a>
+        <a class="${selectedBilling === 'yearly' ? 'active' : ''}" href="/?billing=yearly#pricing">Yearly</a>
+        <span>${billingBadge}</span>
+      </div>
+      <div class="public-plan-grid">
+        <article class="public-plan">
+          <div class="plan-top"><span>Free</span><small>7 days</small></div>
+          <div class="public-price">GH₵ 0</div>
+          <p>Try the system with your church data and see the interface before paying.</p>
+          <ul><li>7-day free trial</li><li>Members & attendance</li><li>Basic reports</li></ul>
+          <a class="btn ghost" href="/signup?plan=starter#signup">Start free</a>
+        </article>
+        <article class="public-plan featured">
+          <div class="plan-badge">Recommended</div>
+          <h3>Pro</h3>
+          <p>For active churches that need stronger controls, finance and reporting.</p>
+          <div class="public-price">${price('GH₵ 300', 'GH₵ 2,988')} <small>${billingLabel}</small></div>
+          <ul><li>Finance workflows</li><li>Harvests and pledges</li><li>Priority support</li></ul>
+          <a class="btn primary" href="/signup?plan=pro#signup">Select Pro</a>
+        </article>
+        <article class="public-plan">
+          <h3>Enterprise</h3>
+          <p>For larger parishes, circuits and multi-branch operations.</p>
+          <div class="public-price">${price('GH₵ 600', 'GH₵ 5,976')} <small>${billingLabel}</small></div>
+          <ul><li>Multi-branch admin</li><li>Custom reporting</li><li>Dedicated onboarding</li></ul>
+          <a class="btn ghost" href="/signup?plan=enterprise#signup">Select Enterprise</a>
+        </article>
+      </div>
+    </section>
+
+    <section id="signup" class="public-section signup-section">
+      <div class="signup-copy">
+        <span>Start your trial</span>
+        <h2>Request a private workspace for your church.</h2>
+        <p>Tell us your church name, contact person and preferred plan. We will confirm the next steps by email and phone.</p>
+      </div>
+      <form class="trial-form" method="post" action="/trial-signup">
+        ${received ? '<p class="success">Trial request received. We will contact you shortly.</p>' : ''}
+        ${error ? `<p class="error">${esc(error)}</p>` : ''}
+        <label>Church name<input name="church_name" required value="${esc(opts.values && opts.values.church_name)}"></label>
+        <label>Your name<input name="contact_name" required value="${esc(opts.values && opts.values.contact_name)}"></label>
+        <label>Role<input name="role" placeholder="Pastor / Secretary / Treasurer" value="${esc(opts.values && opts.values.role)}"></label>
+        <label>Phone / WhatsApp<input name="phone" required placeholder="+233 24 000 0000" value="${esc(opts.values && opts.values.phone)}"></label>
+        <label>Email<input type="email" name="email" required value="${esc(opts.values && opts.values.email)}"></label>
+        <label>Plan<select name="plan">${planOption('starter', 'Starter - GH₵ 150/month')}${planOption('pro', 'Pro - GH₵ 300/month')}${planOption('enterprise', 'Enterprise - GH₵ 600/month')}</select></label>
+        <label>Approximate members<select name="member_count">
+          <option${opts.values && opts.values.member_count === 'Under 100' ? ' selected' : ''}>Under 100</option>
+          <option${opts.values && opts.values.member_count === '100 - 300' ? ' selected' : ''}>100 - 300</option>
+          <option${opts.values && opts.values.member_count === '300 - 1000' ? ' selected' : ''}>300 - 1000</option>
+          <option${opts.values && opts.values.member_count === 'Over 1000' ? ' selected' : ''}>Over 1000</option>
+        </select></label>
+        <label class="wide">Notes<textarea name="notes" rows="3" placeholder="Tell us about data import, branches, or finance needs.">${esc(opts.values && opts.values.notes)}</textarea></label>
+        <button type="submit">Start free trial</button>
+        <p class="form-note">No payment is collected here. Use a real email address so we can send the verification link.</p>
+      </form>
+    </section>
+  </main>
+  <footer class="public-footer">
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/support">Support</a>
+  </footer>
+</body>
+</html>`;
+}
+
+function publicInfoPage(title, kicker, body) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)} · Church Manager</title>
+<meta name="description" content="${esc(title)} for Church Manager.">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="public-landing">
+  <header class="public-nav">
+    <a class="public-brand" href="/"><img src="/static/logo.png" alt=""><span>Church Manager</span></a>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/support">Support</a>
+      <a class="public-login" href="/login">Sign in</a>
+    </nav>
+  </header>
+  <main>
+    <section class="landing-hero legal-hero">
+      <div class="landing-kicker">${esc(kicker)}</div>
+      <h1>${esc(title)}</h1>
+      <p>Operational SaaS information for churches evaluating or using Church Manager.</p>
+    </section>
+    <section class="public-section legal-section">${body}</section>
+  </main>
+  <footer class="public-footer">
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/support">Support</a>
+  </footer>
+</body>
+</html>`;
+}
+
+function privacyPage() {
+  return publicInfoPage('Privacy Policy', 'Data protection', `
+    <div class="legal-copy">
+      <p><strong>Draft policy:</strong> review this with legal counsel before broad public sale.</p>
+      <h2>Data we handle</h2>
+      <p>Church Manager stores member profiles, attendance, finance entries, communications metadata, user accounts, audit logs and uploaded member photos when a church chooses to enter them.</p>
+      <h2>How data is used</h2>
+      <p>Data is used to operate the church workspace, generate reports, send approved communications, secure accounts and support administrators.</p>
+      <h2>Access and security</h2>
+      <p>Access is role-based. Administrators control staff accounts. Sensitive actions are logged in audit records. Backups are retained according to the configured backup policy.</p>
+      <h2>Support</h2>
+      <p>For privacy or data requests, contact <a href="mailto:${esc(SUPPORT_EMAIL)}">${esc(SUPPORT_EMAIL)}</a>.</p>
+    </div>`);
+}
+
+function termsPage() {
+  return publicInfoPage('Terms of Service', 'Service terms', `
+    <div class="legal-copy">
+      <p><strong>Draft terms:</strong> confirm final commercial terms with legal counsel before public sale.</p>
+      <h2>Use of the service</h2>
+      <p>Church Manager is provided for church administration: members, attendance, finance, communications and reporting. Each church is responsible for entering accurate data and assigning trusted administrators.</p>
+      <h2>Subscriptions and trials</h2>
+      <p>Trial and subscription access may be limited by plan, support package and agreed onboarding scope. Payment terms should be confirmed in the church's signed order or invoice.</p>
+      <h2>Backups and exports</h2>
+      <p>Administrators should maintain downloaded or off-site backups. The system includes backup tools, but churches remain responsible for retention obligations specific to their organization.</p>
+      <h2>Support</h2>
+      <p>Support requests can be sent to <a href="mailto:${esc(SUPPORT_EMAIL)}">${esc(SUPPORT_EMAIL)}</a>.</p>
+    </div>`);
+}
+
+function supportPage() {
+  return publicInfoPage('Support', 'Help desk', `
+    <div class="legal-copy">
+      <h2>Contact</h2>
+      <p>Email <a href="mailto:${esc(SUPPORT_EMAIL)}">${esc(SUPPORT_EMAIL)}</a> with the church name, user role, page URL and a short description of the issue.</p>
+      <h2>Priority issues</h2>
+      <p>Report login lockouts, failed backups, finance posting errors, missing data, SMS/email failures and unexpected error pages immediately.</p>
+      <h2>Before reporting</h2>
+      <p>Check the Operations page, Error Log, Security Audit and Backups page if you are an administrator. Include screenshots when possible.</p>
+      <h2>Training</h2>
+      <p>Recommended onboarding includes one session for administrators, one for finance users and one for secretaries or data-entry users.</p>
+    </div>`);
+}
+
+function billingExpiredPage(req) {
+  const trial = ensureTrialWindow();
+  const started = trial.started ? String(trial.started).slice(0, 10) : '—';
+  const expires = trial.expires ? String(trial.expires).slice(0, 10) : '—';
+  const signedIn = !!req.session.userId;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trial expired · Church Manager</title>
+<meta name="description" content="Your 7-day trial has ended. Choose a subscription to restore access.">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="public-landing">
+  <header class="public-nav">
+    <a class="public-brand" href="/">
+      <img src="/static/logo.png" alt="">
+      <span>Church Manager</span>
+    </a>
+    <nav>
+      ${signedIn ? '<a href="/logout">Sign out</a>' : '<a href="/login">Sign in</a>'}
+    </nav>
+  </header>
+  <main>
+    <section class="landing-hero billing-hero">
+      <div class="landing-kicker warning">Subscription required</div>
+      <h1>Your 7-day trial has expired.</h1>
+      <p>Access is paused until a plan is activated. Trial access started on ${started} and ended on ${expires}.</p>
+      <div class="landing-actions">
+        <a class="btn primary" href="/signup?plan=pro#signup">Request Pro access</a>
+        <a class="btn ghost" href="/signup?plan=enterprise#signup">Request Enterprise access</a>
+      </div>
+      <div class="landing-chips">
+        <span>Data remains protected</span>
+        <span>Sign out available</span>
+        <span>Activate to restore access</span>
+      </div>
+    </section>
+
+    <section class="public-section pricing-section">
+      <div class="section-head">
+        <span>Subscription plans</span>
+        <h2>Pick the plan to restore access.</h2>
+      </div>
+      <div class="pricing-switch" role="tablist" aria-label="Billing cycle">
+        <a class="active" href="/billing?billing=monthly">Monthly</a>
+        <a href="/billing?billing=yearly">Yearly</a>
+        <span>Restart access</span>
+      </div>
+      <div class="public-plan-grid">
+        <article class="public-plan">
+          <div class="plan-top"><span>Free</span><small>7 days</small></div>
+          <div class="public-price">GH₵ 0</div>
+          <p>Open the app, explore the interface and test the workflow before purchase.</p>
+          <a class="btn ghost" href="/signup?plan=starter#signup">Start free</a>
+        </article>
+        <article class="public-plan featured">
+          <div class="plan-badge">Recommended</div>
+          <h3>Pro</h3>
+          <p>For active churches that need stronger controls and reporting.</p>
+          <div class="public-price">GH₵ 300 <small>/ month</small></div>
+          <a class="btn primary" href="/signup?plan=pro#signup">Select Pro</a>
+        </article>
+        <article class="public-plan">
+          <h3>Enterprise</h3>
+          <p>For large churches, circuits and multi-branch operations.</p>
+          <div class="public-price">GH₵ 600 <small>/ month</small></div>
+          <a class="btn ghost" href="/signup?plan=enterprise#signup">Select Enterprise</a>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
+function activationPage(req, signup, opts = {}) {
+  const token = signup.activation_token || opts.token || '';
+  const planLabel = signup.plan ? signup.plan.charAt(0).toUpperCase() + signup.plan.slice(1) : 'Pro';
+  const expiresAt = signup.activation_expires_at ? String(signup.activation_expires_at).slice(0, 10) : '—';
+  const email = signup.email || opts.email || '';
+  const activated = !!signup.activated_at;
+  const body = activated
+    ? `
+      <p class="muted">This activation link was already used for <strong>${esc(signup.church_name)}</strong>.</p>
+      <p class="muted">You can sign in with the account that was created, or reset the password from the login page if needed.</p>
+      <div class="actions"><a class="btn" href="/login">Go to sign in</a></div>
+    `
+    : `
+      <p class="muted">Finish setting up <strong>${esc(signup.church_name)}</strong> on the <strong>${esc(planLabel)}</strong> plan.</p>
+      <ul class="forgot-steps">
+        <li>Confirm the email address: <strong>${esc(email || '—')}</strong></li>
+        <li>Choose a username and password for sign in.</li>
+        <li>Activate the workspace to enter the system immediately.</li>
+      </ul>
+      <p class="muted">This activation link expires on <strong>${esc(expiresAt)}</strong>.</p>
+      <form class="form auth-form" method="post" action="/activate/${esc(token)}">
+        ${opts.error ? `<p class="error">${esc(opts.error)}</p>` : ''}
+        <label class="wide">Email<input type="email" value="${esc(email)}" readonly></label>
+        <label class="wide">Username<input name="username" required minlength="3" value="${esc(opts.values && opts.values.username)}"></label>
+        <label class="wide">Display name<input name="display_name" value="${esc(opts.values && opts.values.display_name || signup.contact_name || '')}"></label>
+        <label class="wide">Password<input type="password" name="password" required minlength="8"></label>
+        <label class="wide">Confirm password<input type="password" name="password2" required minlength="8"></label>
+        <div class="actions"><button type="submit">Activate account</button></div>
+      </form>
+    `;
+  return authPage('Verify your account', body);
+}
+
+app.get('/signup', (req, res) => {
+  const plan = ['starter', 'pro', 'enterprise'].includes(String(req.query.plan || '').toLowerCase())
+    ? String(req.query.plan).toLowerCase()
+    : 'pro';
+  res.redirect(`/?plan=${encodeURIComponent(plan)}#signup`);
+});
+
+app.get('/activate/:token', (req, res) => {
+  const signup = db.prepare(`
+    SELECT signup_id, church_name, contact_name, role, phone, email, plan, member_count, notes,
+           status, activation_token, activation_expires_at, activated_at, activated_user_id
+    FROM trial_signups
+    WHERE activation_token = ?
+  `).get(String(req.params.token || '').trim());
+  if (!signup) return res.status(404).send(authPage('Verify your account', '<p class="error">Verification link not found.</p><p><a href="/">Back to the website</a></p>'));
+  if (signup.activated_at) return res.send(activationPage(req, signup));
+  if (signup.activation_expires_at && db.prepare(`SELECT datetime('now') > datetime(?) AS expired`).get(signup.activation_expires_at).expired) {
+    return res.status(410).send(authPage('Verify your account', '<p class="error">This verification link has expired. Please request a new signup.</p><p><a href="/?signup=1#signup">Back to sign up</a></p>'));
+  }
+  res.send(activationPage(req, signup, { token: req.params.token }));
+});
+
+app.post('/activate/:token', async (req, res) => {
+  const token = String(req.params.token || '').trim();
+  const signup = db.prepare(`
+    SELECT signup_id, church_name, contact_name, role, phone, email, plan, member_count, notes,
+           status, activation_token, activation_expires_at, activated_at, activated_user_id
+    FROM trial_signups
+    WHERE activation_token = ?
+  `).get(token);
+  if (!signup) {
+    return res.status(404).send(authPage('Verify your account', '<p class="error">Verification link not found.</p><p><a href="/">Back to the website</a></p>'));
+  }
+  if (signup.activated_at) {
+    if (signup.activated_user_id) req.session.userId = signup.activated_user_id;
+    return res.redirect('/');
+  }
+  if (signup.activation_expires_at && db.prepare(`SELECT datetime('now') > datetime(?) AS expired`).get(signup.activation_expires_at).expired) {
+    return res.status(410).send(authPage('Verify your account', '<p class="error">This verification link has expired. Please request a new signup.</p><p><a href="/?signup=1#signup">Back to sign up</a></p>'));
+  }
+  const values = {
+    username: String(req.body.username || '').trim(),
+    display_name: String(req.body.display_name || '').trim(),
+    password: String(req.body.password || ''),
+    password2: String(req.body.password2 || ''),
+  };
+  if (!values.username || values.password.length < 8 || values.password !== values.password2) {
+    return res.status(400).send(activationPage(req, signup, {
+      token,
+      error: 'Choose a username and matching password of at least 8 characters.',
+      values,
+    }));
+  }
+  const existing = db.prepare(`SELECT 1 FROM users WHERE username = ? AND deleted_at IS NULL`).get(values.username);
+  if (existing) {
+    return res.status(400).send(activationPage(req, signup, {
+      token,
+      error: 'That username is already in use.',
+      values,
+    }));
+  }
+  const hash = bcrypt.hashSync(values.password, 12);
+  const displayName = values.display_name || signup.contact_name || signup.church_name || null;
+  const info = db.prepare(`
+    INSERT INTO users (username, password_hash, display_name, role, finance_role)
+    VALUES (?, ?, ?, 'admin', 'none')
+  `).run(values.username, hash, displayName);
+  db.prepare(`
+    UPDATE trial_signups
+    SET status='activated',
+        activated_at=CURRENT_TIMESTAMP,
+        activated_user_id=?,
+        activation_token=NULL
+    WHERE signup_id=?
+  `).run(info.lastInsertRowid, signup.signup_id);
+  setState('subscription_status', 'active');
+  setState('current_plan', signup.plan || 'pro');
+  if (!getState('trial_started_at')) setState('trial_started_at', db.prepare(`SELECT datetime('now') AS now`).get().now);
+  if (!getState('trial_expires_at')) setState('trial_expires_at', db.prepare(`SELECT datetime('now', '+7 days') AS expires`).get().expires);
+  logSecurityEvent(req, 'signup_activated', `signup_id:${signup.signup_id};user_id:${info.lastInsertRowid};plan:${signup.plan}`, info.lastInsertRowid);
+  req.session.userId = info.lastInsertRowid;
+  res.redirect('/');
+});
+
+app.get('/billing', (req, res) => {
+  res.send(billingExpiredPage(req));
+});
+
+app.get('/privacy', (req, res) => res.send(privacyPage()));
+app.get('/terms', (req, res) => res.send(termsPage()));
+app.get('/support', (req, res) => res.send(supportPage()));
+
+app.post('/trial-signup', async (req, res) => {
+  const values = {
+    church_name: String(req.body.church_name || '').trim(),
+    contact_name: String(req.body.contact_name || '').trim(),
+    role: String(req.body.role || '').trim(),
+    phone: String(req.body.phone || '').trim(),
+    email: String(req.body.email || '').trim(),
+    plan: String(req.body.plan || 'pro').trim().toLowerCase(),
+    member_count: String(req.body.member_count || '').trim(),
+    notes: String(req.body.notes || '').trim(),
+  };
+  if (!values.church_name || !values.contact_name || !values.phone) {
+    return res.status(400).send(publicLandingPage(req, { values, plan: values.plan, error: 'Church name, your name and phone number are required.' }));
+  }
+  if (!['starter', 'pro', 'enterprise'].includes(values.plan)) values.plan = 'pro';
+  if (!values.email) {
+    return res.status(400).send(publicLandingPage(req, { values, plan: values.plan, error: 'Email is required so we can send your verification link.' }));
+  }
+  if (!isEmailish(values.email)) {
+    return res.status(400).send(publicLandingPage(req, { values, plan: values.plan, error: 'Enter a valid email address.' }));
+  }
+  const activationToken = createSignupActivationToken();
+  const activationExpiresAt = db.prepare(`SELECT datetime('now', '+7 days') AS expires`).get().expires;
+  db.prepare(`
+    INSERT INTO trial_signups (
+      church_name, contact_name, role, phone, email, plan, member_count, notes,
+      status, activation_token, activation_sent_at, activation_expires_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'invited', ?, CURRENT_TIMESTAMP, ?)
+  `).run(values.church_name, values.contact_name, values.role || null, values.phone, values.email,
+    values.plan, values.member_count || null, values.notes || null, activationToken, activationExpiresAt);
+  const planLabel = values.plan.charAt(0).toUpperCase() + values.plan.slice(1);
+  const activationUrl = signupActivationUrl(req, activationToken);
+  const subject = `Verify your ${planLabel} access`;
+  const body = [
+    `Hello ${values.contact_name},`,
+    '',
+    `Thanks for signing up for ${values.church_name} on the ${planLabel} plan.`,
+    `Verify your account here: ${activationUrl}`,
+    '',
+    `This link expires on ${String(activationExpiresAt).slice(0, 10)}.`,
+    `Requested plan: ${planLabel}`,
+    `Church: ${values.church_name}`,
+    '',
+    `Dunwell Methodist Management System`,
+  ].join('\n');
+  const html = `
+    <p>Hello ${esc(values.contact_name)},</p>
+    <p>Thanks for signing up for ${esc(values.church_name)} on the ${esc(planLabel)} plan.</p>
+    <p><a href="${esc(activationUrl)}" style="display:inline-block;background:#166534;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:700">Verify your account</a></p>
+    <p>If the button does not open, copy this link into your browser:</p>
+    <p><a href="${esc(activationUrl)}">${esc(activationUrl)}</a></p>
+    <p style="color:#6b7280;font-size:12px">This link expires on ${esc(String(activationExpiresAt).slice(0, 10))}.</p>
+    <p style="color:#6b7280;font-size:12px">Requested plan: ${esc(planLabel)}<br>Church: ${esc(values.church_name)}</p>
+  `;
+  try {
+    await sendEmailEach([{ addr: values.email }], subject, body, { withFooter: false, html });
+  } catch (e) {
+    console.error('trial signup activation email failed:', e.message);
+  }
+  res.redirect('/?trial=received#signup');
+});
+
 app.get('/', (req, res) => {
+  if (!res.locals.user) return res.send(publicLandingPage(req));
   const totalMembers = db.prepare(
     `SELECT COUNT(*) c FROM members WHERE membership_status IN ('member','regular','visitor')`
   ).get().c;
@@ -1699,12 +2594,12 @@ app.get('/', (req, res) => {
       ${mockupStat('purple', '◷', 'Attendance · This Week', sundayAttendance.toLocaleString(),
         trendChip(attendanceDelta, 'vs. last week'), attendanceSpark, 'var(--purple)', '/attendance')}
       ${mockupStat('blue', '₵', `Offering · ${monthLabelNow}`, fmtMoney(offeringsThisMonth),
-        trendChip(offeringsDelta, 'vs. last month'), givingSeries, 'var(--blue)', '/finance')}
+        trendChip(offeringsDelta, 'vs. last month'), givingSeries, 'var(--blue)', '/reports/financial')}
       ${mockupStat('green', '🎂', 'Birthdays · This Week', birthdaysThisWeek.toLocaleString(),
         birthdaysToday > 0
           ? `<span class="trend-chip up">🎂 ${birthdaysToday}</span> <span class="trend-meta">${birthdaysToday === 1 ? 'birthday today' : 'birthdays today'}</span>`
           : `<span class="trend-chip neutral">—</span> <span class="trend-meta">next 7 days</span>`,
-        birthdaysWeekSpark, 'var(--green)', '/members')}
+        birthdaysWeekSpark, 'var(--green)', '/members?birthday=week')}
     </div>`;
 
   const isAdmin = res.locals.isAdmin;
@@ -1864,8 +2759,8 @@ app.get('/', (req, res) => {
     </div>`;
 
   const birthdaysCard = `
-    <div class="card dashboard-clickable" ${cardAttrs('/members', 'Birthdays This Month')}>
-      <div class="card-head"><h2>Birthdays This Month</h2><a href="/members">View all</a></div>
+    <div class="card dashboard-clickable" ${cardAttrs('/members?birthday=month', 'Birthdays This Month')}>
+      <div class="card-head"><h2>Birthdays This Month</h2><a href="/members?birthday=month">View all</a></div>
       ${birthdays.length ? birthdays.map((b) => {
         const day = new Date(b.date_of_birth);
         const when = day.toLocaleString('en', { month: 'short', day: '2-digit' });
@@ -1878,8 +2773,8 @@ app.get('/', (req, res) => {
     </div>`;
 
   const followupsCard = `
-    <div class="card dashboard-clickable" ${cardAttrs('/reports', 'Pending Follow-ups')}>
-      <div class="card-head"><h2>Pending Follow-ups</h2><a href="/reports">View all</a></div>
+    <div class="card dashboard-clickable" ${cardAttrs('/activity', 'Pending Follow-ups')}>
+      <div class="card-head"><h2>Pending Follow-ups</h2><a href="/activity">View all</a></div>
       <div class="fu-row"><div class="lbl"><div class="ico">🚶</div> Visitors to follow up</div><div class="count">${followups.visitors}</div></div>
       <div class="fu-row"><div class="lbl"><div class="ico">⚠</div> Members absent &gt; 3 weeks</div><div class="count">${followups.absentees}</div></div>
       <div class="fu-row"><div class="lbl"><div class="ico">📖</div> Members without a Bible class</div><div class="count">${followups.noClass}</div></div>
@@ -2069,7 +2964,7 @@ app.get('/', (req, res) => {
       <div class="dash-welcome-actions">
         <a class="btn ghost" href="/reports">⇩ Export</a>
         ${isAdmin ? '<a class="btn purple" href="/events/new">＋ New Event</a>' : ''}
-        ${isAdmin ? '<a class="btn primary" href="/finance/services/new">⊕ Record Service</a>' : ''}
+        ${isAdmin ? '<a class="btn primary" href="/finance/services">⊕ Record Service</a>' : ''}
       </div>
     </div>`;
 
@@ -2079,6 +2974,71 @@ app.get('/', (req, res) => {
     noHeader: true,
     body: `<section class="dash-shell command-center mockup-dash" data-command-center="true">${welcome}${cards}${quick}${grid}</section>`,
   });
+});
+
+app.get('/delete-all/:scope', requirePermanentDeleteAll, (req, res) => {
+  const scopeKey = String(req.params.scope || '');
+  const scope = DELETE_ALL_SCOPES[scopeKey];
+  if (!scope) return res.status(404).send(layout({
+    title: 'Delete scope not found', active: null, user: res.locals.user,
+    body: '<p>This delete-all tool does not exist.</p><p><a href="/">Back to dashboard</a></p>',
+  }));
+  const rows = deleteAllPreview(scope);
+  const total = rows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const body = `
+    ${pageHero(`Delete all ${esc(scope.label)}`, 'Permanent deletion tool for administrators and steward accounts.')}
+    <section class="card danger-zone-card">
+      <div class="card-head"><h2>Permanent delete warning</h2><span class="meta">${total.toLocaleString()} rows currently in scope</span></div>
+      <p class="muted-text">${esc(scope.description)}</p>
+      <p><strong>This does not archive records. It removes the matching rows from the database.</strong></p>
+      <p class="muted-text">A verified database backup is created automatically before this delete runs. If backup creation fails, deletion is stopped.</p>
+      ${rows.length ? table(['Table', 'Rows now'],
+        rows.map((row) => [esc(row.name), Number(row.count || 0).toLocaleString()]))
+        : '<p class="muted-text">No database tables are currently available for this scope.</p>'}
+      <form class="form delete-all-form" method="post" action="/delete-all/${esc(scopeKey)}">
+        <label class="wide">Type this exact phrase to confirm
+          <input name="confirm_phrase" autocomplete="off" required value="" placeholder="${esc(scope.phrase)}">
+        </label>
+        <label class="wide">Reason / note
+          <input name="reason" placeholder="Optional note for the audit log">
+        </label>
+        <div class="actions">
+          <a class="btn ghost" href="${esc((scope.active && scope.active[0]) || '/')}">Cancel</a>
+          <button class="danger" type="submit">Delete all ${esc(scope.label)} permanently</button>
+        </div>
+      </form>
+    </section>`;
+  res.page({ title: `Delete all ${scope.label}`, active: (scope.active && scope.active[0]) || null, body });
+});
+
+app.post('/delete-all/:scope', requirePermanentDeleteAll, async (req, res) => {
+  const scopeKey = String(req.params.scope || '');
+  const scope = DELETE_ALL_SCOPES[scopeKey];
+  if (!scope) return res.status(404).send('Delete scope not found');
+  const phrase = String(req.body.confirm_phrase || '').trim();
+  if (phrase !== scope.phrase) {
+    flash(req, `Confirmation phrase did not match. Type: ${scope.phrase}`);
+    return res.redirect(`/delete-all/${encodeURIComponent(scopeKey)}`);
+  }
+  let backupNameBeforeDelete = '';
+  try {
+    backupNameBeforeDelete = await createBackup();
+    logSecurityEvent(req, 'pre_delete_backup_created',
+      `scope:${scopeKey};backup:${backupNameBeforeDelete}`, res.locals.user.user_id);
+  } catch (e) {
+    logSecurityEvent(req, 'pre_delete_backup_failed',
+      `scope:${scopeKey};error:${e.message}`, res.locals.user.user_id);
+    flash(req, `Delete stopped because the pre-delete backup failed: ${e.message}`);
+    return res.redirect(`/delete-all/${encodeURIComponent(scopeKey)}`);
+  }
+  const beforeRows = performPermanentDelete(scopeKey, res.locals.user.user_id);
+  const total = beforeRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const note = String(req.body.reason || '').trim();
+  logSecurityEvent(req, 'permanent_delete_all',
+    `scope:${scopeKey};rows:${total};backup:${backupNameBeforeDelete}${note ? ';note:' + note.slice(0, 160) : ''}`,
+    res.locals.user.user_id);
+  flash(req, `Backup ${backupNameBeforeDelete} created, then deleted all ${scope.label} data permanently (${total.toLocaleString()} rows removed).`, 'success');
+  res.redirect((scope.active && scope.active[0]) || '/');
 });
 
 // ---------- members lookups (shared) ----------
@@ -2102,7 +3062,8 @@ require('./routes/events').register(app, {
 
 // ---------- finance (record-only ledger) ----------
 require('./routes/finance').register(app, {
-  db, requireAdmin, logActivity, flash, CHURCH_NAME, sendSmsBatch, sendEmailEach, loadOrganizations,
+  db, requireAdmin, requireFinanceWrite, requireFinanceAccounting,
+  logActivity, flash, CHURCH_NAME, sendSmsBatch, sendEmailEach, loadOrganizations,
 });
 
 // ---------- reports ----------
@@ -2626,6 +3587,7 @@ app.get('/profile', (req, res) => {
     bad: 'Current password is incorrect.',
   }[req.query.e] : null;
   const roleLabel = ({ admin: 'Administrator', editor: 'Editor', viewer: 'Viewer' }[u.role] || u.role);
+  const financeRoleLabel = FINANCE_ROLE_LABELS[u.finance_role || 'none'] || u.finance_role || 'No finance access';
   const body = `
     ${pageHero('Profile', 'Account controls for your signed-in user.')}
     <div class="card" style="margin-bottom:1rem">
@@ -2634,6 +3596,7 @@ app.get('/profile', (req, res) => {
         <dt>Username</dt><dd><strong>${esc(u.username)}</strong></dd>
         <dt>Display name</dt><dd>${esc(u.display_name || '—')}</dd>
         <dt>Role</dt><dd><span class="pill pill-${esc(u.role)}">${esc(roleLabel)}</span></dd>
+        <dt>Finance role</dt><dd><span class="pill">${esc(financeRoleLabel)}</span></dd>
       </dl>
     </div>
     <div class="card">
@@ -2667,19 +3630,24 @@ app.post('/profile/password', (req, res) => {
 // ---------- users management (admin only) ----------
 app.get('/users', requireOwner, (req, res) => {
   const users = db.prepare(
-    `SELECT user_id, username, display_name, role, created_at FROM users
+    `SELECT user_id, username, display_name, role, finance_role, created_at FROM users
      WHERE deleted_at IS NULL ORDER BY username`
   ).all();
   const rows = users.map((u) => [
     esc(u.username),
     esc(u.display_name) || '—',
     `<span class="role-badge role-${esc(u.role)}">${esc(u.role)}</span>`,
+    esc(FINANCE_ROLE_LABELS[u.finance_role || 'none'] || u.finance_role || 'none'),
     esc(u.created_at).slice(0, 10),
     `<form method="post" action="/users/${u.user_id}/role" class="inline">
        <select name="role">
          <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin (full access)</option>
          <option value="editor" ${u.role === 'editor' ? 'selected' : ''}>editor (manage records)</option>
          <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>viewer (read-only)</option>
+       </select>
+       <select name="finance_role">
+         ${Object.entries(FINANCE_ROLE_LABELS).map(([value, label]) =>
+           `<option value="${esc(value)}" ${(u.finance_role || 'none') === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
        </select>
        <button type="submit">Save</button>
      </form>
@@ -2701,8 +3669,11 @@ app.get('/users', requireOwner, (req, res) => {
     <p class="muted-text">Any administrator can set a user's access level (read/write jurisdiction):
       <strong>Admin</strong> = full read &amp; write; <strong>Viewer</strong> = read-only.
       Only the main administrator (<strong>dunwelladmin</strong>) can add or delete user accounts and reset passwords.</p>
+    <p class="muted-text">Finance roles are separate: <strong>Cashiers</strong> record income/expenses,
+      <strong>Treasurers</strong> record and review accounting, <strong>Auditors</strong> review accounting only,
+      and <strong>Finance admins</strong> can do both.</p>
     ${res.locals.isUserManager ? '<div class="page-actions"><a class="btn primary" href="/users/new">＋ New user</a></div>' : ''}
-    ${table(['Username', 'Display name', 'Role', 'Created', 'Actions'], rows)}`;
+    ${table(['Username', 'Display name', 'Role', 'Finance role', 'Created', 'Actions'], rows)}`;
   res.page({ title: 'Users', active: '/users', noHeader: true, body });
 });
 
@@ -2718,6 +3689,11 @@ app.get('/users/new', requireUserManager, (req, res) => {
         <option value="viewer" selected>viewer (read-only)</option>
       </select>
       <span class="hint">Admins manage everything incl. users, backups &amp; settings. Editors manage records but not those admin areas. Viewers are read-only.</span></label>
+      <label>Finance role<select name="finance_role">
+        ${Object.entries(FINANCE_ROLE_LABELS).map(([value, label]) =>
+          `<option value="${esc(value)}"${value === 'none' ? ' selected' : ''}>${esc(label)}</option>`).join('')}
+      </select>
+      <span class="hint">Finance roles control recording and accounting access inside the Finance module.</span></label>
       <div class="actions form-actions">
         <a class="btn ghost" href="/users">Cancel</a>
         <button type="submit">Create user</button>
@@ -2727,14 +3703,15 @@ app.get('/users/new', requireUserManager, (req, res) => {
 });
 
 app.post('/users', requireUserManager, (req, res) => {
-  const { username, display_name, password, role } = req.body;
+  const { username, display_name, password, role, finance_role } = req.body;
   if (!username || !password || password.length < 8) return res.redirect('/users/new');
   const r = ['admin', 'editor', 'viewer'].includes(role) ? role : 'viewer';
+  const fr = Object.hasOwn(FINANCE_ROLE_LABELS, finance_role) ? finance_role : 'none';
   try {
     const info = db.prepare(
-      `INSERT INTO users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)`
-    ).run(username.trim(), bcrypt.hashSync(password, 12), (display_name || '').trim() || null, r);
-    logSecurityEvent(req, 'user_created', `user_id:${info.lastInsertRowid};role:${r}`, res.locals.user.user_id);
+      `INSERT INTO users (username, password_hash, display_name, role, finance_role) VALUES (?, ?, ?, ?, ?)`
+    ).run(username.trim(), bcrypt.hashSync(password, 12), (display_name || '').trim() || null, r, fr);
+    logSecurityEvent(req, 'user_created', `user_id:${info.lastInsertRowid};role:${r};finance_role:${fr}`, res.locals.user.user_id);
   } catch (e) {
     return res.status(400).send(layout({
       title: 'Could not create user', user: res.locals.user, active: null,
@@ -2747,6 +3724,7 @@ app.post('/users', requireUserManager, (req, res) => {
 app.post('/users/:id/role', requireOwner, (req, res) => {
   const id = Number(req.params.id);
   const r = ['admin', 'editor', 'viewer'].includes(req.body.role) ? req.body.role : 'viewer';
+  const fr = Object.hasOwn(FINANCE_ROLE_LABELS, req.body.finance_role) ? req.body.finance_role : 'none';
   // Don't allow removing the last admin.
   if (r !== 'admin') {
     const admins = db.prepare(`SELECT COUNT(*) c FROM users WHERE role='admin'`).get().c;
@@ -2758,8 +3736,8 @@ app.post('/users/:id/role', requireOwner, (req, res) => {
       }));
     }
   }
-  db.prepare(`UPDATE users SET role=? WHERE user_id=?`).run(r, id);
-  logSecurityEvent(req, 'user_role_changed', `user_id:${id};role:${r}`, res.locals.user.user_id);
+  db.prepare(`UPDATE users SET role=?, finance_role=? WHERE user_id=?`).run(r, fr, id);
+  logSecurityEvent(req, 'user_role_changed', `user_id:${id};role:${r};finance_role:${fr}`, res.locals.user.user_id);
   res.redirect('/users');
 });
 
@@ -2810,6 +3788,200 @@ app.get('/security/audit', requireOwner, (req, res) => {
   res.page({ title: 'Security Audit', active: '/security/audit', noHeader: true, body });
 });
 
+app.get('/activity', requireOwner, (req, res) => {
+  const kind = String(req.query.kind || '').trim();
+  const link = String(req.query.link || '').trim();
+  const kinds = db.prepare(`
+    SELECT kind, COUNT(*) count
+    FROM activity_log
+    GROUP BY kind
+    ORDER BY count DESC, kind`).all();
+  const params = {};
+  let where = '';
+  if (kind) {
+    where = 'WHERE al.kind = @kind';
+    params.kind = kind;
+  }
+  if (link) {
+    where = where ? `${where} AND al.link = @link` : 'WHERE al.link = @link';
+    params.link = link;
+  }
+  const rows = db.prepare(`
+    SELECT al.occurred_at, al.kind, al.description, al.link,
+           u.username, u.display_name
+    FROM activity_log al
+    LEFT JOIN users u ON u.user_id=al.user_id
+    ${where}
+    ORDER BY al.activity_id DESC
+    LIMIT 200`).all(params);
+  const kindOptions = `<option value="">All activity</option>` + kinds.map((row) =>
+    `<option value="${esc(row.kind)}" ${row.kind === kind ? 'selected' : ''}>${esc(row.kind)} (${row.count})</option>`
+  ).join('');
+  const filters = `<form class="filters" method="get" action="/activity">
+    <label>Type <select name="kind">${kindOptions}</select></label>
+    <label>Record link <input name="link" value="${esc(link)}" placeholder="/members/1"></label>
+    <button type="submit">Apply</button>
+    <a class="btn ghost" href="/activity">Clear</a>
+  </form>`;
+  const inner = rows.length
+    ? table(['When', 'Type', 'User', 'Description', 'Link'], rows.map((row) => [
+      esc(row.occurred_at),
+      esc(row.kind),
+      esc(row.display_name || row.username || 'system'),
+      esc(row.description),
+      row.link ? `<a href="${esc(row.link)}">Open</a>` : '—',
+    ]))
+    : `<div class="empty-state">
+        <div class="empty-ico" aria-hidden="true">•</div>
+        <h3>No activity found</h3>
+        <p>Operational changes will appear here as users work in the system.</p>
+      </div>`;
+  res.page({
+    title: 'Activity Audit',
+    active: '/activity',
+    noHeader: true,
+    body: `${pageHero('Activity Audit', 'Owner-only review of operational changes across the church system.')}
+      ${filters}
+      ${listCard({ title: 'Recent Activity', count: rows.length, countLabel: 'events', note: 'Most recent first · max 200', inner })}`,
+  });
+});
+
+app.get('/operations/health-report.txt', requireOwner, (req, res) => {
+  const lines = [];
+  const add = (label, value) => lines.push(`${label}: ${value}`);
+  const backups = listBackups();
+  const recentErrors = db.prepare(`
+    SELECT COUNT(*) AS c FROM error_log
+    WHERE occurred_at >= datetime('now','-24 hours')`).get().c;
+  const activeUsers = db.prepare(`SELECT COUNT(*) AS c FROM users WHERE deleted_at IS NULL`).get().c;
+  const ledgerIssues = db.prepare(`
+    SELECT COUNT(*) c FROM (
+      SELECT je.entry_id
+      FROM journal_entries je JOIN journal_lines jl USING(entry_id)
+      GROUP BY je.entry_id
+      HAVING ROUND(SUM(jl.debit), 2) != ROUND(SUM(jl.credit), 2)
+    )`).get().c;
+  add('Generated', new Date().toISOString());
+  add('Database', 'ready');
+  add('Active users', activeUsers);
+  add('Backups retained', backups.length);
+  add('Latest backup', backups[0] ? `${backups[0].name} (${fmtBytes(backups[0].size)})` : 'none');
+  add('Errors in last 24h', recentErrors);
+  add('Unbalanced journals', ledgerIssues);
+  add('SMS provider', ARKESEL_API_KEY ? 'configured' : 'dry-run');
+  add('Email provider', SMTP_HOST && SMTP_USER && SMTP_PASS ? 'configured' : 'dry-run');
+  add('Off-site backup upload', process.env.BACKUP_UPLOAD_URL ? 'configured' : 'not configured');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="operations-health-report.txt"');
+  res.send(lines.join('\n') + '\n');
+});
+
+function usageStatus(value, limit) {
+  if (!limit) return 'available';
+  const ratio = Number(value || 0) / Number(limit || 1);
+  if (ratio >= 1) return 'attention';
+  if (ratio >= 0.85) return 'pending';
+  return 'ready';
+}
+
+function alertReadinessRows() {
+  const backups = listBackups();
+  const latestBackup = backups[0] || null;
+  const recentErrors = db.prepare(`
+    SELECT COUNT(*) AS c
+    FROM error_log
+    WHERE occurred_at >= datetime('now','-24 hours')`).get().c;
+  const unbalanced = db.prepare(`
+    SELECT COUNT(*) c
+    FROM journal_entries je
+    LEFT JOIN (
+      SELECT entry_id, ROUND(SUM(debit),2) debit, ROUND(SUM(credit),2) credit
+      FROM journal_lines GROUP BY entry_id
+    ) totals USING(entry_id)
+    WHERE je.status='POSTED' AND ROUND(COALESCE(totals.debit,0)-COALESCE(totals.credit,0),2) != 0
+  `).get().c;
+  const alerts = [];
+  if (!latestBackup) alerts.push({ severity: 'critical', message: 'No retained database backup found.', link: '/backups' });
+  if (!process.env.BACKUP_UPLOAD_URL) alerts.push({ severity: 'warning', message: 'Off-site backup upload is not configured.', link: '/backups' });
+  if (!ALERT_WEBHOOK_URL && !ALERT_EMAIL) alerts.push({ severity: 'warning', message: 'Alert routing is not configured.', link: '/operations' });
+  if (recentErrors > 0) alerts.push({ severity: 'warning', message: `${recentErrors} server error${recentErrors === 1 ? '' : 's'} in the last 24 hours.`, link: '/errors' });
+  if (unbalanced > 0) alerts.push({ severity: 'critical', message: `${unbalanced} unbalanced posted journal entr${unbalanced === 1 ? 'y' : 'ies'} found.`, link: '/finance/accounting' });
+  return alerts;
+}
+
+app.get('/operations/alerts.json', requireOwner, (req, res) => {
+  const alerts = alertReadinessRows();
+  res.json({
+    ok: alerts.every((alert) => alert.severity !== 'critical'),
+    alert_routing: ALERT_WEBHOOK_URL || ALERT_EMAIL ? 'configured' : 'not_configured',
+    alerts,
+  });
+});
+
+app.get('/tenant', requireOwner, (req, res) => {
+  const planKey = currentPlanKey();
+  const plan = currentPlan();
+  const usage = tenantUsage();
+  const subscriptionStatus = getState('subscription_status') || 'trial';
+  const signup = db.prepare(`
+    SELECT church_name, contact_name, email, plan, member_count, status, activated_at
+    FROM trial_signups
+    ORDER BY signup_id DESC LIMIT 1`).get();
+  const usageRows = [
+    ['Members', usage.members, plan.members],
+    ['Users', usage.users, plan.users],
+    ['Branches', usage.branches, plan.branches],
+  ].map(([label, value, limit]) => [
+    esc(label),
+    Number(value).toLocaleString(),
+    Number(limit).toLocaleString(),
+    `<span class="pill pill-${usageStatus(value, limit)}">${esc(usageStatus(value, limit))}</span>`,
+  ]);
+  const planOptions = Object.entries(PLAN_LIMITS)
+    .map(([key, p]) => `<option value="${esc(key)}" ${key === planKey ? 'selected' : ''}>${esc(p.label)}</option>`).join('');
+  const statusOptions = ['trial', 'active', 'past_due', 'suspended']
+    .map((status) => `<option value="${status}" ${status === subscriptionStatus ? 'selected' : ''}>${status}</option>`).join('');
+  const onboardingRows = [
+    ['Tenant isolation model', 'private deployment per church', 'Documented in docs/SAAS_TENANCY_REVIEW.md'],
+    ['Current plan', plan.label, plan.support],
+    ['Latest signup', signup ? `${signup.church_name} · ${signup.email}` : 'none', signup ? `${signup.status || 'pending'} · ${signup.plan || 'pro'}` : 'No signup record'],
+    ['Off-site backups', process.env.BACKUP_UPLOAD_URL ? 'configured' : 'not configured', process.env.BACKUP_UPLOAD_URL ? 'BACKUP_UPLOAD_URL is set' : 'Set BACKUP_UPLOAD_URL before public SaaS launch'],
+    ['Alert routing', ALERT_WEBHOOK_URL || ALERT_EMAIL ? 'configured' : 'not configured', ALERT_WEBHOOK_URL ? 'Webhook configured' : (ALERT_EMAIL ? `Email: ${ALERT_EMAIL}` : 'Set ALERT_WEBHOOK_URL or ALERT_EMAIL')],
+  ];
+  res.page({
+    title: 'Tenant',
+    active: '/tenant',
+    noHeader: true,
+    body: `${pageHero('Tenant Admin', 'Owner controls for SaaS plan, usage limits and onboarding readiness.')}
+      ${statsRow([
+        { cls: 'blue', icon: '▣', value: esc(plan.label), label: 'Plan' },
+        { cls: subscriptionStatus === 'active' ? 'green' : 'orange', icon: '✓', value: esc(subscriptionStatus), label: 'Subscription' },
+        { cls: usageStatus(usage.members, plan.members) === 'ready' ? 'green' : 'orange', icon: '👥', value: `${usage.members}/${plan.members}`, label: 'Members' },
+        { cls: usageStatus(usage.users, plan.users) === 'ready' ? 'green' : 'orange', icon: '🔑', value: `${usage.users}/${plan.users}`, label: 'Users' },
+      ])}
+      <section class="card">
+        <div class="card-head"><h2>Plan Controls</h2><span class="meta">Manual until billing automation is connected</span></div>
+        <form class="form" method="post" action="/tenant">
+          <label>Plan<select name="plan">${planOptions}</select></label>
+          <label>Status<select name="status">${statusOptions}</select></label>
+          <div class="actions"><button type="submit">Save tenant settings</button></div>
+        </form>
+      </section>
+      ${listCard({ title: 'Usage Against Limits', count: usageRows.length, countLabel: 'limits', inner: table(['Metric', 'Current', 'Limit', 'Status'], usageRows) })}
+      ${listCard({ title: 'SaaS Readiness', count: onboardingRows.length, countLabel: 'checks', inner: table(['Area', 'Status', 'Detail'], onboardingRows.map((row) => row.map(esc))) })}`,
+  });
+});
+
+app.post('/tenant', requireOwner, (req, res) => {
+  const plan = Object.hasOwn(PLAN_LIMITS, req.body.plan) ? req.body.plan : 'pro';
+  const status = ['trial', 'active', 'past_due', 'suspended'].includes(req.body.status) ? req.body.status : 'trial';
+  setState('current_plan', plan);
+  setState('subscription_status', status);
+  logSecurityEvent(req, 'tenant_settings_changed', `plan:${plan};status:${status}`, res.locals.user.user_id);
+  flash(req, 'Tenant settings updated.', 'success');
+  res.redirect('/tenant');
+});
+
 app.get('/operations', requireOwner, (req, res) => {
   const backups = listBackups();
   const latestBackup = backups[0] || null;
@@ -2830,16 +4002,23 @@ app.get('/operations', requireOwner, (req, res) => {
     SELECT COUNT(*) AS c
     FROM users
     WHERE deleted_at IS NULL`).get().c;
+  const plan = currentPlan();
+  const usage = tenantUsage();
+  const alertRows = alertReadinessRows();
 
   let dbStatus = 'ready';
   try { db.prepare('SELECT 1').get(); } catch (_) { dbStatus = 'not ready'; }
 
   const checks = [
     ['Database readiness', dbStatus, dbStatus === 'ready' ? 'SELECT 1 succeeded' : 'Database query failed', '/readyz'],
+    ['Tenant plan limits', usageStatus(usage.members, plan.members), `${plan.label}: ${usage.members}/${plan.members} members, ${usage.users}/${plan.users} users`, '/tenant'],
     ['Latest backup', latestBackup ? 'available' : 'missing', latestBackup ? `${latestBackup.name} · ${fmtBytes(latestBackup.size)}` : 'No backup files are retained', '/backups'],
     ['Backup verification', backupVerified ? 'verified' : 'pending', backupVerified ? `${backupVerified.occurred_at} · ${backupVerified.subject}` : 'Verify the latest backup from Backups', '/backups'],
     ['Error log', recentErrors ? 'attention' : 'clear', `${recentErrors} error${recentErrors === 1 ? '' : 's'} in the last 24 hours`, '/errors'],
     ['Security audit', lastAudit ? 'active' : 'empty', lastAudit ? `${lastAudit.occurred_at} · ${lastAudit.event}` : 'No audit events yet', '/security/audit'],
+    ['Activity audit', 'active', 'Review member, finance, attendance and communication changes', '/activity'],
+    ['Alert routing', ALERT_WEBHOOK_URL || ALERT_EMAIL ? 'configured' : 'not configured',
+      ALERT_WEBHOOK_URL ? 'Webhook configured' : (ALERT_EMAIL ? `Email: ${ALERT_EMAIL}` : `${alertRows.length} current alert${alertRows.length === 1 ? '' : 's'}; set ALERT_WEBHOOK_URL or ALERT_EMAIL`), '/operations/alerts.json'],
     ['Off-site backup upload', process.env.BACKUP_UPLOAD_URL ? 'configured' : 'not configured',
       process.env.BACKUP_UPLOAD_URL ? 'BACKUP_UPLOAD_URL is set' : 'Set BACKUP_UPLOAD_URL for off-site copies', '/settings'],
     ['SMS provider', ARKESEL_API_KEY ? 'configured' : 'dry-run', ARKESEL_API_KEY ? 'Arkesel key is set' : 'ARKESEL_API_KEY is not set', '/settings'],
@@ -2872,7 +4051,7 @@ app.get('/operations', requireOwner, (req, res) => {
       ])}
       ${listCard({ title: 'Operational Checks', count: checks.length, countLabel: 'checks', inner: table(['Check', 'Status', 'Detail', 'Link'], rows) })}
       <div class="card">
-        <div class="card-head"><h2>Runbook</h2></div>
+        <div class="card-head"><h2>Runbook</h2><a href="/operations/health-report.txt">Download health report</a></div>
         <p>Use <code>docs/OPERATIONS_RUNBOOK.md</code> for deploy checks, monthly restore drills and rollback steps.</p>
       </div>`,
   });
@@ -2907,13 +4086,14 @@ app.post('/setup', (req, res) => {
   const info = db.prepare(
     `INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)`
   ).run(username.trim(), hash, (display_name || '').trim() || null);
+  ensureTrialWindow();
   logSecurityEvent(req, 'first_admin_created', `user_id:${info.lastInsertRowid}`, info.lastInsertRowid);
   req.session.userId = info.lastInsertRowid;
   res.redirect('/');
 });
 
 app.get('/login', (req, res) => {
-  if (req.session.userId) return res.redirect('/');
+  if (req.session.userId) return res.redirect(trialHasExpired() ? '/billing' : '/');
   const error = req.query.e === '1' ? 'Wrong username or password.' : null;
   res.send(authPage('Sign in', `
     <form class="form auth-form" method="post" action="/login">
@@ -2984,7 +4164,7 @@ app.post('/login', (req, res) => {
   loginHits.delete(ip);
   req.session.userId = user.user_id;
   logSecurityEvent(req, 'login_success', `user_id:${user.user_id}`, user.user_id);
-  res.redirect('/');
+  res.redirect(trialHasExpired() ? '/billing' : '/');
 });
 
 app.post('/logout', (req, res) => {

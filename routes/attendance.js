@@ -72,6 +72,15 @@ module.exports.register = function register(app, ctx) {
       ${opts.extraButtons || ''}
     </form>`;
   }
+  function csvEscape(value) {
+    const s = String(value ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+  function sendCsv(res, filename, rows) {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(rows.map((row) => row.map(csvEscape).join(',')).join('\n') + '\n');
+  }
 
   // ---------- /attendance — overview ---------- //
   app.get('/attendance', (req, res) => {
@@ -89,6 +98,11 @@ module.exports.register = function register(app, ctx) {
       ? Math.round(trend.reduce((a, b) => a + b.value, 0) / trend.length) : 0;
     const total = services.reduce((a, b) => a + (b.attendance_total ?? b.attendees), 0);
     const recorded = services.filter((s) => s.attendance_total !== null && s.attendance_total !== undefined).length;
+    const last = services[0];
+    const previous = services[1];
+    const lastTotal = last ? (last.attendance_total ?? last.attendees ?? 0) : 0;
+    const previousTotal = previous ? (previous.attendance_total ?? previous.attendees ?? 0) : 0;
+    const change = previous ? lastTotal - previousTotal : 0;
 
     const hero = pageHero('Attendance',
       'Track service participation. Record Men / Women / Children counts per service — add or edit a service right here.');
@@ -97,7 +111,9 @@ module.exports.register = function register(app, ctx) {
       { cls: 'green', icon: '📅', value: services.length.toLocaleString(), label: 'Services tracked' },
       { cls: 'blue', icon: '🧮', value: recorded.toLocaleString(), label: 'Counts recorded' },
       { cls: 'purple', icon: '👥', value: total.toLocaleString(), label: 'Total attendance' },
-    ], isAdmin ? '<a class="btn primary" href="/attendance/new">＋ Add Service</a>' : '');
+      { cls: change >= 0 ? 'green' : 'orange', icon: '↕', value: previous ? `${change >= 0 ? '+' : ''}${change}` : '—', label: 'Last service change' },
+    ], `${isAdmin ? '<a class="btn primary" href="/attendance/new">＋ Add Service</a>' : ''}
+      <a class="btn ghost" href="/attendance.csv">Export CSV</a>`);
 
     const trendCard = `<div class="card">
       <div class="card-head"><h2>Attendance trend</h2><span class="meta">Last ${trend.length} services</span></div>
@@ -140,6 +156,30 @@ module.exports.register = function register(app, ctx) {
       noHeader: true,
       body: `${hero}${stats}${trendCard}${recentCard}`,
     });
+  });
+
+  app.get('/attendance.csv', (req, res) => {
+    const rows = db.prepare(`
+      SELECT e.starts_at, e.title, e.location,
+             e.attendance_men, e.attendance_women, e.attendance_children,
+             COALESCE(e.attendance_total, COUNT(a.member_id)) attendance_total
+      FROM events e
+      LEFT JOIN attendance a USING(event_id)
+      WHERE e.event_type='service'
+      GROUP BY e.event_id
+      ORDER BY e.starts_at DESC`).all();
+    sendCsv(res, 'attendance.csv', [
+      ['Date', 'Title', 'Location', 'Men', 'Women', 'Children', 'Total'],
+      ...rows.map((row) => [
+        row.starts_at,
+        row.title,
+        row.location || '',
+        row.attendance_men ?? '',
+        row.attendance_women ?? '',
+        row.attendance_children ?? '',
+        row.attendance_total ?? '',
+      ]),
+    ]);
   });
 
   // ---------- /attendance/new — add a service + counts in one go ---------- //

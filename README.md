@@ -14,6 +14,8 @@ npm start            # http://localhost:3000
 ```
 
 Set `PORT` or `CHURCH_DB` to override defaults.
+Use `.env.example` as the source of truth for local and deployment
+configuration; never commit a real `.env` file.
 
 The first time you load the site you'll be sent to **/setup** to create
 an admin account. After that everyone has to sign in to use the app.
@@ -54,6 +56,25 @@ Required env vars in production:
 | `CHURCH_DB`       | Path on a persistent disk (e.g. `/data/church.db`) |
 | `NODE_ENV`        | Set to `production` for secure cookies         |
 | `PORT`            | Usually set by the host                        |
+
+Common optional env vars:
+
+| Var                    | Why                                                   |
+|------------------------|-------------------------------------------------------|
+| `PUBLIC_URL`           | Absolute app URL for RSVP and unsubscribe links       |
+| `CHURCH_NAME`          | Display name used across the app and messages         |
+| `PHOTO_DIR`            | Persistent member photo storage path                  |
+| `BACKUP_DIR`           | Persistent local backup storage path                  |
+| `BACKUP_KEEP`          | Number of local backups to retain                     |
+| `BACKUP_UPLOAD_URL`    | Optional off-site backup PUT destination              |
+| `ARKESEL_API_KEY`      | Enables real SMS sending; unset keeps SMS in dry-run  |
+| `ARKESEL_SENDER`       | SMS sender ID                                         |
+| `SMTP_HOST`/`SMTP_USER`/`SMTP_PASS` | Enables SMTP email; incomplete keeps email in dry-run |
+| `RESEND_API_KEY`       | Enables Resend when selected in email settings        |
+
+Production starts are protected from accidental empty databases. If the
+database file is missing with `NODE_ENV=production`, the app refuses to
+initialize one unless `ALLOW_DB_INIT=1` is set temporarily for the first boot.
 
 ## What's in the UI
 

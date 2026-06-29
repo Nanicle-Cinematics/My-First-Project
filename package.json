@@ -9,9 +9,10 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-force-exit",
+    "test": "node --test --test-force-exit \"test/**/*.test.js\"",
     "build-db": "bash build.sh",
-    "migrate-live-db": "node scripts/migrate-live-db.js"
+    "migrate-live-db": "node scripts/migrate-live-db.js",
+    "deploy:dry-run": "node scripts/deploy-dry-run.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

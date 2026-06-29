@@ -1,6 +1,8 @@
 'use strict';
 // Members directory: list, search, bulk, CSV, create, detail, edit, photo, archive.
 // register(app, ctx). Pure helpers come from lib/*; server state via ctx.
+const path = require('path');
+const fs = require('fs');
 const { esc, initials, fmtDate, MONTHS, DAYS_OF_WEEK, parseDob, dobMonth, dobDay,
   isValidDate, isEmailish, isPhoneish } = require('../lib/format');
 const { pageHero, statsRow, filterCard, listCard, table, pager,
@@ -24,7 +26,18 @@ function memberErrors(b) {
 }
 
 // ---------- members ----------
-function memberWhere({ q, status, classId, dayBorn }) {
+function birthdayWindow(kind) {
+  if (!['week', 'month'].includes(kind)) return null;
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const end = kind === 'week'
+    ? new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6)
+    : new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  const md = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { start: md(start), end: md(end), wraps: md(end) < md(start) };
+}
+
+function memberWhere({ q, status, classId, dayBorn, birthday }) {
   const where = ['m.deleted_at IS NULL'];
   const params = {};
   if (q) {
@@ -35,6 +48,15 @@ function memberWhere({ q, status, classId, dayBorn }) {
   if (status) { where.push(`m.membership_status = @status`); params.status = status; }
   if (classId) { where.push(`m.bible_class_id = @classId`); params.classId = Number(classId); }
   if (dayBorn && DAYS_OF_WEEK.includes(dayBorn)) { where.push(`m.day_born = @dayBorn`); params.dayBorn = dayBorn; }
+  const bday = birthdayWindow(birthday);
+  if (bday) {
+    const expr = `strftime('%m-%d', m.date_of_birth)`;
+    where.push(bday.wraps
+      ? `(m.date_of_birth IS NOT NULL AND (${expr} >= @birthdayStart OR ${expr} <= @birthdayEnd))`
+      : `(m.date_of_birth IS NOT NULL AND ${expr} BETWEEN @birthdayStart AND @birthdayEnd)`);
+    params.birthdayStart = bday.start;
+    params.birthdayEnd = bday.end;
+  }
   return { clause: where.join(' AND '), params };
 }
 function selectMembers(filters) {
@@ -77,10 +99,11 @@ app.get('/members', (req, res) => {
   const status = (req.query.status || '').trim();
   const classId = (req.query.class || '').trim();
   const dayBorn = (req.query.day_born || '').trim();
-  const matched = countMembers({ q, status, classId, dayBorn });
+  const birthday = ['week', 'month'].includes(String(req.query.birthday || '')) ? String(req.query.birthday) : '';
+  const matched = countMembers({ q, status, classId, dayBorn, birthday });
   const pages = Math.max(1, Math.ceil(matched / MEMBERS_PER_PAGE));
   const page = Math.min(pages, Math.max(1, parseInt(req.query.page, 10) || 1));
-  const rows = selectMembers({ q, status, classId, dayBorn, limit: MEMBERS_PER_PAGE, offset: (page - 1) * MEMBERS_PER_PAGE });
+  const rows = selectMembers({ q, status, classId, dayBorn, birthday, limit: MEMBERS_PER_PAGE, offset: (page - 1) * MEMBERS_PER_PAGE });
   const isAdmin = res.locals.isAdmin;
 
   const totalMembers = db.prepare(`SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL`).get().c;
@@ -88,6 +111,13 @@ app.get('/members', (req, res) => {
     `SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL AND membership_status IN ('member','regular')`).get().c;
   const newMembers = db.prepare(
     `SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL AND join_date >= date('now','-30 days')`).get().c;
+  const missingContact = db.prepare(`
+    SELECT COUNT(*) c FROM members
+    WHERE deleted_at IS NULL
+      AND COALESCE(NULLIF(TRIM(email), ''), NULLIF(TRIM(mobile_phone), '')) IS NULL`).get().c;
+  const inactiveMembers = db.prepare(`
+    SELECT COUNT(*) c FROM members
+    WHERE deleted_at IS NULL AND membership_status IN ('inactive','transferred','deceased')`).get().c;
 
   const classes = loadBibleClasses();
   const classOpts = `<option value="">All Bible classes</option>` + classes.map((c) =>
@@ -97,7 +127,10 @@ app.get('/members', (req, res) => {
     `<option value="${s}" ${s === status ? 'selected' : ''}>${s ? MEMBER_STATUS_LABELS[s] : 'All statuses'}</option>`).join('');
   const dayBornOpts = `<option value="">All day-born</option>` + DAYS_OF_WEEK.map((d) =>
     `<option value="${d}" ${d === dayBorn ? 'selected' : ''}>${d} (${esc(AKAN_NAMES[d] || d)})</option>`).join('');
-  const exportQs = new URLSearchParams({ q, status, class: classId, day_born: dayBorn }).toString();
+  const birthdayOpts = `<option value="">All birthdays</option>
+      <option value="week" ${birthday === 'week' ? 'selected' : ''}>Birthdays this week</option>
+      <option value="month" ${birthday === 'month' ? 'selected' : ''}>Birthdays this month</option>`;
+  const exportQs = new URLSearchParams({ q, status, class: classId, day_born: dayBorn, birthday }).toString();
 
   const hero = pageHero('Members Directory',
     'Manage and view all church members in one place. Search, filter, and act on member records.');
@@ -105,17 +138,17 @@ app.get('/members', (req, res) => {
     { cls: 'gold', icon: '👥', value: totalMembers.toLocaleString(), label: 'Total Members' },
     { cls: 'green', icon: '✓', value: activeMembers.toLocaleString(), label: 'Active' },
     { cls: 'blue', icon: '＋', value: newMembers.toLocaleString(), label: 'New (30d)' },
+    { cls: missingContact ? 'orange' : 'green', icon: '☎', value: missingContact.toLocaleString(), label: 'Missing Contact' },
+    { cls: inactiveMembers ? 'purple' : 'blue', icon: '!', value: inactiveMembers.toLocaleString(), label: 'Inactive / Other' },
   ], `${isAdmin ? `<a class="btn primary" href="/members/new">＋ Add New Member</a>` : ''}
       ${isAdmin ? `<a class="btn ghost" href="/members/import">⇪ Import CSV</a>` : ''}
-      <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>
-      ${res.locals.ssoEnabled && isAdmin ? `<form method="post" action="/sync/members" class="inline-form" style="display:inline" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Syncing…';">
-        <button class="btn ghost" type="submit" title="Push members to the Finance app">🔄 Sync to Finance</button>
-      </form>` : ''}`);
+      <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>`);
   const filters = filterCard({
     q, placeholder: 'Search members by name, ID, email or phone…',
     controls: `<select name="class" aria-label="Filter by Bible class">${classOpts}</select>
       <select name="status" aria-label="Filter by status">${statusOpts}</select>
       <select name="day_born" aria-label="Filter by day-born">${dayBornOpts}</select>
+      <select name="birthday" aria-label="Filter by birthday">${birthdayOpts}</select>
       <details class="export">
         <summary>⋯ Export</summary>
         <a href="/members.csv?${exportQs}">Export CSV</a>
@@ -183,12 +216,12 @@ app.get('/members', (req, res) => {
         <thead><tr>${isAdmin ? '<th class="bulk-cell"><input type="checkbox" class="bulk-all" aria-label="Select all"></th>' : ''}<th>Name</th><th>Contact</th><th>Day Name</th><th>Group</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${rowHtml}</tbody>
       </table>
-      ${pager('/members', { q, status, class: classId, day_born: dayBorn }, page, pages)}` : `<div class="empty-state">
+      ${pager('/members', { q, status, class: classId, day_born: dayBorn, birthday }, page, pages)}` : `<div class="empty-state">
         <div class="empty-ico" aria-hidden="true">👥</div>
-        <h3>${q || classId || status || dayBorn ? 'No members match your search' : 'No members yet'}</h3>
-        <p>${q || classId || status || dayBorn ? 'Try clearing filters or searching by phone number.' : 'Add your first member and the directory will start populating.'}</p>
+        <h3>${q || classId || status || dayBorn || birthday ? 'No members match your search' : 'No members yet'}</h3>
+        <p>${q || classId || status || dayBorn || birthday ? 'Try clearing filters or searching by phone number.' : 'Add your first member and the directory will start populating.'}</p>
         ${isAdmin ? '<a class="btn primary" href="/members/new">＋ Add New Member</a>' : ''}
-        ${q || classId || status || dayBorn ? '<div style="margin-top:0.6rem"><a class="link" href="/members">Clear filters →</a></div>' : ''}
+        ${q || classId || status || dayBorn || birthday ? '<div style="margin-top:0.6rem"><a class="link" href="/members">Clear filters →</a></div>' : ''}
       </div>`,
   });
 
@@ -215,7 +248,13 @@ function sendCsv(res, filename, csv) {
 }
 
 app.get('/members.csv', (req, res) => {
-  sendCsv(res, 'members.csv', membersCsv(selectMembers({ q: req.query.q || '', status: req.query.status || '' })));
+  sendCsv(res, 'members.csv', membersCsv(selectMembers({
+    q: req.query.q || '',
+    status: req.query.status || '',
+    classId: req.query.class || '',
+    dayBorn: req.query.day_born || '',
+    birthday: ['week', 'month'].includes(String(req.query.birthday || '')) ? String(req.query.birthday) : '',
+  })));
 });
 
 // Bulk actions on selected members: export to CSV or add to an organization.
@@ -322,6 +361,8 @@ function parseAndValidateCsv(buf) {
     if (m.mobile_phone) allByPhone.set(String(m.mobile_phone).replace(/\D+/g, ''), m.member_id);
   }
 
+  const seenExt = new Set();
+  const seenPhone = new Set();
   const rows = records.map((raw, i) => {
     // Re-key incoming row by normalized header so "First Name" and "first_name"
     // both work.
@@ -362,6 +403,15 @@ function parseAndValidateCsv(buf) {
     if (r.confirmation_date && !confirmation) errors.push('confirmation_date must be a valid date');
 
     const extId = (r.external_id || r.member_id || '').trim();
+    if (extId) {
+      const key = extId.toLowerCase();
+      if (seenExt.has(key)) errors.push('Duplicate external_id in this CSV');
+      seenExt.add(key);
+    }
+    if (phoneDigits) {
+      if (seenPhone.has(phoneDigits)) errors.push('Duplicate mobile_phone in this CSV');
+      seenPhone.add(phoneDigits);
+    }
     let action = 'create';
     let matchId = null;
     if (extId && allByExt.has(extId.toLowerCase())) {
@@ -406,6 +456,18 @@ function actionPill(a) {
   if (a === 'create') return '<span class="pill pill-new">Would create</span>';
   if (a === 'update') return '<span class="pill pill-ok">Would update</span>';
   return '<span class="pill pill-failed">Skipped</span>';
+}
+
+function csvCell(v) {
+  return `"${String(v ?? '').replace(/"/g, '""')}"`;
+}
+
+function rejectedRowsCsv(rows) {
+  const headers = [...IMPORT_COLUMNS, 'issues'];
+  return [headers.map(csvCell).join(',')].concat(rows.map((r) =>
+    [...IMPORT_COLUMNS.map((c) => r.record[c] || ''), r.errors.join('; ')]
+      .map(csvCell).join(',')
+  )).join('\n') + '\n';
 }
 
 function importPage(introHtml) {
@@ -504,10 +566,29 @@ app.post('/members/import', requireAdmin, csvUpload.single('csv'), (req, res) =>
         <form method="post" action="/members/import/commit" class="actions form-actions" style="margin-top:1rem">
           <input type="hidden" name="csv_body" value="${esc(previewBody)}">
           <a class="btn ghost" href="/members/import">Back</a>
+          ${totals.skip ? `<button class="btn ghost" type="submit" form="rejected-import-form">Download rejected rows</button>` : ''}
           <button type="submit" ${totals.create + totals.update === 0 ? 'disabled' : ''}>Commit import (${totals.create + totals.update})</button>
         </form>
+        ${totals.skip ? `<form id="rejected-import-form" method="post" action="/members/import/rejected">
+          <input type="hidden" name="csv_body" value="${esc(previewBody)}">
+        </form>` : ''}
       </div>`,
   });
+});
+
+app.post('/members/import/rejected', requireAdmin, (req, res) => {
+  const csv = String(req.body.csv_body || '');
+  if (!csv) {
+    flash(req, 'No preview data — please upload again.');
+    return res.redirect('/members/import');
+  }
+  const result = parseAndValidateCsv(Buffer.from(csv, 'utf8'));
+  if (result.error) {
+    flash(req, result.error);
+    return res.redirect('/members/import');
+  }
+  const rejected = result.rows.filter((r) => r.action === 'skip');
+  sendCsv(res, 'members-import-rejected.csv', rejectedRowsCsv(rejected));
 });
 
 app.post('/members/import/commit', requireAdmin, (req, res) => {
@@ -731,6 +812,38 @@ app.get('/members/:id', (req, res) => {
     SELECT e.title, e.starts_at FROM attendance a
     JOIN events e USING(event_id) WHERE a.member_id = ?
     ORDER BY e.starts_at DESC LIMIT 10`).all(id);
+  const giving = db.prepare(`
+    SELECT 'Tithe' AS type, tithe_date AS date, amount, method AS note
+    FROM tithes WHERE member_id=?
+    UNION ALL
+    SELECT 'Special offering', offering_date, amount, purpose
+    FROM special_offerings WHERE donor_id=?
+    UNION ALL
+    SELECT 'Pledge payment', pp.paid_on, pp.amount, h.harvest_name
+    FROM pledge_payments pp
+    JOIN pledges p USING(pledge_id)
+    LEFT JOIN harvests h USING(harvest_id)
+    WHERE p.member_id=?
+    ORDER BY date DESC LIMIT 12`).all(id, id, id);
+  const pledges = db.prepare(`
+    SELECT p.pledge_date, h.harvest_name, p.pledged_amount, p.paid_amount,
+           MAX(0, p.pledged_amount - p.paid_amount) outstanding
+    FROM pledges p
+    LEFT JOIN harvests h USING(harvest_id)
+    WHERE p.member_id=?
+    ORDER BY p.pledge_date DESC, p.pledge_id DESC LIMIT 8`).all(id);
+  const activity = db.prepare(`
+    SELECT kind, description, link, occurred_at
+    FROM activity_log
+    WHERE link IN (?, ?)
+       OR description LIKE ?
+    ORDER BY activity_id DESC LIMIT 12`).all(`/members/${id}`, `/members/${id}/statement`, `%${m.first_name} ${m.last_name}%`);
+  const timelineRows = [
+    ...attendance.map((r) => ({ when: r.starts_at, type: 'Attendance', detail: r.title, amount: '' })),
+    ...giving.map((r) => ({ when: r.date, type: r.type, detail: r.note || '', amount: `GH₵${Number(r.amount || 0).toFixed(2)}` })),
+    ...pledges.map((r) => ({ when: r.pledge_date, type: 'Pledge', detail: r.harvest_name || 'Harvest pledge', amount: `Due GH₵${Number(r.outstanding || 0).toFixed(2)}` })),
+    ...activity.map((r) => ({ when: r.occurred_at, type: r.kind, detail: r.description, amount: r.link ? `<a href="${esc(r.link)}">Open</a>` : '' })),
+  ].sort((a, b) => String(b.when || '').localeCompare(String(a.when || ''))).slice(0, 18);
 
   const photoBlock = `
     <div class="member-photo">
@@ -804,6 +917,19 @@ app.get('/members/:id', (req, res) => {
         ${attendance.length ? table(['Event', 'When'],
           attendance.map((r) => [esc(r.title), esc(r.starts_at)]))
           : '<p>No attendance recorded.</p>'}
+
+        <h3>Giving and pledges</h3>
+        ${giving.length || pledges.length ? table(['When', 'Type', 'Detail', 'Amount'],
+          [
+            ...giving.map((r) => [esc(r.date), esc(r.type), esc(r.note || '—'), `GH₵${Number(r.amount || 0).toFixed(2)}`]),
+            ...pledges.map((r) => [esc(r.pledge_date), 'Pledge', esc(r.harvest_name || 'Harvest pledge'), `Outstanding GH₵${Number(r.outstanding || 0).toFixed(2)}`]),
+          ].slice(0, 12))
+          : '<p>No giving or pledges recorded.</p>'}
+
+        <h3>Member timeline</h3>
+        ${timelineRows.length ? table(['When', 'Type', 'Detail', 'Amount / Link'],
+          timelineRows.map((r) => [esc(r.when || '—'), esc(r.type), esc(r.detail || '—'), r.amount || '—']))
+          : '<p>No timeline activity yet.</p>'}
       </section>
     </div>`;
   res.page({
@@ -846,6 +972,10 @@ app.post('/members/:id', requireAdmin, (req, res) => {
     emergency_contact_relation: b.emergency_contact_relation || null,
   });
   saveMemberOrgs(id, parseOrgIds(b));
+  logActivity('member_updated',
+    `Member updated: ${b.first_name} ${b.last_name}`,
+    `/members/${id}`,
+    res.locals.user.user_id);
   res.redirect(`/members/${id}`);
 });
 
@@ -871,6 +1001,10 @@ app.post('/members/:id/photo', requireAdmin, photoUpload.single('photo'), (req, 
       }
     }
     db.prepare(`UPDATE members SET photo_filename = ? WHERE member_id = ?`).run(filename, id);
+    logActivity('member_photo_updated',
+      `Member photo updated for #${id}`,
+      `/members/${id}`,
+      res.locals.user.user_id);
   } catch (e) {
     console.error('photo upload failed:', e.message);
   }
@@ -883,6 +1017,10 @@ app.post('/members/:id/photo/delete', requireAdmin, (req, res) => {
   if (m && m.photo_filename) {
     try { fs.unlinkSync(path.join(PHOTO_DIR, m.photo_filename)); } catch (_) {}
     db.prepare(`UPDATE members SET photo_filename = NULL WHERE member_id = ?`).run(id);
+    logActivity('member_photo_deleted',
+      `Member photo removed for #${id}`,
+      `/members/${id}`,
+      res.locals.user.user_id);
   }
   res.redirect(`/members/${id}`);
 });
@@ -898,6 +1036,10 @@ app.get('/photos/:filename', (req, res) => {
 app.post('/members/:id/delete', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   db.prepare(`UPDATE members SET deleted_at=CURRENT_TIMESTAMP WHERE member_id=?`).run(id);
+  logActivity('member_archived',
+    `Member #${id} archived`,
+    `/members/${id}`,
+    res.locals.user.user_id);
   res.redirect('/members');
 });
 

@@ -2,7 +2,7 @@
 // Reports: overview, print-all, day-born, collections, harvests, special,
 // expenses, financial summary, members. Read-only. register(app, ctx).
 const { esc, fmtMoney, fmtOutstanding, fmtDobShort } = require('../lib/format');
-const { table } = require('../lib/views');
+const { pageHero, statsRow, listCard, table } = require('../lib/views');
 
 module.exports.register = function register(app, ctx) {
   const { db, CHURCH_NAME } = ctx;
@@ -12,9 +12,12 @@ const REPORT_TABS = [
   ['/reports',          'Overview'],
   ['/reports/day-born', 'Day-Born'],
   ['/reports/collections','Collections'],
+  ['/reports/income',     'Income Detail'],
   ['/reports/harvests', 'Harvests'],
   ['/reports/special',  'Special Offerings'],
   ['/reports/expenses', 'Expenses'],
+  ['/reports/expense-detail', 'Expense Detail'],
+  ['/reports/funds',    'Funds'],
   ['/reports/financial','Financial Summary'],
   ['/reports/members',  'Members'],
 ];
@@ -49,6 +52,62 @@ function rangeForm(action, start, end, extra = '') {
     </details>
   </form>`;
 }
+function incomeRows(start, end) {
+  return db.prepare(`
+    SELECT service_date AS dt, 'Service Offering' AS category, st.type_name AS detail,
+           NULL AS giver_id, NULL AS giver, total_amount AS amount, 'Services' AS source
+      FROM services s JOIN service_types st USING(service_type_id)
+     WHERE s.deleted_at IS NULL AND s.total_amount > 0 AND s.service_date BETWEEN @start AND @end
+    UNION ALL
+    SELECT tithe_date, 'Tithe', 'Member tithe',
+           m.member_id, m.first_name || ' ' || m.last_name, t.amount, 'Tithes'
+      FROM tithes t JOIN members m USING(member_id)
+     WHERE t.deleted_at IS NULL AND t.tithe_date BETWEEN @start AND @end
+    UNION ALL
+    SELECT transaction_date, 'Generic Income',
+           COALESCE(NULLIF(subcategory, ''), category),
+           ir.member_id, COALESCE(m.first_name || ' ' || m.last_name, ir.received_from), ir.amount, 'Generic Income'
+      FROM income_records ir LEFT JOIN members m ON m.member_id=ir.member_id
+     WHERE ir.deleted_at IS NULL AND ir.transaction_date BETWEEN @start AND @end
+    UNION ALL
+    SELECT collection_date, 'Day-Born Collection', day_born,
+           NULL, day_born || ' day-born group', amount, 'Day-Borns'
+      FROM day_born_collections
+     WHERE deleted_at IS NULL AND collection_date BETWEEN @start AND @end
+    UNION ALL
+    SELECT COALESCE(harvest_date, harvest_year || '-01-01'), 'Harvest', harvest_name,
+           NULL, COALESCE(o.name, 'Church-wide'), total_collected, 'Harvests'
+      FROM harvests h LEFT JOIN organizations o USING(org_id)
+     WHERE h.deleted_at IS NULL AND h.total_collected > 0
+       AND COALESCE(harvest_date, harvest_year || '-01-01') BETWEEN @start AND @end
+    UNION ALL
+    SELECT offering_date, 'Special Offering', sc.category_name,
+           sp.donor_id, COALESCE(m.first_name || ' ' || m.last_name, sp.donor_name_manual, 'Anonymous'), sp.amount, 'Special Offerings'
+      FROM special_offerings sp
+      JOIN special_categories sc USING(special_cat_id)
+      LEFT JOIN members m ON m.member_id=sp.donor_id
+     WHERE sp.deleted_at IS NULL AND sp.offering_date BETWEEN @start AND @end
+    UNION ALL
+    SELECT paid_on, 'Pledge Payment', h.harvest_name,
+           m.member_id, m.first_name || ' ' || m.last_name, pp.amount, 'Pledge Payments'
+      FROM pledge_payments pp
+      JOIN pledges p USING(pledge_id)
+      JOIN harvests h USING(harvest_id)
+      JOIN members m USING(member_id)
+     WHERE pp.paid_on BETWEEN @start AND @end
+     ORDER BY dt DESC, source, category`).all({ start, end });
+}
+function groupTotals(rows, key) {
+  const map = new Map();
+  for (const row of rows) {
+    const label = row[key] || 'Unspecified';
+    const prev = map.get(label) || { label, count: 0, total: 0 };
+    prev.count += 1;
+    prev.total += Number(row.amount || 0);
+    map.set(label, prev);
+  }
+  return Array.from(map.values()).sort((a, b) => b.total - a.total);
+}
 const DAY_ORDER_CASE = `CASE day_born
   WHEN 'Sunday' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Tuesday' THEN 3
   WHEN 'Wednesday' THEN 4 WHEN 'Thursday' THEN 5 WHEN 'Friday' THEN 6
@@ -57,23 +116,56 @@ const MONTH_NAMES = ['','January','February','March','April','May','June','July'
 
 // ---------- reports: overview ----------
 app.get('/reports', (req, res) => {
+  const year = new Date().getFullYear().toString();
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  const metrics = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM members WHERE deleted_at IS NULL) members,
+      (SELECT COUNT(*) FROM events WHERE event_type='service') services,
+      (SELECT COALESCE(SUM(total_amount),0) FROM services WHERE deleted_at IS NULL AND service_date BETWEEN @monthStart AND @today) service_income_month,
+      (SELECT COALESCE(SUM(amount),0) FROM expenses WHERE spent_on BETWEEN @monthStart AND @today) expenses_month,
+      (SELECT COUNT(*) FROM broadcasts) broadcasts,
+      (SELECT COUNT(*) FROM activity_log WHERE occurred_at >= datetime('now','-7 days')) activity_7d
+  `).get({ monthStart, today });
   const tiles = [
     ['/reports/day-born',     '📅', 'Day-Born',          'Sample-screen style: 4 summary cards, bar chart, crosstab.'],
     ['/reports/collections',  '₵',  'Collections',       'Daily, weekly, monthly, annual and year-over-year.'],
+    ['/reports/income',       '↗',  'Income Detail',     'All income sources, category mix, top givers and CSV export.'],
     ['/reports/harvests',     '🌾', 'Harvests',          'Status, rankings, pledge fulfillment, year comparison.'],
     ['/reports/special',      '✨', 'Special Offerings', 'By category, by donor, over time, receipts log.'],
     ['/reports/expenses',     '🧾', 'Expenses',          'Categories, monthly trend, payment methods, pending receipts.'],
+    ['/reports/expense-detail','↘', 'Expense Detail',    'Expense register by category, method, fund and project.'],
+    ['/reports/funds',        '◎',  'Funds',             'Fund balances, raised/spent movement and restricted totals.'],
     ['/reports/financial',    '📊', 'Financial Summary', 'Income vs expenses, cash flow, group contribution.'],
     ['/reports/members',      '👥', 'Members',           'Birthdays, missed Sundays, top givers, follow-ups.'],
   ];
+  const quickExports = table(['Export', 'Format', 'Open'], [
+    ['Members', 'CSV', '<a href="/members.csv">Download</a>'],
+    ['Income detail', 'CSV', `<a href="/reports/income.csv?start=${year}-01-01&end=${year}-12-31">Download</a>`],
+    ['Expense detail', 'CSV', `<a href="/reports/expense-detail.csv?start=${year}-01-01&end=${year}-12-31">Download</a>`],
+    ['Financial summary', 'CSV', `<a href="/reports/financial.csv?year=${esc(year)}">Download</a>`],
+    ['Funds', 'CSV', '<a href="/finance/reports/funds.csv">Download</a>'],
+    ['Ledger', 'CSV', '<a href="/finance/accounting/ledger.csv">Download</a>'],
+  ]);
   const body = `
+    ${pageHero('Reports', 'Command center for church analytics, exports and printable summaries.')}
     ${reportTabs('/reports')}
+    ${statsRow([
+      { cls: 'gold', icon: '👥', value: Number(metrics.members).toLocaleString(), label: 'Members' },
+      { cls: 'green', icon: '✓', value: Number(metrics.services).toLocaleString(), label: 'Services' },
+      { cls: 'blue', icon: '₵', value: fmtMoney(metrics.service_income_month), label: 'Service income this month' },
+      { cls: 'orange', icon: '→', value: fmtMoney(metrics.expenses_month), label: 'Expenses this month' },
+      { cls: 'purple', icon: '📣', value: Number(metrics.broadcasts).toLocaleString(), label: 'Broadcasts' },
+      { cls: 'blue', icon: '•', value: Number(metrics.activity_7d).toLocaleString(), label: 'Activity (7d)' },
+    ])}
     <p class="muted-text">Pick a report category below. Each report supports a date-range filter and a Print/PDF export.</p>
     <div class="report-tiles">${tiles.map(([href, ico, name, desc]) =>
       `<a class="report-tile" href="${href}">
          <div class="ico">${ico}</div>
          <div><div class="name">${esc(name)}</div><div class="desc">${esc(desc)}</div></div>
        </a>`).join('')}</div>
+    ${listCard({ title: 'Quick Exports', count: 4, countLabel: 'exports', inner: quickExports })}
     <div class="card" style="margin-top:1.5rem">
       <div class="card-head"><h2>Print everything</h2><span class="meta">All sections, one document</span></div>
       <p class="muted-text">Build a single printable document containing every report section for a date range. Use your browser's Print dialog → "Save as PDF" to keep a copy.</p>
@@ -203,7 +295,15 @@ app.get('/reports/print', (req, res) => {
       + (SELECT COALESCE(SUM(total_collected),0) FROM harvests
         WHERE deleted_at IS NULL AND COALESCE(harvest_date, harvest_year || '-01-01') BETWEEN @s AND @e)
       + (SELECT COALESCE(SUM(amount),0) FROM special_offerings
-        WHERE deleted_at IS NULL AND offering_date BETWEEN @s AND @e) AS income,
+        WHERE deleted_at IS NULL AND offering_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM tithes
+        WHERE deleted_at IS NULL AND tithe_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM income_records
+        WHERE deleted_at IS NULL AND transaction_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM day_born_collections
+        WHERE deleted_at IS NULL AND collection_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM pledge_payments
+        WHERE paid_on BETWEEN @s AND @e) AS income,
       (SELECT COALESCE(SUM(amount),0) FROM expenses
         WHERE spent_on BETWEEN @s AND @e) AS expenses
   `).get({ s: start, e: end });
@@ -880,6 +980,22 @@ app.get('/reports/financial.csv', (req, res) => {
       SELECT strftime('%Y-%m', offering_date), SUM(amount)
         FROM special_offerings WHERE deleted_at IS NULL AND strftime('%Y', offering_date)=@y
         GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', tithe_date), SUM(amount)
+        FROM tithes WHERE deleted_at IS NULL AND strftime('%Y', tithe_date)=@y
+        GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', transaction_date), SUM(amount)
+        FROM income_records WHERE deleted_at IS NULL AND strftime('%Y', transaction_date)=@y
+        GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', collection_date), SUM(amount)
+        FROM day_born_collections WHERE deleted_at IS NULL AND strftime('%Y', collection_date)=@y
+        GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', paid_on), SUM(amount)
+        FROM pledge_payments WHERE strftime('%Y', paid_on)=@y
+        GROUP BY 1
     ),
     me AS (
       SELECT strftime('%Y-%m', spent_on) AS ym, SUM(amount) AS amt
@@ -910,7 +1026,15 @@ app.get('/reports/financial', (req, res) => {
       + (SELECT COALESCE(SUM(total_collected),0) FROM harvests
         WHERE deleted_at IS NULL AND COALESCE(harvest_date, harvest_year || '-01-01') BETWEEN @s AND @e)
       + (SELECT COALESCE(SUM(amount),0) FROM special_offerings
-        WHERE deleted_at IS NULL AND offering_date BETWEEN @s AND @e) AS income,
+        WHERE deleted_at IS NULL AND offering_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM tithes
+        WHERE deleted_at IS NULL AND tithe_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM income_records
+        WHERE deleted_at IS NULL AND transaction_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM day_born_collections
+        WHERE deleted_at IS NULL AND collection_date BETWEEN @s AND @e)
+      + (SELECT COALESCE(SUM(amount),0) FROM pledge_payments
+        WHERE paid_on BETWEEN @s AND @e) AS income,
       (SELECT COALESCE(SUM(amount),0) FROM expenses
         WHERE spent_on BETWEEN @s AND @e) AS expenses
   `).get({ s: start, e: end });
@@ -929,6 +1053,22 @@ app.get('/reports/financial', (req, res) => {
       UNION ALL
       SELECT strftime('%Y-%m', offering_date), SUM(amount)
         FROM special_offerings WHERE deleted_at IS NULL AND strftime('%Y', offering_date)=@y
+        GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', tithe_date), SUM(amount)
+        FROM tithes WHERE deleted_at IS NULL AND strftime('%Y', tithe_date)=@y
+        GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', transaction_date), SUM(amount)
+        FROM income_records WHERE deleted_at IS NULL AND strftime('%Y', transaction_date)=@y
+        GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', collection_date), SUM(amount)
+        FROM day_born_collections WHERE deleted_at IS NULL AND strftime('%Y', collection_date)=@y
+        GROUP BY 1
+      UNION ALL
+      SELECT strftime('%Y-%m', paid_on), SUM(amount)
+        FROM pledge_payments WHERE strftime('%Y', paid_on)=@y
         GROUP BY 1
     ),
     me AS (
@@ -992,6 +1132,205 @@ app.get('/reports/financial', (req, res) => {
         `<strong>${fmtMoney(r.org_harvest_total + r.member_pledges_paid)}</strong>`]))}
   `;
   res.page({ title: 'Financial Summary', active: '/reports', body });
+});
+
+// ---------- reports: in-depth finance ----------
+app.get('/reports/income.csv', (req, res) => {
+  const { start, end } = defaultRange(req);
+  const rows = incomeRows(start, end);
+  sendCsv(res, 'income-detail.csv', [
+    ['Date', 'Category', 'Detail', 'Giver', 'Amount', 'Source'],
+    ...rows.map((row) => [row.dt, row.category, row.detail || '', row.giver || '', row.amount, row.source]),
+  ]);
+});
+
+app.get('/reports/income', (req, res) => {
+  const { start, end } = defaultRange(req);
+  const rows = incomeRows(start, end);
+  const total = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const byCategory = groupTotals(rows, 'category');
+  const bySource = groupTotals(rows, 'source');
+  const topGivers = groupTotals(rows.filter((row) => row.giver), 'giver').slice(0, 20);
+  const monthly = db.prepare(`
+    WITH income AS (
+      SELECT service_date dt, total_amount amount FROM services WHERE deleted_at IS NULL AND total_amount > 0
+      UNION ALL SELECT tithe_date, amount FROM tithes WHERE deleted_at IS NULL
+      UNION ALL SELECT transaction_date, amount FROM income_records WHERE deleted_at IS NULL
+      UNION ALL SELECT collection_date, amount FROM day_born_collections WHERE deleted_at IS NULL
+      UNION ALL SELECT COALESCE(harvest_date, harvest_year || '-01-01'), total_collected FROM harvests WHERE deleted_at IS NULL AND total_collected > 0
+      UNION ALL SELECT offering_date, amount FROM special_offerings WHERE deleted_at IS NULL
+      UNION ALL SELECT paid_on, amount FROM pledge_payments
+    )
+    SELECT substr(dt, 1, 7) ym, COALESCE(SUM(amount),0) total
+    FROM income
+    WHERE dt BETWEEN @start AND @end
+    GROUP BY ym ORDER BY ym`).all({ start, end });
+  const body = `
+    ${reportTabs('/reports/income')}
+    ${rangeForm('/reports/income', start, end, `<a class="btn ghost" href="/reports/income.csv?start=${esc(start)}&end=${esc(end)}">Export CSV</a>`)}
+    ${statsRow([
+      { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Total income' },
+      { cls: 'blue', icon: '#', value: rows.length, label: 'Income records' },
+      { cls: 'purple', icon: '↗', value: byCategory.length, label: 'Categories' },
+    ])}
+    <section class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Income by category</h2><span class="meta">${esc(start)} → ${esc(end)}</span></div>
+      ${byCategory.length ? table(['Category', 'Records', 'Total'],
+        byCategory.map((row) => [esc(row.label), row.count, fmtMoney(row.total)]))
+        : '<p class="muted-text">No income in this period.</p>'}
+    </section>
+    <section class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Income by source</h2><span class="meta">Finance app style source mix</span></div>
+      ${bySource.length ? table(['Source', 'Records', 'Total'],
+        bySource.map((row) => [esc(row.label), row.count, fmtMoney(row.total)]))
+        : '<p class="muted-text">No source mix available.</p>'}
+    </section>
+    <section class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Monthly income trend</h2><span class="meta">Period activity</span></div>
+      ${monthly.length ? table(['Month', 'Total'], monthly.map((row) => [esc(row.ym), fmtMoney(row.total)]))
+        : '<p class="muted-text">No monthly trend for this period.</p>'}
+    </section>
+    <section class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Top givers / payers</h2><span class="meta">Named records only</span></div>
+      ${topGivers.length ? table(['Name', 'Records', 'Total'],
+        topGivers.map((row) => [esc(row.label), row.count, fmtMoney(row.total)]))
+        : '<p class="muted-text">No named givers in this period.</p>'}
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Income register</h2><span class="meta">${rows.length} rows</span></div>
+      ${rows.length ? table(['Date', 'Category', 'Detail', 'Giver', 'Amount', 'Source'],
+        rows.slice(0, 200).map((row) => [
+          esc(row.dt), esc(row.category), esc(row.detail || '—'), esc(row.giver || '—'), fmtMoney(row.amount), esc(row.source),
+        ])) : '<p class="muted-text">No income in this period.</p>'}
+    </section>`;
+  res.page({ title: 'Income Detail Report', active: '/reports', body });
+});
+
+app.get('/reports/expense-detail.csv', (req, res) => {
+  const { start, end } = defaultRange(req);
+  const rows = db.prepare(`
+    SELECT e.spent_on, COALESCE(ec.category_name, e.category) category, e.description,
+           e.paid_to, e.payment_method, f.name fund_name, p.name project_name, e.amount, e.approval_status
+    FROM expenses e
+    LEFT JOIN expense_categories ec USING(expense_cat_id)
+    LEFT JOIN funds f USING(fund_id)
+    LEFT JOIN finance_projects p USING(project_id)
+    WHERE e.spent_on BETWEEN ? AND ?
+    ORDER BY e.spent_on DESC, e.expense_id DESC`).all(start, end);
+  sendCsv(res, 'expense-detail.csv', [
+    ['Date', 'Category', 'Description', 'Paid To', 'Method', 'Fund', 'Project', 'Amount', 'Status'],
+    ...rows.map((row) => [
+      row.spent_on, row.category || '', row.description || '', row.paid_to || '',
+      row.payment_method || '', row.fund_name || '', row.project_name || '', row.amount, row.approval_status || '',
+    ]),
+  ]);
+});
+
+app.get('/reports/expense-detail', (req, res) => {
+  const { start, end } = defaultRange(req);
+  const rows = db.prepare(`
+    SELECT e.*, COALESCE(ec.category_name, e.category) category_name, f.name fund_name, p.name project_name
+    FROM expenses e
+    LEFT JOIN expense_categories ec USING(expense_cat_id)
+    LEFT JOIN funds f USING(fund_id)
+    LEFT JOIN finance_projects p USING(project_id)
+    WHERE e.spent_on BETWEEN ? AND ?
+    ORDER BY e.spent_on DESC, e.expense_id DESC`).all(start, end);
+  const total = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const categoryRows = groupTotals(rows.map((row) => ({ ...row, amount: row.amount, category: row.category_name })), 'category');
+  const methodRows = groupTotals(rows.map((row) => ({ ...row, amount: row.amount, method: row.payment_method || 'Unspecified' })), 'method');
+  const fundRows = groupTotals(rows.map((row) => ({ ...row, amount: row.amount, fund: row.fund_name || 'General fund' })), 'fund');
+  const body = `
+    ${reportTabs('/reports/expense-detail')}
+    ${rangeForm('/reports/expense-detail', start, end, `<a class="btn ghost" href="/reports/expense-detail.csv?start=${esc(start)}&end=${esc(end)}">Export CSV</a>`)}
+    ${statsRow([
+      { cls: 'orange', icon: '₵', value: fmtMoney(total), label: 'Total expenses' },
+      { cls: 'blue', icon: '#', value: rows.length, label: 'Expense records' },
+      { cls: 'purple', icon: '↘', value: categoryRows.length, label: 'Categories' },
+    ])}
+    <section class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Expenses by category</h2><span class="meta">Control spending by type</span></div>
+      ${categoryRows.length ? table(['Category', 'Records', 'Total'],
+        categoryRows.map((row) => [esc(row.label), row.count, fmtMoney(row.total)]))
+        : '<p class="muted-text">No expenses in this period.</p>'}
+    </section>
+    <section class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Expenses by payment method</h2><span class="meta">Cash, bank, mobile money and other</span></div>
+      ${methodRows.length ? table(['Method', 'Records', 'Total'],
+        methodRows.map((row) => [esc(row.label), row.count, fmtMoney(row.total)]))
+        : '<p class="muted-text">No payment-method totals.</p>'}
+    </section>
+    <section class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Expenses by fund</h2><span class="meta">Restricted fund visibility</span></div>
+      ${fundRows.length ? table(['Fund', 'Records', 'Total'],
+        fundRows.map((row) => [esc(row.label), row.count, fmtMoney(row.total)]))
+        : '<p class="muted-text">No fund totals.</p>'}
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Expense register</h2><span class="meta">${rows.length} rows</span></div>
+      ${rows.length ? table(['Date', 'Category', 'Description', 'Paid to', 'Method', 'Fund', 'Project', 'Amount', 'Status'],
+        rows.slice(0, 200).map((row) => [
+          esc(row.spent_on), esc(row.category_name || '—'), esc(row.description || '—'),
+          esc(row.paid_to || '—'), esc(row.payment_method || '—'),
+          esc(row.fund_name || 'General fund'), esc(row.project_name || '—'),
+          fmtMoney(row.amount), esc(row.approval_status || 'PAID'),
+        ])) : '<p class="muted-text">No expenses in this period.</p>'}
+    </section>`;
+  res.page({ title: 'Expense Detail Report', active: '/reports', body });
+});
+
+app.get('/reports/funds', (req, res) => {
+  const funds = db.prepare(`
+    SELECT f.fund_id, COALESCE(f.code, '') code, f.name, f.fund_type, f.restricted, f.opening_balance, f.responsible_officer,
+           ROUND(COALESCE(SUM(CASE WHEN a.account_type='INCOME' THEN jl.credit - jl.debit ELSE 0 END),0),2) raised,
+           ROUND(COALESCE(SUM(CASE WHEN a.account_type='EXPENSE' THEN jl.debit - jl.credit ELSE 0 END),0),2) spent
+    FROM funds f
+    LEFT JOIN journal_lines jl ON jl.fund_id=f.fund_id
+    LEFT JOIN journal_entries je ON je.entry_id=jl.entry_id AND je.status IN ('POSTED','REVERSED')
+    LEFT JOIN accounts a ON a.account_id=jl.account_id
+    WHERE f.active=1
+    GROUP BY f.fund_id
+    ORDER BY f.restricted DESC, f.name`).all();
+  const rows = funds.map((fund) => ({
+    ...fund,
+    balance: Number(fund.opening_balance || 0) + Number(fund.raised || 0) - Number(fund.spent || 0),
+  }));
+  const totals = rows.reduce((acc, row) => {
+    acc.opening += Number(row.opening_balance || 0);
+    acc.raised += Number(row.raised || 0);
+    acc.spent += Number(row.spent || 0);
+    acc.balance += Number(row.balance || 0);
+    if (row.restricted) acc.restricted += Number(row.balance || 0);
+    return acc;
+  }, { opening: 0, raised: 0, spent: 0, balance: 0, restricted: 0 });
+  const body = `
+    ${reportTabs('/reports/funds')}
+    <div class="page-actions">
+      <a class="btn ghost" href="/finance/reports/funds">Printable finance fund report</a>
+      <a class="btn ghost" href="/finance/reports/funds.csv">Export CSV</a>
+    </div>
+    ${statsRow([
+      { cls: 'green', icon: '₵', value: fmtMoney(totals.balance), label: 'Total fund balance' },
+      { cls: 'orange', icon: 'R', value: fmtMoney(totals.restricted), label: 'Restricted balance' },
+      { cls: 'blue', icon: '#', value: rows.length, label: 'Active funds' },
+    ])}
+    <section class="card">
+      <div class="card-head"><h2>Fund movement</h2><span class="meta">Ledger-derived raised and spent totals</span></div>
+      ${rows.length ? table(['Code', 'Fund', 'Type', 'Restriction', 'Officer', 'Opening', 'Raised', 'Spent', 'Balance'],
+        rows.map((row) => [
+          esc(row.code) || '—', esc(row.name), esc((row.fund_type || 'GENERAL').replace(/_/g, ' ')),
+          row.restricted ? 'Restricted' : 'Unrestricted',
+          esc(row.responsible_officer || '—'),
+          fmtMoney(row.opening_balance || 0), fmtMoney(row.raised), fmtMoney(row.spent), `<strong>${fmtMoney(row.balance)}</strong>`,
+        ]).concat([[
+          '', '<strong>Total</strong>', '', '', '',
+          `<strong>${fmtMoney(totals.opening)}</strong>`,
+          `<strong>${fmtMoney(totals.raised)}</strong>`,
+          `<strong>${fmtMoney(totals.spent)}</strong>`,
+          `<strong>${fmtMoney(totals.balance)}</strong>`,
+        ]])) : '<p class="muted-text">No active funds configured.</p>'}
+    </section>`;
+  res.page({ title: 'Fund Report', active: '/reports', body });
 });
 
 // ---------- reports: member-focused (existing reports) ----------

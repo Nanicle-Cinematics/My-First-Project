@@ -107,8 +107,19 @@ app.get('/communications', (req, res) => {
     SELECT
       (SELECT COUNT(*) FROM announcements) AS announcements,
       (SELECT COUNT(*) FROM broadcasts) AS broadcasts,
-      (SELECT COUNT(*) FROM members WHERE deleted_at IS NULL AND preferred_channel != 'none') AS contactable
+      (SELECT COUNT(*) FROM members WHERE deleted_at IS NULL AND preferred_channel != 'none') AS contactable,
+      (SELECT COUNT(*) FROM members WHERE deleted_at IS NULL AND preferred_channel != 'none'
+         AND (COALESCE(NULLIF(TRIM(email), ''), NULLIF(TRIM(mobile_phone), '')) IS NOT NULL)) AS reachable,
+      (SELECT COUNT(*) FROM broadcast_recipients WHERE status='failed') AS failed_recipients,
+      (SELECT COUNT(*) FROM broadcast_recipients WHERE status='sent') AS sent_recipients,
+      (SELECT COUNT(*) FROM broadcast_recipients WHERE status='pending') AS pending_recipients
   `).get();
+  const readinessRows = [
+    ['SMS provider', ARKESEL_API_KEY ? 'configured' : 'dry-run', ARKESEL_API_KEY ? 'Arkesel key is set' : 'SMS sends will be simulated until ARKESEL_API_KEY is configured.'],
+    ['Email provider', SMTP_HOST && SMTP_USER && SMTP_PASS ? 'configured' : 'dry-run', SMTP_HOST && SMTP_USER && SMTP_PASS ? `${SMTP_HOST}` : 'Email sends will be simulated until SMTP is configured.'],
+    ['Reachable members', Number(stats.reachable).toLocaleString(), `${Number(stats.contactable).toLocaleString()} members have a messaging preference.`],
+    ['Failed recipients', Number(stats.failed_recipients).toLocaleString(), 'Review broadcast history for failed destinations.'],
+  ];
   const broadcastCta = res.locals.isAdmin
     ? `<div class="page-actions">
          <a class="btn primary" href="/communications/broadcast">＋ Send SMS/email broadcast</a>
@@ -123,8 +134,14 @@ app.get('/communications', (req, res) => {
         { cls: 'gold', icon: '✉', value: Number(stats.announcements).toLocaleString(), label: 'Announcements' },
         { cls: 'green', icon: '📣', value: Number(stats.broadcasts).toLocaleString(), label: 'Broadcasts' },
         { cls: 'blue', icon: '✓', value: Number(stats.contactable).toLocaleString(), label: 'Contactable Members' },
+        { cls: Number(stats.failed_recipients) ? 'orange' : 'green', icon: '!', value: Number(stats.failed_recipients).toLocaleString(), label: 'Failed Recipients' },
       ])}
-      ${broadcastCta}${newForm}<div class="card-head" style="padding-top:0.5rem"><h2>Recent announcements</h2></div>${list}`,
+      ${broadcastCta}
+      <section class="card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Messaging Readiness</h2><span class="meta">Providers and delivery health</span></div>
+        ${table(['Check', 'Status', 'Detail'], readinessRows.map((row) => row.map(esc)))}
+      </section>
+      ${newForm}<div class="card-head" style="padding-top:0.5rem"><h2>Recent announcements</h2></div>${list}`,
   });
 });
 

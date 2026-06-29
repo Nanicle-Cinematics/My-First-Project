@@ -138,9 +138,71 @@ CREATE TABLE attendance (
 -- Funds (general, building, missions, benevolence, ...).
 CREATE TABLE funds (
     fund_id   INTEGER PRIMARY KEY,
+    code      TEXT UNIQUE,
     name      TEXT    NOT NULL UNIQUE,
+    fund_type TEXT    NOT NULL DEFAULT 'GENERAL'
+              CHECK (fund_type IN ('GENERAL','BUILDING','WELFARE','MISSION','HARVEST','ANNIVERSARY','YOUTH','MUSIC','CHILDREN','PROJECT','RESTRICTED_DONATION')),
+    restricted INTEGER NOT NULL DEFAULT 0,
+    opening_balance REAL NOT NULL DEFAULT 0 CHECK (opening_balance >= 0),
+    responsible_officer TEXT,
+    notes     TEXT,
     active    INTEGER NOT NULL DEFAULT 1
 );
+
+-- Double-entry accounting backbone. Finance screens can stay simple, while
+-- verified income and paid expenses post balanced journals behind the scenes.
+CREATE TABLE accounts (
+    account_id     INTEGER PRIMARY KEY,
+    code           TEXT NOT NULL UNIQUE,
+    name           TEXT NOT NULL,
+    account_type   TEXT NOT NULL CHECK (account_type IN ('ASSET','LIABILITY','FUND_EQUITY','INCOME','EXPENSE')),
+    normal_balance TEXT NOT NULL CHECK (normal_balance IN ('DEBIT','CREDIT')),
+    is_system      INTEGER NOT NULL DEFAULT 0,
+    parent_id      INTEGER REFERENCES accounts(account_id),
+    active         INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX idx_accounts_type ON accounts(account_type);
+
+CREATE TABLE financial_periods (
+    period_id     INTEGER PRIMARY KEY,
+    year          INTEGER NOT NULL,
+    month         INTEGER,
+    status        TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED','LOCKED')),
+    closed_at     TEXT,
+    closed_by     INTEGER REFERENCES users(user_id),
+    reopen_reason TEXT,
+    created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(year, month)
+);
+
+CREATE TABLE journal_entries (
+    entry_id     INTEGER PRIMARY KEY,
+    entry_no     TEXT NOT NULL UNIQUE,
+    entry_date   TEXT NOT NULL,
+    memo         TEXT,
+    status       TEXT NOT NULL DEFAULT 'POSTED' CHECK (status IN ('DRAFT','POSTED','REVERSED')),
+    source_type  TEXT NOT NULL DEFAULT 'OTHER',
+    source_id    TEXT,
+    period_id    INTEGER REFERENCES financial_periods(period_id),
+    reverses_id  INTEGER UNIQUE REFERENCES journal_entries(entry_id),
+    created_by   INTEGER REFERENCES users(user_id),
+    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_journal_entries_source ON journal_entries(source_type, source_id);
+CREATE INDEX idx_journal_entries_date ON journal_entries(entry_date);
+
+CREATE TABLE journal_lines (
+    line_id    INTEGER PRIMARY KEY,
+    entry_id   INTEGER NOT NULL REFERENCES journal_entries(entry_id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL REFERENCES accounts(account_id),
+    fund_id    INTEGER REFERENCES funds(fund_id),
+    debit      REAL NOT NULL DEFAULT 0 CHECK (debit >= 0),
+    credit     REAL NOT NULL DEFAULT 0 CHECK (credit >= 0),
+    memo       TEXT,
+    CHECK ((debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0))
+);
+CREATE INDEX idx_journal_lines_account ON journal_lines(account_id);
+CREATE INDEX idx_journal_lines_fund ON journal_lines(fund_id);
 
 -- Contributions / tithes / offerings.
 CREATE TABLE contributions (
@@ -198,9 +260,143 @@ CREATE TABLE expenses (
     approved_by      INTEGER REFERENCES users(user_id),
     receipt_attached INTEGER NOT NULL DEFAULT 0,
     fund_id          INTEGER REFERENCES funds(fund_id),
+    project_id       INTEGER REFERENCES finance_projects(project_id),
+    journal_entry_id INTEGER REFERENCES journal_entries(entry_id),
+    approval_status  TEXT    NOT NULL DEFAULT 'PAID'
+                     CHECK (approval_status IN ('DRAFT','SUBMITTED','APPROVED','PAID','REJECTED')),
+    submitted_at     TEXT,
+    approved_at      TEXT,
+    paid_at          TEXT,
+    rejected_at      TEXT,
+    approval_note    TEXT,
     created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_expenses_date ON expenses(spent_on);
+
+CREATE TABLE finance_projects (
+    project_id          INTEGER PRIMARY KEY,
+    name                TEXT NOT NULL UNIQUE,
+    description         TEXT,
+    fund_id             INTEGER REFERENCES funds(fund_id),
+    target_amount       REAL NOT NULL DEFAULT 0 CHECK (target_amount >= 0),
+    responsible_officer TEXT,
+    start_date          TEXT,
+    end_date            TEXT,
+    status              TEXT NOT NULL DEFAULT 'ACTIVE'
+                        CHECK (status IN ('PLANNING','ACTIVE','ON_HOLD','COMPLETED','CANCELLED')),
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_finance_projects_status ON finance_projects(status);
+CREATE INDEX idx_finance_projects_fund ON finance_projects(fund_id);
+
+CREATE TABLE finance_budgets (
+    budget_id   INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    year        INTEGER NOT NULL,
+    month       INTEGER,
+    scope       TEXT NOT NULL DEFAULT 'ANNUAL' CHECK (scope IN ('ANNUAL','MONTHLY')),
+    status      TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT','APPROVED','CLOSED')),
+    notes       TEXT,
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (month IS NULL OR (month BETWEEN 1 AND 12))
+);
+CREATE INDEX idx_finance_budgets_year ON finance_budgets(year, month);
+
+CREATE TABLE finance_budget_lines (
+    line_id     INTEGER PRIMARY KEY,
+    budget_id   INTEGER NOT NULL REFERENCES finance_budgets(budget_id) ON DELETE CASCADE,
+    line_type   TEXT NOT NULL CHECK (line_type IN ('INCOME','EXPENSE')),
+    category    TEXT NOT NULL,
+    account_id  INTEGER REFERENCES accounts(account_id),
+    fund_id     INTEGER REFERENCES funds(fund_id),
+    amount      REAL NOT NULL CHECK (amount >= 0),
+    notes       TEXT
+);
+CREATE INDEX idx_finance_budget_lines_budget ON finance_budget_lines(budget_id);
+
+CREATE TABLE payment_vouchers (
+    voucher_id         INTEGER PRIMARY KEY,
+    voucher_no         TEXT NOT NULL UNIQUE,
+    expense_id         INTEGER NOT NULL UNIQUE REFERENCES expenses(expense_id) ON DELETE CASCADE,
+    voucher_date       TEXT NOT NULL,
+    amount_in_words    TEXT NOT NULL,
+    supporting_doc_ref TEXT,
+    prepared_by        INTEGER REFERENCES users(user_id),
+    checked_by         TEXT,
+    approved_by        INTEGER REFERENCES users(user_id),
+    paid_by            INTEGER REFERENCES users(user_id),
+    received_by        TEXT,
+    notes              TEXT,
+    created_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_payment_vouchers_date ON payment_vouchers(voucher_date);
+
+CREATE TABLE finance_settings (
+    setting_id         INTEGER PRIMARY KEY CHECK (setting_id = 1),
+    receipt_prefix     TEXT NOT NULL DEFAULT 'DMC-RCT',
+    voucher_prefix     TEXT NOT NULL DEFAULT 'DMC-PV',
+    small_expense_max  REAL NOT NULL DEFAULT 500 CHECK (small_expense_max >= 0),
+    medium_expense_max REAL NOT NULL DEFAULT 5000 CHECK (medium_expense_max >= 0),
+    updated_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE income_records (
+    income_id        INTEGER PRIMARY KEY,
+    transaction_date TEXT NOT NULL,
+    category         TEXT NOT NULL,
+    subcategory      TEXT,
+    received_from    TEXT,
+    member_id        INTEGER REFERENCES members(member_id),
+    amount           REAL NOT NULL CHECK (amount > 0),
+    payment_method   TEXT NOT NULL DEFAULT 'Cash',
+    fund_id          INTEGER REFERENCES funds(fund_id),
+    project_id       INTEGER REFERENCES finance_projects(project_id),
+    reference_number TEXT,
+    description      TEXT,
+    receipt_number   TEXT UNIQUE,
+    recorded_by      INTEGER REFERENCES users(user_id),
+    journal_entry_id INTEGER REFERENCES journal_entries(entry_id),
+    deleted_at       TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_income_records_date ON income_records(transaction_date);
+CREATE INDEX idx_income_records_category ON income_records(category);
+
+CREATE TABLE day_born_collections (
+    collection_id    INTEGER PRIMARY KEY,
+    collection_date  TEXT NOT NULL,
+    day_born         TEXT NOT NULL CHECK (day_born IN ('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday')),
+    amount           REAL NOT NULL CHECK (amount > 0),
+    head_count       INTEGER NOT NULL DEFAULT 0 CHECK (head_count >= 0),
+    payment_method   TEXT NOT NULL DEFAULT 'Cash',
+    fund_id          INTEGER REFERENCES funds(fund_id),
+    reference_number TEXT,
+    receipt_number   TEXT UNIQUE,
+    recorded_by      INTEGER REFERENCES users(user_id),
+    journal_entry_id INTEGER REFERENCES journal_entries(entry_id),
+    notes            TEXT,
+    deleted_at       TEXT,
+    created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_day_born_collections_date ON day_born_collections(collection_date);
+CREATE INDEX idx_day_born_collections_day ON day_born_collections(day_born);
+
+CREATE TABLE finance_receipts (
+    receipt_id     INTEGER PRIMARY KEY,
+    receipt_number TEXT NOT NULL UNIQUE,
+    source_type    TEXT NOT NULL,
+    source_id      INTEGER NOT NULL,
+    receipt_date   TEXT NOT NULL,
+    received_from  TEXT,
+    amount         REAL NOT NULL CHECK (amount > 0),
+    description    TEXT,
+    created_by     INTEGER REFERENCES users(user_id),
+    created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    voided_at      TEXT,
+    void_reason    TEXT
+);
+CREATE INDEX idx_finance_receipts_date ON finance_receipts(receipt_date);
+CREATE INDEX idx_finance_receipts_source ON finance_receipts(source_type, source_id);
 
 -- Welfare cases tracked by the church.
 CREATE TABLE welfare_cases (
@@ -287,6 +483,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name  TEXT,
     role          TEXT    NOT NULL DEFAULT 'admin'
                   CHECK (role IN ('admin','editor','viewer')),
+    finance_role  TEXT    NOT NULL DEFAULT 'none',
     created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     deleted_at    TEXT
 );
@@ -307,6 +504,7 @@ CREATE TABLE services (
     service_date    TEXT NOT NULL,
     total_amount    REAL NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
     recorded_by     INTEGER REFERENCES users(user_id),
+    journal_entry_id INTEGER REFERENCES journal_entries(entry_id),
     notes           TEXT,
     deleted_at      TEXT,
     created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -322,6 +520,7 @@ CREATE TABLE harvests (
     org_id          INTEGER REFERENCES organizations(org_id),
     total_collected REAL NOT NULL DEFAULT 0 CHECK (total_collected >= 0),
     recorded_by     INTEGER REFERENCES users(user_id),
+    journal_entry_id INTEGER REFERENCES journal_entries(entry_id),
     notes           TEXT,
     deleted_at      TEXT,
     created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -357,6 +556,7 @@ CREATE TABLE special_offerings (
     purpose           TEXT,
     receipt_number    TEXT,
     recorded_by       INTEGER REFERENCES users(user_id),
+    journal_entry_id  INTEGER REFERENCES journal_entries(entry_id),
     notes             TEXT,
     deleted_at        TEXT,
     created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -382,6 +582,7 @@ CREATE TABLE pledge_payments (
     paid_on        TEXT NOT NULL,
     receipt_number TEXT NOT NULL UNIQUE,
     recorded_by    INTEGER REFERENCES users(user_id),
+    journal_entry_id INTEGER REFERENCES journal_entries(entry_id),
     sent_at        TEXT,
     sent_channel   TEXT,
     notes          TEXT,
@@ -434,6 +635,21 @@ CREATE TABLE preaching_plan (
     deleted_at       TEXT
 );
 CREATE INDEX idx_preaching_date ON preaching_plan(preach_date);
+
+CREATE TABLE trial_signups (
+    signup_id    INTEGER PRIMARY KEY,
+    church_name  TEXT NOT NULL,
+    contact_name TEXT NOT NULL,
+    role         TEXT,
+    phone        TEXT NOT NULL,
+    email        TEXT,
+    plan         TEXT NOT NULL DEFAULT 'pro'
+                 CHECK (plan IN ('starter','pro','enterprise')),
+    member_count TEXT,
+    notes        TEXT,
+    status       TEXT NOT NULL DEFAULT 'new',
+    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 INSERT INTO service_types (type_name, description) VALUES
  ('Sunday Service',    'Regular Sunday worship service'),
