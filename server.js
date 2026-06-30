@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const OTPAuth = require('otpauth');
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
@@ -259,6 +260,9 @@ addColumnIfMissing('members', 'photo_filename',   `photo_filename TEXT`);
 addColumnIfMissing('members', 'emergency_contact_name',     `emergency_contact_name TEXT`);
 addColumnIfMissing('members', 'emergency_contact_phone',    `emergency_contact_phone TEXT`);
 addColumnIfMissing('members', 'emergency_contact_relation', `emergency_contact_relation TEXT`);
+addColumnIfMissing('users', 'email',        `email TEXT`);
+addColumnIfMissing('users', 'totp_secret',  `totp_secret TEXT`);
+addColumnIfMissing('users', 'totp_enabled', `totp_enabled INTEGER NOT NULL DEFAULT 0`);
 ensureLedgerSchema(db);
 db.exec(`CREATE TABLE IF NOT EXISTS payment_vouchers (
   voucher_id         INTEGER PRIMARY KEY,
@@ -356,6 +360,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS error_log (
   message     TEXT,
   stack       TEXT,
   user_id     INTEGER
+);`);
+db.exec(`CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  token_id   INTEGER PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(user_id),
+  token      TEXT    NOT NULL UNIQUE,
+  expires_at TEXT    NOT NULL,
+  used_at    TEXT,
+  created_at TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`);
 db.exec(`CREATE TABLE IF NOT EXISTS trial_signups (
   signup_id    INTEGER PRIMARY KEY,
@@ -958,6 +970,8 @@ app.use((req, res, next) => {
     return res.redirect('/setup');
   }
   if (req.path === '/login' || req.path === '/logout' || req.path === '/forgot') return next();
+  if (req.path === '/login/totp') return next();
+  if (req.path.startsWith('/reset-password/')) return next();
   if ((req.path === '/' || req.path === '/signup' || req.path === '/trial-signup') && !req.session.userId) return next();
   if (!req.session.userId) return res.redirect('/login');
   res.locals.user = db.prepare(
@@ -3447,6 +3461,53 @@ app.get('/help', (req, res) => {
   res.page({ title: 'Help & Guide', active: '/help', noHeader: true, body });
 });
 
+// ---------- data export ----------
+app.get('/admin/export', requireAdmin, (req, res) => {
+  const body = `
+    ${pageHero('Data Export', 'Download a full copy of all church data in JSON format.')}
+    <div class="card" style="max-width:560px">
+      <p>This export includes members, attendance, contributions, pledges, events, expenses, journal entries, and users (without password hashes). Use it for backups, migrations, or compliance.</p>
+      <p class="muted-text">The file may be large for established congregations. All dates are in ISO 8601 format (UTC).</p>
+      <div class="actions form-actions" style="margin-top:1.5rem">
+        <a class="btn primary" href="/admin/export/data.json">⬇ Download JSON export</a>
+      </div>
+    </div>`;
+  res.page({ title: 'Data Export', active: null, body });
+});
+
+app.get('/admin/export/data.json', requireAdmin, (req, res) => {
+  const snapshot = {
+    exported_at: new Date().toISOString(),
+    church_name: CHURCH_NAME,
+    members: db.prepare('SELECT * FROM members').all(),
+    attendance: db.prepare('SELECT * FROM attendance').all(),
+    tithes: db.prepare('SELECT * FROM tithes').all(),
+    pledges: db.prepare('SELECT * FROM pledges').all(),
+    pledge_payments: db.prepare('SELECT * FROM pledge_payments').all(),
+    events: db.prepare('SELECT * FROM events').all(),
+    event_rsvps: db.prepare('SELECT * FROM event_rsvps').all(),
+    expenses: db.prepare('SELECT * FROM expenses').all(),
+    income_records: db.prepare('SELECT * FROM income_records').all(),
+    journal_entries: db.prepare('SELECT * FROM journal_entries').all(),
+    journal_lines: db.prepare('SELECT * FROM journal_lines').all(),
+    accounts: db.prepare('SELECT * FROM accounts').all(),
+    funds: db.prepare('SELECT * FROM funds').all(),
+    services: db.prepare('SELECT * FROM services').all(),
+    harvests: db.prepare('SELECT * FROM harvests').all(),
+    announcements: db.prepare('SELECT * FROM announcements').all(),
+    ministries: db.prepare('SELECT * FROM ministries').all(),
+    organizations: db.prepare('SELECT * FROM organizations').all(),
+    users: db.prepare(
+      'SELECT user_id, username, display_name, email, role, finance_role, totp_enabled, created_at FROM users WHERE deleted_at IS NULL'
+    ).all(),
+  };
+  const filename = `church-export-${new Date().toISOString().slice(0,10)}.json`;
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify(snapshot, null, 2));
+  logActivity('data_export', 'Full JSON data export downloaded', '/admin/export', res.locals.user.user_id);
+});
+
 // ---------- settings ----------
 app.post('/settings/birthdays/run', requireOwner, async (req, res) => {
   try {
@@ -3712,12 +3773,18 @@ app.post('/settings/test-email', requireOwner, async (req, res) => {
 // ---------- profile (any signed-in user) ----------
 app.get('/profile', (req, res) => {
   const u = res.locals.user;
-  const flash = req.query.ok === '1' ? 'Password updated.' : null;
-  const error = req.query.e ? {
+  const dbUser = db.prepare(
+    'SELECT email, totp_enabled FROM users WHERE user_id=?'
+  ).get(u.user_id);
+  const flashMap = { '1': 'Password updated.', email: 'Email address saved.', '2fa_on': 'Two-factor authentication enabled.', '2fa_off': 'Two-factor authentication disabled.' };
+  const flash = flashMap[req.query.ok] || null;
+  const pwError = req.query.e ? ({
     short: 'New password must be at least 8 characters.',
     mismatch: 'New passwords do not match.',
     bad: 'Current password is incorrect.',
-  }[req.query.e] : null;
+  }[req.query.e] || null) : null;
+  const emailError = req.query.ee ? 'Invalid email address.' : null;
+  const totpError = req.query.te ? 'Invalid code — check your authenticator and try again.' : null;
   const roleLabel = ({ admin: 'Administrator', editor: 'Editor', viewer: 'Viewer' }[u.role] || u.role);
   const financeRoleLabel = FINANCE_ROLE_LABELS[u.finance_role || 'none'] || u.finance_role || 'No finance access';
   const body = `
@@ -3731,9 +3798,19 @@ app.get('/profile', (req, res) => {
         <dt>Finance role</dt><dd><span class="pill">${esc(financeRoleLabel)}</span></dd>
       </dl>
     </div>
-    <div class="card">
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-head"><h2>Email address</h2><span class="meta">Used for password reset</span></div>
+      ${emailError ? `<p class="error">${esc(emailError)}</p>` : ''}
+      <form class="form" method="post" action="/profile/email" style="box-shadow:none;border:0;padding:0">
+        <label class="wide">Email<input type="email" name="email" value="${esc(dbUser.email || '')}" placeholder="you@example.com"></label>
+        <div class="actions form-actions">
+          <button type="submit">Save email</button>
+        </div>
+      </form>
+    </div>
+    <div class="card" style="margin-bottom:1rem">
       <div class="card-head"><h2>Change password</h2><span class="meta">Min 8 characters</span></div>
-      ${error ? `<p class="error">${esc(error)}</p>` : ''}
+      ${pwError ? `<p class="error">${esc(pwError)}</p>` : ''}
       <form class="form" method="post" action="/profile/password" style="box-shadow:none;border:0;padding:0">
         <label class="wide">Current password<input type="password" name="current" required></label>
         <label class="wide">New password<input type="password" name="next" required minlength="8"></label>
@@ -3743,8 +3820,32 @@ app.get('/profile', (req, res) => {
           <button type="submit">Update password</button>
         </div>
       </form>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>Two-factor authentication</h2><span class="meta">${dbUser.totp_enabled ? '<span class="pill pill-admin">Enabled</span>' : 'Off'}</span></div>
+      ${totpError ? `<p class="error">${esc(totpError)}</p>` : ''}
+      ${dbUser.totp_enabled
+        ? `<p class="muted-text">2FA is active on your account. Use your authenticator app each time you sign in.</p>
+           <form method="post" action="/profile/2fa/disable" style="margin-top:1rem">
+             <label>Enter your password to disable 2FA<input type="password" name="password" required style="margin-top:.5rem"></label>
+             <div class="actions form-actions" style="margin-top:1rem">
+               <button class="danger" type="submit">Disable 2FA</button>
+             </div>
+           </form>`
+        : `<p class="muted-text">Add a time-based one-time password (TOTP) app like Google Authenticator, Authy, or 1Password to protect your account.</p>
+           <div class="actions form-actions" style="margin-top:1rem">
+             <a class="btn" href="/profile/2fa/setup">Set up 2FA</a>
+           </div>`}
     </div>`;
   res.page({ title: 'Profile', active: '/profile', noHeader: true, body, flash });
+});
+
+app.post('/profile/email', (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase();
+  if (email && !isEmailish(email)) return res.redirect('/profile?ee=1');
+  db.prepare('UPDATE users SET email=? WHERE user_id=?')
+    .run(email || null, res.locals.user.user_id);
+  res.redirect('/profile?ok=email');
 });
 
 app.post('/profile/password', (req, res) => {
@@ -3759,10 +3860,68 @@ app.post('/profile/password', (req, res) => {
   res.redirect('/profile?ok=1');
 });
 
+// 2FA setup: show QR code.
+app.get('/profile/2fa/setup', (req, res) => {
+  const u = db.prepare('SELECT username, totp_enabled FROM users WHERE user_id=?').get(res.locals.user.user_id);
+  if (u.totp_enabled) return res.redirect('/profile');
+  const secret = new OTPAuth.Secret();
+  req.session.pendingTotpSecret = secret.base32;
+  const totp = new OTPAuth.TOTP({
+    issuer: CHURCH_NAME,
+    label: u.username,
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    secret,
+  });
+  const uri = totp.toString();
+  const QRCode = require('qrcode');
+  QRCode.toDataURL(uri, (err, dataUrl) => {
+    const body = `
+      ${pageHero('Set up 2FA', 'Scan the QR code with your authenticator app, then verify.')}
+      <div class="card" style="max-width:460px">
+        <p>1. Open your authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
+        <p>2. Scan this QR code:</p>
+        ${err ? `<p class="error">Could not generate QR code.</p>` : `<img src="${esc(dataUrl)}" alt="2FA QR code" style="display:block;margin:1rem 0;max-width:220px">`}
+        <p>Or enter the key manually: <code style="word-break:break-all">${esc(secret.base32)}</code></p>
+        <p>3. Enter the 6-digit code from the app to confirm:</p>
+        <form method="post" action="/profile/2fa/enable" class="form" style="box-shadow:none;border:0;padding:0">
+          <label class="wide">Verification code<input type="text" name="token" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code"></label>
+          <div class="actions form-actions">
+            <a class="btn ghost" href="/profile">Cancel</a>
+            <button type="submit">Enable 2FA</button>
+          </div>
+        </form>
+      </div>`;
+    res.page({ title: 'Set up 2FA', active: '/profile', body });
+  });
+});
+
+app.post('/profile/2fa/enable', (req, res) => {
+  const secretB32 = req.session.pendingTotpSecret;
+  if (!secretB32) return res.redirect('/profile/2fa/setup');
+  const token = String(req.body.token || '').replace(/\s/g, '');
+  const totp = new OTPAuth.TOTP({ algorithm: 'SHA1', digits: 6, period: 30, secret: OTPAuth.Secret.fromBase32(secretB32) });
+  if (totp.validate({ token, window: 1 }) === null) return res.redirect('/profile?te=1');
+  delete req.session.pendingTotpSecret;
+  db.prepare('UPDATE users SET totp_secret=?, totp_enabled=1 WHERE user_id=?')
+    .run(secretB32, res.locals.user.user_id);
+  logSecurityEvent(req, 'totp_enabled', `user_id:${res.locals.user.user_id}`, res.locals.user.user_id);
+  res.redirect('/profile?ok=2fa_on');
+});
+
+app.post('/profile/2fa/disable', (req, res) => {
+  const u = db.prepare('SELECT password_hash FROM users WHERE user_id=?').get(res.locals.user.user_id);
+  if (!bcrypt.compareSync(req.body.password || '', u.password_hash)) return res.redirect('/profile?te=1');
+  db.prepare('UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE user_id=?').run(res.locals.user.user_id);
+  logSecurityEvent(req, 'totp_disabled', `user_id:${res.locals.user.user_id}`, res.locals.user.user_id);
+  res.redirect('/profile?ok=2fa_off');
+});
+
 // ---------- users management (admin only) ----------
 app.get('/users', requireOwner, (req, res) => {
   const users = db.prepare(
-    `SELECT user_id, username, display_name, role, finance_role, created_at FROM users
+    `SELECT user_id, username, display_name, role, finance_role, totp_enabled, created_at FROM users
      WHERE deleted_at IS NULL ORDER BY username`
   ).all();
   const rows = users.map((u) => [
@@ -3770,6 +3929,7 @@ app.get('/users', requireOwner, (req, res) => {
     esc(u.display_name) || '—',
     `<span class="role-badge role-${esc(u.role)}">${esc(u.role)}</span>`,
     esc(FINANCE_ROLE_LABELS[u.finance_role || 'none'] || u.finance_role || 'none'),
+    u.totp_enabled ? '<span class="pill pill-admin" title="2FA active">2FA ✓</span>' : '<span class="muted-text">—</span>',
     esc(u.created_at).slice(0, 10),
     `<form method="post" action="/users/${u.user_id}/role" class="inline">
        <select name="role">
@@ -3789,6 +3949,12 @@ app.get('/users', requireOwner, (req, res) => {
             <button type="submit">Reset</button>
           </form>`
        : ''}
+     ${(res.locals.isUserManager && u.totp_enabled)
+       ? `<form method="post" action="/users/${u.user_id}/disable-2fa" class="inline"
+            onsubmit="return confirm('Disable 2FA for ${esc(u.username)}?')">
+            <button type="submit">Disable 2FA</button>
+          </form>`
+       : ''}
      ${(res.locals.isUserManager && u.user_id !== res.locals.user.user_id)
        ? `<form method="post" action="/users/${u.user_id}/delete" class="inline"
             onsubmit="return confirm('Delete ${esc(u.username)}?')">
@@ -3805,7 +3971,7 @@ app.get('/users', requireOwner, (req, res) => {
       <strong>Treasurers</strong> record and review accounting, <strong>Auditors</strong> review accounting only,
       and <strong>Finance admins</strong> can do both.</p>
     ${res.locals.isUserManager ? '<div class="page-actions"><a class="btn primary" href="/users/new">＋ New user</a></div>' : ''}
-    ${table(['Username', 'Display name', 'Role', 'Finance role', 'Created', 'Actions'], rows)}`;
+    ${table(['Username', 'Display name', 'Role', 'Finance role', '2FA', 'Created', 'Actions'], rows)}`;
   res.page({ title: 'Users', active: '/users', noHeader: true, body });
 });
 
@@ -3880,6 +4046,13 @@ app.post('/users/:id/reset', requireUserManager, (req, res) => {
   db.prepare(`UPDATE users SET password_hash=? WHERE user_id=?`)
     .run(bcrypt.hashSync(password, 12), id);
   logSecurityEvent(req, 'user_password_reset', `user_id:${id}`, res.locals.user.user_id);
+  res.redirect('/users');
+});
+
+app.post('/users/:id/disable-2fa', requireUserManager, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare('UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE user_id=?').run(id);
+  logSecurityEvent(req, 'totp_disabled_by_admin', `user_id:${id}`, res.locals.user.user_id);
   res.redirect('/users');
 });
 
@@ -4270,22 +4443,94 @@ app.get('/login', (req, res) => {
 // than emailing a link (accounts have no email on file).
 app.get('/forgot', (req, res) => {
   if (req.session.userId) return res.redirect('/');
-  const admin = db.prepare(
-    `SELECT display_name, username FROM users
-       WHERE role='admin' AND deleted_at IS NULL ORDER BY user_id LIMIT 1`).get();
-  const who = admin ? esc(admin.display_name || admin.username) : 'your church administrator';
-  res.send(authPage('Reset your password', `
-    <p class="muted">Passwords for ${esc(CHURCH_NAME)} accounts are reset by your church
-      administrator${admin ? ` (<strong>${who}</strong>)` : ''}.</p>
-    <ol class="forgot-steps">
-      <li>Ask your administrator to open <strong>Users &amp; Roles</strong>.</li>
-      <li>They click <strong>Reset</strong> next to your account and set a new password.</li>
-      <li>Sign in with the new password, then change it from your <strong>Profile</strong>.</li>
-    </ol>
-    <p class="muted">If <em>you</em> are the main administrator and are locked out, restore access
-      from the server (or a database backup) — contact whoever maintains the deployment.</p>
-    <div class="actions"><a class="btn" href="/login">← Back to sign in</a></div>
-  `));
+  const sent = req.query.sent === '1';
+  res.send(authPage('Reset your password', sent
+    ? `<p>If that username has an email address on file, a reset link has been sent. Check your inbox.</p>
+       <p class="muted">Link expires in 1 hour. If you don't see it, ask an administrator to reset your password manually.</p>
+       <div class="actions"><a class="btn" href="/login">← Back to sign in</a></div>`
+    : `<p class="muted">Enter your username. If an email address is on file for your account, you'll receive a reset link.</p>
+       <form method="post" action="/forgot" class="form" style="border:0;box-shadow:none;padding:0">
+         <label class="wide">Username<input name="username" required autocomplete="username" autofocus></label>
+         <div class="actions form-actions" style="margin-top:1.5rem">
+           <button type="submit" style="width:100%">Send reset link</button>
+         </div>
+       </form>
+       <p style="margin-top:1rem;text-align:center"><a href="/login">← Back to sign in</a></p>`
+  ));
+});
+
+app.post('/forgot', async (req, res) => {
+  if (req.session.userId) return res.redirect('/');
+  const username = String(req.body.username || '').trim();
+  const user = username
+    ? db.prepare('SELECT user_id, email, username FROM users WHERE username=? AND deleted_at IS NULL').get(username)
+    : null;
+  if (user && user.email) {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    db.prepare(`DELETE FROM password_reset_tokens WHERE user_id=? AND used_at IS NULL`).run(user.user_id);
+    db.prepare(`INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)`).run(user.user_id, token, expires);
+    const resetUrl = `${PUBLIC_URL || 'http://localhost:' + PORT}/reset-password/${token}`;
+    const mailer = getMailer();
+    if (mailer) {
+      try {
+        await mailer.sendMail({
+          from: SMTP_FROM || SMTP_USER,
+          to: user.email,
+          subject: `[${CHURCH_NAME}] Password reset`,
+          text: `Hi ${user.username},\n\nClick the link below to reset your password. The link expires in 1 hour.\n\n${resetUrl}\n\nIf you didn't request this, you can ignore this email.\n`,
+        });
+      } catch (e) { console.error('Password reset email failed:', e.message); }
+    }
+  }
+  res.redirect('/forgot?sent=1');
+});
+
+app.get('/reset-password/:token', (req, res) => {
+  if (req.session.userId) return res.redirect('/');
+  const row = db.prepare(
+    `SELECT t.token_id, t.user_id, u.username FROM password_reset_tokens t
+       JOIN users u ON u.user_id=t.user_id
+       WHERE t.token=? AND t.used_at IS NULL AND t.expires_at > datetime('now')`
+  ).get(req.params.token);
+  if (!row) {
+    return res.status(410).send(authPage('Link expired', `
+      <p class="error">This password reset link has expired or already been used.</p>
+      <div class="actions"><a class="btn" href="/forgot">Request a new link</a></div>`));
+  }
+  const error = req.query.e ? ({
+    short: 'Password must be at least 8 characters.',
+    mismatch: 'Passwords do not match.',
+  }[req.query.e] || null) : null;
+  res.send(authPage('Set a new password', `
+    ${error ? `<p class="error">${esc(error)}</p>` : ''}
+    <p class="muted">Setting a new password for <strong>${esc(row.username)}</strong>.</p>
+    <form method="post" action="/reset-password/${esc(req.params.token)}" class="form" style="border:0;box-shadow:none;padding:0">
+      <label class="wide">New password<input type="password" name="password" required minlength="8" autofocus></label>
+      <label class="wide">Confirm password<input type="password" name="password2" required></label>
+      <div class="actions form-actions" style="margin-top:1.5rem">
+        <button type="submit" style="width:100%">Set password</button>
+      </div>
+    </form>`));
+});
+
+app.post('/reset-password/:token', (req, res) => {
+  if (req.session.userId) return res.redirect('/');
+  const row = db.prepare(
+    `SELECT token_id, user_id FROM password_reset_tokens
+       WHERE token=? AND used_at IS NULL AND expires_at > datetime('now')`
+  ).get(req.params.token);
+  if (!row) return res.redirect('/forgot');
+  const { password, password2 } = req.body;
+  if (!password || password.length < 8) return res.redirect(`/reset-password/${req.params.token}?e=short`);
+  if (password !== password2) return res.redirect(`/reset-password/${req.params.token}?e=mismatch`);
+  db.prepare('UPDATE users SET password_hash=? WHERE user_id=?')
+    .run(bcrypt.hashSync(password, 12), row.user_id);
+  db.prepare('UPDATE password_reset_tokens SET used_at=datetime(\'now\') WHERE token_id=?').run(row.token_id);
+  logSecurityEvent(req, 'user_password_reset_self', `user_id:${row.user_id}`, row.user_id);
+  res.send(authPage('Password updated', `
+    <p>Your password has been updated. You can now sign in.</p>
+    <div class="actions"><a class="btn" href="/login">Sign in</a></div>`));
 });
 
 // In-memory login throttle: max attempts per IP within a rolling window.
@@ -4313,7 +4558,7 @@ app.post('/login', (req, res) => {
   }
   const { username, password } = req.body;
   const user = db.prepare(
-    `SELECT user_id, password_hash FROM users WHERE username = ? AND deleted_at IS NULL`
+    `SELECT user_id, password_hash, totp_enabled FROM users WHERE username = ? AND deleted_at IS NULL`
   ).get((username || '').trim());
   if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
     noteLoginFail(ip);
@@ -4321,6 +4566,50 @@ app.post('/login', (req, res) => {
     return res.redirect('/login?e=1');
   }
   loginHits.delete(ip);
+  if (user.totp_enabled) {
+    req.session.pendingTotpUserId = user.user_id;
+    return res.redirect('/login/totp');
+  }
+  req.session.userId = user.user_id;
+  logSecurityEvent(req, 'login_success', `user_id:${user.user_id}`, user.user_id);
+  res.redirect(trialHasExpired() ? '/billing' : '/');
+});
+
+app.get('/login/totp', (req, res) => {
+  if (req.session.userId) return res.redirect('/');
+  if (!req.session.pendingTotpUserId) return res.redirect('/login');
+  const error = req.query.e ? 'Invalid code — check your authenticator app and try again.' : null;
+  res.send(authPage('Two-factor authentication', `
+    ${error ? `<p class="error">${esc(error)}</p>` : ''}
+    <p class="muted" style="margin-bottom:1rem">Enter the 6-digit code from your authenticator app.</p>
+    <form method="post" action="/login/totp" class="form" style="border:0;box-shadow:none;padding:0">
+      <label class="wide">Authentication code
+        <input type="text" name="token" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+               required autocomplete="one-time-code" autofocus style="letter-spacing:.25em;font-size:1.4rem;text-align:center">
+      </label>
+      <div class="actions form-actions" style="margin-top:1.5rem">
+        <button type="submit" style="width:100%">Verify</button>
+      </div>
+    </form>
+    <p style="margin-top:1rem;text-align:center"><a href="/login">← Back to sign in</a></p>
+  `));
+});
+
+app.post('/login/totp', (req, res) => {
+  if (!req.session.pendingTotpUserId) return res.redirect('/login');
+  const userId = req.session.pendingTotpUserId;
+  const user = db.prepare('SELECT user_id, totp_secret, totp_enabled FROM users WHERE user_id=? AND deleted_at IS NULL').get(userId);
+  if (!user || !user.totp_enabled || !user.totp_secret) {
+    delete req.session.pendingTotpUserId;
+    return res.redirect('/login');
+  }
+  const token = String(req.body.token || '').replace(/\s/g, '');
+  const totp = new OTPAuth.TOTP({ algorithm: 'SHA1', digits: 6, period: 30, secret: OTPAuth.Secret.fromBase32(user.totp_secret) });
+  if (totp.validate({ token, window: 1 }) === null) {
+    logSecurityEvent(req, 'totp_failed', `user_id:${userId}`, null);
+    return res.redirect('/login/totp?e=1');
+  }
+  delete req.session.pendingTotpUserId;
   req.session.userId = user.user_id;
   logSecurityEvent(req, 'login_success', `user_id:${user.user_id}`, user.user_id);
   res.redirect(trialHasExpired() ? '/billing' : '/');
@@ -4368,7 +4657,18 @@ if (process.env.NODE_ENV === 'test') {
 app.use((req, res) => {
   res.status(404).send(layout({
     title: 'Page not found', user: res.locals.user, active: null,
-    body: '<p>That page does not exist.</p><p><a href="/">Back to dashboard</a></p>',
+    body: `
+      <div style="text-align:center;padding:4rem 1rem">
+        <div style="font-size:4rem;font-weight:700;opacity:.15">404</div>
+        <h1 style="margin:.5rem 0 1rem">Page not found</h1>
+        <p class="muted-text">The page <code>${esc(req.path)}</code> doesn't exist.</p>
+        <div style="margin-top:2rem;display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap">
+          <a class="btn primary" href="/">Dashboard</a>
+          <a class="btn ghost" href="/members">Members</a>
+          <a class="btn ghost" href="/finance">Finance</a>
+          <a class="btn ghost" href="/reports">Reports</a>
+        </div>
+      </div>`,
   }));
 });
 
@@ -4376,11 +4676,13 @@ app.use((req, res) => {
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', req.method, req.path, '-', err && err.message);
+  let errorRef = null;
   try {
-    db.prepare(`INSERT INTO error_log (method, path, message, stack, user_id) VALUES (?, ?, ?, ?, ?)`)
+    const info = db.prepare(`INSERT INTO error_log (method, path, message, stack, user_id) VALUES (?, ?, ?, ?, ?)`)
       .run(req.method, req.path, String(err && err.message || err).slice(0, 500),
            String(err && err.stack || '').slice(0, 4000),
            res.locals.user ? res.locals.user.user_id : null);
+    errorRef = info.lastInsertRowid;
   } catch (_) { /* never let logging throw */ }
   sendAlertEmail('app_error',
     `Unhandled error: ${String(err && err.message || err).slice(0, 80)}`,
@@ -4389,8 +4691,17 @@ app.use((err, req, res, next) => {
   if (res.headersSent) return;
   res.status(500).send(layout({
     title: 'Something went wrong', user: res.locals.user, active: null,
-    body: '<p>An unexpected error occurred and has been logged. Please try again.</p>'
-        + '<p><a href="/">Back to dashboard</a></p>',
+    body: `
+      <div style="text-align:center;padding:4rem 1rem">
+        <div style="font-size:4rem;font-weight:700;opacity:.15">500</div>
+        <h1 style="margin:.5rem 0 1rem">Something went wrong</h1>
+        <p class="muted-text">An unexpected error occurred and has been logged.${errorRef ? ` (ref #${errorRef})` : ''}</p>
+        <p class="muted-text">If this keeps happening, share the reference number with your system administrator.</p>
+        <div style="margin-top:2rem;display:flex;gap:.75rem;justify-content:center">
+          <a class="btn primary" href="/">Back to dashboard</a>
+          ${res.locals.user && res.locals.user.role === 'admin' ? `<a class="btn ghost" href="/errors">View error log</a>` : ''}
+        </div>
+      </div>`,
   }));
 });
 

@@ -956,7 +956,7 @@ test('login page links to /forgot, which renders without auth', async () => {
     const forgot = await get('/forgot');
     assert.strictEqual(forgot.status, 200);
     assert.match(forgot.body, /Reset your password/);
-    assert.match(forgot.body, /Users &amp; Roles/);
+    assert.match(forgot.body, /Send reset link/);
   } finally {
     cookie = saved;
   }
@@ -1130,7 +1130,7 @@ test('members import preview exposes rejected rows download for bad CSV data', a
 test('unknown route returns a 404 page', async () => {
   const r = await get('/no/such/page');
   assert.strictEqual(r.status, 404);
-  assert.match(r.body, /does not exist/);
+  assert.match(r.body, /Page not found/);
 });
 
 test('the error handler catches a thrown route error, logs it, shows 500', async () => {
