@@ -33,6 +33,7 @@ const FINANCE_TABS = [
   ['/finance/expenses', 'Expenses'],
   ['/finance/vouchers', 'Vouchers'],
   ['/finance/accounting', 'Accounting'],
+  ['/finance/audit',      'Audit Trail'],
   ['/finance/settings', 'Settings'],
 ];
 function financeTabs(activePath) {
@@ -3081,5 +3082,81 @@ app.post('/finance/expenses/:id/edit', requireFinanceWrite, (req, res) => {
   logActivity('expense_edited',
     `Expense #${id} edited and journal reposted`, '/finance/expenses', res.locals.user.user_id);
   res.redirect('/finance/expenses');
+});
+
+// ---------- finance: audit trail ----------
+const FINANCE_ACTIVITY_KINDS = [
+  'income_recorded', 'contribution_recorded', 'pledge_payment', 'pledge_edited',
+  'finance_reversal', 'receipt_sent', 'statement_sent', 'finance_settings_updated',
+  'fund_created', 'fund_updated', 'fund_restriction_updated',
+  'finance_project_created', 'finance_project_updated',
+  'budget_created', 'budget_updated', 'budget_line_added', 'budget_line_edited',
+  'budget_line_deleted', 'budget_status_changed',
+  'expense_submitted', 'expense_approved', 'expense_rejected', 'expense_paid',
+  'expense_created', 'expense_edited', 'voucher_generated',
+];
+
+app.get('/finance/audit', (req, res) => {
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const perPage = 50;
+  const offset = (page - 1) * perPage;
+  const kindFilter = req.query.kind || '';
+  const placeholders = FINANCE_ACTIVITY_KINDS.map(() => '?').join(',');
+  const whereKind = kindFilter && FINANCE_ACTIVITY_KINDS.includes(kindFilter)
+    ? `AND a.kind = ?`
+    : `AND a.kind IN (${placeholders})`;
+  const params = kindFilter && FINANCE_ACTIVITY_KINDS.includes(kindFilter)
+    ? [kindFilter, perPage, offset]
+    : [...FINANCE_ACTIVITY_KINDS, perPage, offset];
+  const countParams = kindFilter && FINANCE_ACTIVITY_KINDS.includes(kindFilter)
+    ? [kindFilter]
+    : [...FINANCE_ACTIVITY_KINDS];
+
+  const total = db.prepare(
+    `SELECT COUNT(*) c FROM activity_log a WHERE 1=1 ${whereKind}`
+  ).get(...countParams).c;
+  const rows = db.prepare(`
+    SELECT a.activity_id, a.occurred_at, a.kind, a.description, a.link,
+           COALESCE(u.display_name, u.username) AS actor
+    FROM activity_log a
+    LEFT JOIN users u ON u.user_id = a.user_id
+    WHERE 1=1 ${whereKind}
+    ORDER BY a.activity_id DESC
+    LIMIT ? OFFSET ?`).all(...params);
+
+  const totalPages = Math.ceil(total / perPage);
+  const kindOptions = FINANCE_ACTIVITY_KINDS.map((k) =>
+    `<option value="${esc(k)}" ${k === kindFilter ? 'selected' : ''}>${esc(k.replace(/_/g, ' '))}</option>`).join('');
+  const filterForm = `
+    <form method="get" action="/finance/audit" class="filter-bar">
+      <select name="kind" onchange="this.form.submit()">
+        <option value="">All finance events</option>
+        ${kindOptions}
+      </select>
+      <a class="btn ghost" href="/finance/audit">Clear</a>
+    </form>`;
+  const pagination = totalPages > 1 ? `
+    <div class="filter-bar" style="margin-top:1rem">
+      ${page > 1 ? `<a class="btn ghost" href="/finance/audit?page=${page - 1}${kindFilter ? '&kind=' + esc(kindFilter) : ''}">← Prev</a>` : ''}
+      <span class="muted-text">Page ${page} of ${totalPages} (${total} events)</span>
+      ${page < totalPages ? `<a class="btn ghost" href="/finance/audit?page=${page + 1}${kindFilter ? '&kind=' + esc(kindFilter) : ''}">Next →</a>` : ''}
+    </div>` : '';
+
+  const body = `
+    ${financeTabs('/finance/audit')}
+    ${filterForm}
+    <section class="card">
+      <div class="card-head"><h2>Finance Audit Trail</h2><span class="meta">${total} event${total === 1 ? '' : 's'}</span></div>
+      ${rows.length ? table(['When', 'Event', 'Description', 'By', ''],
+        rows.map((r) => [
+          esc(r.occurred_at.slice(0, 16).replace('T', ' ')),
+          `<code style="font-size:0.8rem">${esc(r.kind.replace(/_/g, ' '))}</code>`,
+          esc(r.description),
+          esc(r.actor || '—'),
+          r.link ? `<a href="${esc(r.link)}">View</a>` : '',
+        ])) : '<p class="muted-text">No finance audit events recorded yet.</p>'}
+    </section>
+    ${pagination}`;
+  res.page({ title: 'Finance · Audit Trail', active: '/finance', body });
 });
 };

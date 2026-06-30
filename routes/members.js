@@ -11,7 +11,7 @@ const { pageHero, statsRow, filterCard, listCard, table, pager,
 module.exports.register = function register(app, ctx) {
   const { db, requireAdmin, logActivity, flash, csrfValid, looksLikeImage,
     photoUpload, csvUpload, EXT_FROM_MIME, PHOTO_DIR, PREF_LABELS, nextMemberId,
-    loadBibleClasses, loadOrganizations } = ctx;
+    loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, CHURCH_NAME } = ctx;
   const { parse: csvParse } = require('csv-parse/sync');
 
 function memberErrors(b) {
@@ -142,6 +142,7 @@ app.get('/members', (req, res) => {
     { cls: inactiveMembers ? 'purple' : 'blue', icon: '!', value: inactiveMembers.toLocaleString(), label: 'Inactive / Other' },
   ], `${isAdmin ? `<a class="btn primary" href="/members/new">＋ Add New Member</a>` : ''}
       ${isAdmin ? `<a class="btn ghost" href="/members/import">⇪ Import CSV</a>` : ''}
+      ${isAdmin ? `<a class="btn ghost" href="/members/absent">👤 Absent Members</a>` : ''}
       <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>`);
   const filters = filterCard({
     q, placeholder: 'Search members by name, ID, email or phone…',
@@ -255,6 +256,148 @@ app.get('/members.csv', (req, res) => {
     dayBorn: req.query.day_born || '',
     birthday: ['week', 'month'].includes(String(req.query.birthday || '')) ? String(req.query.birthday) : '',
   })));
+});
+
+// Absent members: members with no attendance in the last N weeks.
+app.get('/members/absent', requireAdmin, (req, res) => {
+  const weeks = Math.min(52, Math.max(1, Number(req.query.weeks) || 4));
+  const rows = db.prepare(`
+    SELECT m.member_id, m.first_name, m.last_name, m.mobile_phone, m.email,
+           m.membership_status, m.bible_class_id,
+           mn.name AS bible_class,
+           (SELECT MAX(e.event_date)
+            FROM attendance a JOIN events e USING(event_id)
+            WHERE a.member_id = m.member_id) AS last_attended
+    FROM members m
+    LEFT JOIN ministries mn ON mn.ministry_id = m.bible_class_id
+    WHERE m.deleted_at IS NULL
+      AND m.member_id NOT IN (
+        SELECT DISTINCT a.member_id
+        FROM attendance a
+        JOIN events e USING(event_id)
+        WHERE e.event_date >= date('now', ? || ' days')
+      )
+    ORDER BY last_attended ASC, m.last_name, m.first_name`,
+  ).all([`-${weeks * 7}`]);
+
+  const memberRows = rows.map((m) => [
+    `<input type="checkbox" name="member_ids" value="${m.member_id}" class="absent-check">`,
+    `<a href="/members/${m.member_id}">${esc(m.first_name)} ${esc(m.last_name)}</a>`,
+    esc(m.bible_class || '—'),
+    esc(m.membership_status || '—'),
+    m.last_attended ? esc(m.last_attended) : '<span class="muted-text">Never</span>',
+    esc(m.mobile_phone || '—'),
+  ]);
+
+  const body = `
+    ${pageHero('Absent Members', `Members with no attendance in the last ${weeks} week${weeks === 1 ? '' : 's'}.`)}
+    <div class="filter-bar">
+      <form method="get" action="/members/absent" style="display:flex;gap:0.5rem;align-items:center">
+        <label>Weeks absent: <input type="number" name="weeks" value="${weeks}" min="1" max="52" style="width:5rem"></label>
+        <button class="btn ghost" type="submit">Apply</button>
+      </form>
+    </div>
+    ${statsRow([
+      { cls: rows.length ? 'orange' : 'green', icon: '👤', value: rows.length, label: `Absent ${weeks}w+` },
+      { cls: 'blue', icon: '📱', value: rows.filter((m) => m.mobile_phone).length, label: 'With phone' },
+      { cls: 'purple', icon: '✉', value: rows.filter((m) => m.email).length, label: 'With email' },
+    ])}
+    ${rows.length ? `
+    <form method="post" action="/members/absent/notify" id="absent-form">
+      <input type="hidden" name="_csrf" value="${esc(res.locals.csrfToken || '')}">
+      <input type="hidden" name="weeks" value="${weeks}">
+      <section class="card">
+        <div class="card-head">
+          <h2>Absent Members</h2>
+          <div style="display:flex;gap:0.5rem">
+            <button type="button" onclick="document.querySelectorAll('.absent-check').forEach(c=>c.checked=true)" class="btn ghost">Select all</button>
+            <button type="button" onclick="document.querySelectorAll('.absent-check').forEach(c=>c.checked=false)" class="btn ghost">Deselect all</button>
+          </div>
+        </div>
+        ${table(['', 'Name', 'Class', 'Status', 'Last attended', 'Phone'], memberRows)}
+      </section>
+      <div class="card" style="margin-top:1rem">
+        <div class="card-head"><h2>Send follow-up message</h2></div>
+        <label>Channel
+          <select name="channel">
+            <option value="sms">SMS</option>
+            <option value="email">Email</option>
+            <option value="both">Both</option>
+          </select>
+        </label>
+        <label style="margin-top:0.5rem">Subject (email only)<input name="subject" placeholder="We miss you!"></label>
+        <label style="margin-top:0.5rem">Message
+          <textarea name="body" rows="4" style="width:100%" placeholder="Dear {first_name}, we noticed you haven't been with us lately. We miss you and hope to see you soon!"></textarea>
+        </label>
+        <div class="page-actions" style="margin-top:0.5rem">
+          <button type="submit" class="btn primary" onclick="return confirm('Send follow-up to selected absent members?')">📣 Send follow-up</button>
+          <a class="btn ghost" href="/members/absent?weeks=${weeks}">Cancel</a>
+        </div>
+      </div>
+    </form>` : '<div class="card"><p class="muted-text">No members absent for this period — great attendance!</p></div>'}`;
+
+  res.page({ title: 'Absent Members', active: '/members', noHeader: true, body });
+});
+
+app.post('/members/absent/notify', requireAdmin, async (req, res) => {
+  if (!csrfValid(req)) return res.status(403).send('Security check failed');
+  const { channel, subject, body: msgBody } = req.body;
+  const weeks = Math.min(52, Math.max(1, Number(req.body.weeks) || 4));
+  if (!msgBody || !['sms', 'email', 'both'].includes(channel)) {
+    flash(req, 'Message body and channel are required.');
+    return res.redirect(`/members/absent?weeks=${weeks}`);
+  }
+  const ids = [].concat(req.body.member_ids || []).map(Number).filter(Boolean);
+  if (!ids.length) {
+    flash(req, 'Select at least one member to send to.');
+    return res.redirect(`/members/absent?weeks=${weeks}`);
+  }
+  const placeholders = ids.map(() => '?').join(',');
+  const members = db.prepare(
+    `SELECT member_id, first_name, last_name, mobile_phone, email
+     FROM members WHERE member_id IN (${placeholders}) AND deleted_at IS NULL`
+  ).all(...ids);
+
+  const brow = db.prepare(`
+    INSERT INTO broadcasts (channel, audience_label, subject, body, total_recipients, status, sent_by)
+    VALUES (?, ?, ?, ?, ?, 'sending', ?)`
+  ).run(channel, `Absent members (${weeks}w+)`, subject || null, msgBody, members.length, res.locals.user.user_id);
+  const broadcastId = brow.lastInsertRowid;
+  const insRecip = db.prepare(
+    `INSERT INTO broadcast_recipients (broadcast_id, member_id, channel, destination, status) VALUES (?, ?, ?, ?, ?)`
+  );
+
+  let sent = 0; let failed = 0;
+  for (const m of members) {
+    const name = `${m.first_name} ${m.last_name}`;
+    const personalised = msgBody.replace(/\{first_name\}/g, m.first_name).replace(/\{church_name\}/g, CHURCH_NAME);
+    if ((channel === 'sms' || channel === 'both') && m.mobile_phone) {
+      try {
+        const r = await sendSmsBatch([m.mobile_phone], personalised);
+        const ok = r && r.status === 'success';
+        insRecip.run(broadcastId, m.member_id, 'sms', m.mobile_phone, ok ? 'sent' : 'failed');
+        ok ? sent++ : failed++;
+      } catch (_) {
+        insRecip.run(broadcastId, m.member_id, 'sms', m.mobile_phone, 'failed');
+        failed++;
+      }
+    }
+    if ((channel === 'email' || channel === 'both') && m.email) {
+      try {
+        await sendEmailEach([{ addr: m.email }], subject || `Follow-up from ${CHURCH_NAME}`, personalised);
+        insRecip.run(broadcastId, m.member_id, 'email', m.email, 'sent');
+        sent++;
+      } catch (_) {
+        insRecip.run(broadcastId, m.member_id, 'email', m.email, 'failed');
+        failed++;
+      }
+    }
+  }
+  db.prepare(`UPDATE broadcasts SET status='done', successful_sends=?, failed_sends=? WHERE broadcast_id=?`
+  ).run(sent, failed, broadcastId);
+  logActivity('announcement', `Absent-member follow-up sent to ${sent} member${sent === 1 ? '' : 's'}`, '/communications/broadcasts', res.locals.user.user_id);
+  flash(req, `Follow-up sent — ${sent} delivered, ${failed} failed.`, failed ? 'error' : 'success');
+  res.redirect(`/members/absent?weeks=${weeks}`);
 });
 
 // Bulk actions on selected members: export to CSV or add to an organization.

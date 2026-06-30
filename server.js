@@ -3107,7 +3107,7 @@ require('./routes/communications').register(app, {
 require('./routes/members').register(app, {
   db, requireAdmin, logActivity, flash, csrfValid, looksLikeImage,
   photoUpload, csvUpload, EXT_FROM_MIME, PHOTO_DIR, PREF_LABELS, nextMemberId,
-  loadBibleClasses, loadOrganizations,
+  loadBibleClasses, loadOrganizations, sendSmsBatch, sendEmailEach, CHURCH_NAME,
 });
 
 // ---------- public unsubscribe (no auth) ----------
@@ -4002,6 +4002,19 @@ app.get('/operations', requireOwner, (req, res) => {
     SELECT COUNT(*) AS c
     FROM users
     WHERE deleted_at IS NULL`).get().c;
+  const authMetrics = db.prepare(`
+    SELECT
+      SUM(CASE WHEN event='login_failed'  AND occurred_at >= datetime('now','-24 hours') THEN 1 ELSE 0 END) AS fails_24h,
+      SUM(CASE WHEN event='login_failed'  AND occurred_at >= datetime('now','-7 days')   THEN 1 ELSE 0 END) AS fails_7d,
+      SUM(CASE WHEN event='login_success' AND occurred_at >= datetime('now','-24 hours') THEN 1 ELSE 0 END) AS logins_24h
+    FROM security_audit_log`).get();
+  const notifMetrics = db.prepare(`
+    SELECT
+      COALESCE(SUM(successful_sends), 0) AS total_sent,
+      COALESCE(SUM(failed_sends),     0) AS total_failed,
+      COUNT(*) AS total_broadcasts
+    FROM broadcasts
+    WHERE sent_at >= datetime('now','-30 days')`).get();
   const plan = currentPlan();
   const usage = tenantUsage();
   const alertRows = alertReadinessRows();
@@ -4050,7 +4063,21 @@ app.get('/operations', requireOwner, (req, res) => {
         { cls: 'blue', icon: '🔑', value: Number(activeUsers).toLocaleString(), label: 'Active Users' },
       ])}
       ${listCard({ title: 'Operational Checks', count: checks.length, countLabel: 'checks', inner: table(['Check', 'Status', 'Detail', 'Link'], rows) })}
-      <div class="card">
+      <section class="card" style="margin-top:1rem">
+        <div class="card-head"><h2>Operational Metrics</h2><span class="meta">Auth, errors, notifications</span></div>
+        ${table(['Metric', 'Value', 'Notes'], [
+          ['Login failures (24h)',  String(authMetrics.fails_24h  || 0),
+            authMetrics.fails_24h > 10 ? '⚠ Elevated — review /security/audit' : 'Normal'],
+          ['Login failures (7d)',   String(authMetrics.fails_7d   || 0),
+            authMetrics.fails_7d  > 50 ? '⚠ Elevated — review /security/audit' : 'Normal'],
+          ['Successful logins (24h)', String(authMetrics.logins_24h || 0), 'Distinct login events'],
+          ['App errors (24h)',      String(recentErrors || 0),
+            recentErrors > 0 ? '⚠ See /errors for details' : 'No unhandled errors'],
+          ['Broadcasts (30d)',      String(notifMetrics.total_broadcasts || 0),
+            `${notifMetrics.total_sent || 0} sent · ${notifMetrics.total_failed || 0} failed`],
+        ])}
+      </section>
+      <div class="card" style="margin-top:1rem">
         <div class="card-head"><h2>Runbook</h2><a href="/operations/health-report.txt">Download health report</a></div>
         <p>Use <code>docs/OPERATIONS_RUNBOOK.md</code> for deploy checks, monthly restore drills and rollback steps.</p>
       </div>`,
