@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented here.
 
+## v1.4.0 - 2026-06-30
+
+### Added
+
+- Native double-entry finance module built directly into the management app (no external service):
+  - Chart of accounts (`accounts` table) with 30 predefined GL codes across ASSET/INCOME/EXPENSE/FUND_EQUITY types.
+  - Double-entry journal (`journal_entries` + `journal_lines`) with POSTED/REVERSED lifecycle and reversal chaining.
+  - Financial periods (`financial_periods`) for period-open/close controls.
+  - Fund management (`funds`) with opening balance, type (GENERAL/BUILDING/WELFARE/etc.), restricted/unrestricted flag, and ledger-derived balance.
+  - Finance projects (`finance_projects`) with status workflow (PLANNING/ACTIVE/ON_HOLD/COMPLETED/CANCELLED) and budget tracking.
+  - Finance budgets (`finance_budgets` + `finance_budget_lines`) with ANNUAL/MONTHLY scope, account-level lines, and overspending warnings on the finance dashboard.
+  - Payment vouchers (`payment_vouchers`) auto-generated from approved expenses, with printable voucher layout and signature fields.
+  - Expense approval workflow: SUBMITTED → APPROVED → PAID / REJECTED, with voucher generation on approval.
+  - Finance settings page for fiscal year start, default currency, cash account selection.
+  - Accounting page with fund balances, trial balance (debit/credit totals, balanced check), and general ledger view.
+  - CSV exports for trial balance, general ledger, vouchers, fund report, and projects.
+  - User `finance_role` column (none/finance_admin/treasurer/cashier/auditor) with dedicated middleware (`requireFinanceWrite`, `requireFinanceAccounting`, `requireFundViewer`, `requireFundManager`).
+  - `lib/ledger.js`: postCashIncome, postExpensePayment, reverseJournal, fundBalance, fundRaisedSpent helpers.
+  - `lib/money.js`: amountInWords() Ghanaian-cedi amount-in-words for voucher printing.
+- SaaS operations documentation:
+  - `docs/LEGAL_AND_SUPPORT_READINESS.md`
+  - `docs/MONITORING_AND_ALERTS.md`
+  - `docs/OFFSITE_BACKUP_SETUP.md`
+  - `docs/SAAS_ONBOARDING_AND_LIMITS.md`
+  - `docs/SAAS_TENANCY_REVIEW.md`
+  - `docs/USER_ACCEPTANCE_TEST_PLAN.md`
+
+### Removed
+
+- External SSO handoff to the Vercel church-finance app (`lib/sso.js`, `lib/sync.js`, `/sso/authorize`, `/sync/members`). Finance is now fully in-house.
+- `FINANCE_ORIGIN` and `SSO_SECRET` environment variables (removed from `.env.example`).
+
+### Notes
+
+- Finance role migration: existing users default to `finance_role='none'`. Assign roles from the Users admin page.
+- Ledger tables (`accounts`, `journal_entries`, `journal_lines`, `financial_periods`) are auto-created on first boot from the updated `schema.sql`.
+
 ## v1.3.0 - 2026-06-05
 
 ### Added

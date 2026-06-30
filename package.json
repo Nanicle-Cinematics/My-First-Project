@@ -1,6 +1,6 @@
 {
   "name": "church-management",
-  "version": "0.1.0",
+  "version": "1.4.0",
   "private": true,
   "description": "Church management web UI backed by SQLite.",
   "main": "server.js",
