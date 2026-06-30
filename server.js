@@ -73,22 +73,65 @@ async function createBackup() {
 async function uploadBackupOffsite(filePath, name) {
   const base = process.env.BACKUP_UPLOAD_URL;
   if (!base) return false;
+  const url = base.includes('?') ? base : base.replace(/\/$/, '') + '/' + encodeURIComponent(name);
   try {
-    const url = base.includes('?') ? base : base.replace(/\/$/, '') + '/' + encodeURIComponent(name);
     const body = fs.readFileSync(filePath);
     const res = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     console.log(`Off-site backup uploaded: ${name}`);
-    return true;
   } catch (e) {
     console.error('Off-site backup upload failed:', e.message);
+    sendAlertEmail('backup_upload_failed',
+      `Off-site backup upload failed: ${name}`,
+      `The automatic off-site backup upload failed.\n\nFile: ${name}\nError: ${e.message}\n\nThe local backup is intact. Check BACKUP_UPLOAD_URL and retry from ${process.env.PUBLIC_URL || ''}/backups`
+    ).catch(() => {});
     return false;
   }
+  // Verify the upload by downloading and running integrity_check.
+  try {
+    const verifyRes = await fetch(url.replace('?', '_verify?'), { method: 'GET' }).catch(() => null);
+    if (verifyRes && verifyRes.ok) {
+      const tmpPath = filePath + '.verify-tmp';
+      fs.writeFileSync(tmpPath, Buffer.from(await verifyRes.arrayBuffer()));
+      const verifyDb = new (require('better-sqlite3'))(tmpPath, { readonly: true });
+      const integ = verifyDb.prepare('PRAGMA integrity_check').get();
+      verifyDb.close();
+      fs.unlinkSync(tmpPath);
+      const ok = integ && (integ.integrity_check === 'ok' || Object.values(integ)[0] === 'ok');
+      if (ok) {
+        console.log(`Off-site backup verified: ${name}`);
+        try {
+          db.prepare(`INSERT INTO security_audit_log (event, subject) VALUES ('backup_offsite_verified', ?)`)
+            .run(name);
+        } catch (_) {}
+      } else {
+        throw new Error('integrity_check failed on downloaded copy');
+      }
+    }
+  } catch (e) {
+    console.error('Off-site backup verification failed:', e.message);
+    sendAlertEmail('backup_verify_failed',
+      `Off-site backup verification failed: ${name}`,
+      `The backup was uploaded but the integrity check on the downloaded copy failed.\n\nFile: ${name}\nError: ${e.message}\n\nReview at ${process.env.PUBLIC_URL || ''}/backups`
+    ).catch(() => {});
+  }
+  return true;
 }
-// Schedule automatic daily backups only when running as a server (not under tests).
+// Schedule automatic daily backups and alert on failure.
+async function runScheduledBackup() {
+  try {
+    await createBackup();
+  } catch (e) {
+    console.error('Scheduled backup failed:', e.message);
+    sendAlertEmail('backup_failed',
+      'Scheduled backup failed',
+      `The automatic daily backup failed.\n\nError: ${e.message}\n\nManual backup can be triggered from ${process.env.PUBLIC_URL || ''}/backups`
+    ).catch(() => {});
+  }
+}
 if (require.main === module) {
-  const t1 = setTimeout(() => { createBackup().catch((e) => console.error('backup failed:', e.message)); }, 60 * 1000);
-  const t2 = setInterval(() => { createBackup().catch((e) => console.error('backup failed:', e.message)); }, 24 * 60 * 60 * 1000);
+  const t1 = setTimeout(() => { runScheduledBackup(); }, 60 * 1000);
+  const t2 = setInterval(() => { runScheduledBackup(); }, 24 * 60 * 60 * 1000);
   if (t1.unref) t1.unref();
   if (t2.unref) t2.unref();
 }
@@ -791,8 +834,12 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-XSS-Protection', '0');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+  }
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
     "base-uri 'self'",
@@ -802,6 +849,7 @@ app.use((req, res, next) => {
     "style-src 'self' 'unsafe-inline'",
     "script-src 'self' 'unsafe-inline'",
     "form-action 'self'",
+    "upgrade-insecure-requests",
   ].join('; '));
   next();
 });
@@ -1346,6 +1394,56 @@ function getMailer() {
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
   return smtpTransporter;
+}
+
+// ---------- operational alert emails ----------
+// Sends a plain-text alert to ALERT_EMAIL with a 1-hour per-type cooldown so
+// a repeated failure doesn't spam the inbox.
+const _alertCooldowns = new Map();
+async function sendAlertEmail(type, subject, body) {
+  if (!ALERT_EMAIL) return;
+  const now = Date.now();
+  const last = _alertCooldowns.get(type) || 0;
+  if (now - last < 60 * 60 * 1000) return; // 1-hour cooldown per alert type
+  _alertCooldowns.set(type, now);
+  const mailer = getMailer();
+  if (!mailer) return;
+  try {
+    await mailer.sendMail({
+      from: SMTP_FROM || SMTP_USER,
+      to: ALERT_EMAIL,
+      subject: `[Church Manager Alert] ${subject}`,
+      text: `${body}\n\n---\nSent by Church Manager at ${new Date().toISOString()}\nApp: ${process.env.PUBLIC_URL || 'http://localhost:3000'}`,
+    });
+    console.log(`Alert sent to ${ALERT_EMAIL}: ${subject}`);
+  } catch (e) {
+    console.error('Failed to send alert email:', e.message);
+  }
+}
+
+// Periodic spike checks: run every 15 minutes to detect error/login-failure surges.
+function scheduleAlertChecks() {
+  const interval = setInterval(async () => {
+    try {
+      const errCount = db.prepare(
+        `SELECT COUNT(*) c FROM error_log WHERE occurred_at >= datetime('now','-1 hour')`
+      ).get().c;
+      if (errCount >= 5) {
+        await sendAlertEmail('error_spike',
+          `${errCount} app errors in the last hour`,
+          `${errCount} unhandled errors were logged in the past hour.\nReview at ${process.env.PUBLIC_URL || ''}/errors`);
+      }
+      const failCount = db.prepare(
+        `SELECT COUNT(*) c FROM security_audit_log WHERE event='login_failed' AND occurred_at >= datetime('now','-1 hour')`
+      ).get().c;
+      if (failCount >= 20) {
+        await sendAlertEmail('login_spike',
+          `${failCount} login failures in the last hour`,
+          `${failCount} failed login attempts detected in the past hour.\nReview at ${process.env.PUBLIC_URL || ''}/security/audit`);
+      }
+    } catch (_) {}
+  }, 15 * 60 * 1000);
+  if (interval.unref) interval.unref();
 }
 
 function loadEmailSettings() {
@@ -3095,6 +3193,40 @@ require('./routes/preaching').register(app, {
   requireAdmin, logActivity, preacherContact, sendPreachingReminder,
 });
 
+// Generic in-memory rate limiter: max N requests per IP per window.
+function makeRateLimiter(max, windowMs, message) {
+  const hits = new Map();
+  setInterval(() => {
+    const cutoff = Date.now() - windowMs;
+    for (const [ip, e] of hits) { if (e.first < cutoff) hits.delete(ip); }
+  }, windowMs).unref();
+  return (req, res, next) => {
+    const ip = req.ip || '';
+    const now = Date.now();
+    const e = hits.get(ip);
+    if (!e || now - e.first >= windowMs) { hits.set(ip, { count: 1, first: now }); return next(); }
+    e.count += 1;
+    if (e.count > max) {
+      return res.status(429).send(layout({
+        title: 'Too many requests', user: res.locals.user, active: null,
+        body: `<p>${message || 'Too many requests. Please wait a moment and try again.'}</p><p><a href="/">Back to dashboard</a></p>`,
+      }));
+    }
+    next();
+  };
+}
+const broadcastRateLimit = makeRateLimiter(5,  60_000, 'Broadcast rate limit: max 5 broadcasts per minute.');
+const importRateLimit    = makeRateLimiter(10, 60_000, 'Import rate limit: max 10 import submissions per minute.');
+const exportRateLimit    = makeRateLimiter(20, 60_000, 'Export rate limit: max 20 exports per minute.');
+
+// Rate limits on sensitive endpoints (applied before route modules register).
+app.post('/communications/broadcast', broadcastRateLimit);
+app.post('/members/import/commit',    importRateLimit);
+app.post('/members/absent/notify',    broadcastRateLimit);
+app.get('/reports/*',                 exportRateLimit);
+app.get('/finance/*.csv',             exportRateLimit);
+app.get('/members/export',            exportRateLimit);
+
 // ---------- communications ----------
 require('./routes/communications').register(app, {
   db, requireAdmin, logActivity, flash, csrfValid, CHURCH_NAME, PREF_LABELS,
@@ -4250,6 +4382,10 @@ app.use((err, req, res, next) => {
            String(err && err.stack || '').slice(0, 4000),
            res.locals.user ? res.locals.user.user_id : null);
   } catch (_) { /* never let logging throw */ }
+  sendAlertEmail('app_error',
+    `Unhandled error: ${String(err && err.message || err).slice(0, 80)}`,
+    `An unhandled error occurred:\n\nRoute: ${req.method} ${req.path}\nError: ${err && err.message}\n\nReview at ${process.env.PUBLIC_URL || ''}/errors`
+  ).catch(() => {});
   if (res.headersSent) return;
   res.status(500).send(layout({
     title: 'Something went wrong', user: res.locals.user, active: null,
@@ -4273,6 +4409,7 @@ process.on('unhandledRejection', (reason) => {
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Church Manager running at http://localhost:${PORT}`);
+    scheduleAlertChecks();
   });
 }
 
