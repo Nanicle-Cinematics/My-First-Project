@@ -7823,6 +7823,69 @@ code.break-all { word-break: break-all; }
 /* Centred link row beneath auth forms */
 .auth-link-row { margin-top: 1rem; text-align: center; }
 
+/* Recovery codes grid */
+.recovery-codes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: .5rem;
+  margin: 1rem 0;
+}
+.recovery-code {
+  display: block;
+  background: var(--soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .5rem .75rem;
+  font-family: monospace;
+  font-size: .95rem;
+  letter-spacing: .08em;
+  text-align: center;
+  user-select: all;
+}
+
+/* Onboarding checklist */
+.onboarding-progress-bar {
+  height: 6px;
+  background: var(--soft);
+  border-radius: 999px;
+  margin: .5rem 0 1.25rem;
+  overflow: hidden;
+}
+.onboarding-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--green) 0%, var(--accent) 100%);
+  border-radius: 999px;
+  transition: width .4s var(--ease);
+}
+.onboarding-steps { display: flex; flex-direction: column; gap: .75rem; }
+.onboarding-step {
+  display: flex;
+  gap: .85rem;
+  align-items: flex-start;
+  padding: .75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.onboarding-step.done {
+  background: var(--green-soft);
+  border-color: var(--green);
+  opacity: .75;
+}
+.onboarding-check {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--panel);
+  display: flex; align-items: center; justify-content: center;
+  font-size: .8rem; font-weight: 700; color: var(--green);
+  flex-shrink: 0; margin-top: .1rem;
+}
+.onboarding-step.done .onboarding-check {
+  background: var(--green); border-color: var(--green); color: #fff;
+}
+.onboarding-label { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+
 /* Error / empty-state hero — used on 404 and 500 pages */
 .error-page { text-align: center; padding: 4rem 1rem; }
 .error-page .error-code { font-size: 4rem; font-weight: 700; opacity: .15; line-height: 1; }

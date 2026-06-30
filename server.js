@@ -260,9 +260,10 @@ addColumnIfMissing('members', 'photo_filename',   `photo_filename TEXT`);
 addColumnIfMissing('members', 'emergency_contact_name',     `emergency_contact_name TEXT`);
 addColumnIfMissing('members', 'emergency_contact_phone',    `emergency_contact_phone TEXT`);
 addColumnIfMissing('members', 'emergency_contact_relation', `emergency_contact_relation TEXT`);
-addColumnIfMissing('users', 'email',        `email TEXT`);
-addColumnIfMissing('users', 'totp_secret',  `totp_secret TEXT`);
-addColumnIfMissing('users', 'totp_enabled', `totp_enabled INTEGER NOT NULL DEFAULT 0`);
+addColumnIfMissing('users', 'email',                `email TEXT`);
+addColumnIfMissing('users', 'totp_secret',          `totp_secret TEXT`);
+addColumnIfMissing('users', 'totp_enabled',         `totp_enabled INTEGER NOT NULL DEFAULT 0`);
+addColumnIfMissing('users', 'totp_recovery_codes',  `totp_recovery_codes TEXT`);
 ensureLedgerSchema(db);
 db.exec(`CREATE TABLE IF NOT EXISTS payment_vouchers (
   voucher_id         INTEGER PRIMARY KEY,
@@ -971,6 +972,7 @@ app.use((req, res, next) => {
   }
   if (req.path === '/login' || req.path === '/logout' || req.path === '/forgot') return next();
   if (req.path === '/login/totp') return next();
+  if (req.path === '/login/recovery') return next();
   if (req.path.startsWith('/reset-password/')) return next();
   if ((req.path === '/' || req.path === '/signup' || req.path === '/trial-signup') && !req.session.userId) return next();
   if (!req.session.userId) return res.redirect('/login');
@@ -3080,11 +3082,17 @@ app.get('/', (req, res) => {
       </div>
     </div>`;
 
+  const showOnboarding = isAdmin && !getState('onboarding_dismissed') && getOnboardingSteps().some((s) => !s.done);
+  const onboardingBanner = showOnboarding ? `
+    <div class="flash flash-info" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem">
+      <span>⚙ Your setup isn't complete yet — a few steps remain to get the most out of Church Manager.</span>
+      <a class="btn" href="/onboarding">View checklist →</a>
+    </div>` : '';
   res.page({
     title: 'Dashboard',
     active: '/',
     noHeader: true,
-    body: `<section class="dash-shell command-center mockup-dash" data-command-center="true">${welcome}${cards}${quick}${grid}</section>`,
+    body: `${onboardingBanner}<section class="dash-shell command-center mockup-dash" data-command-center="true">${welcome}${cards}${quick}${grid}</section>`,
   });
 });
 
@@ -3459,6 +3467,62 @@ app.get('/help', (req, res) => {
         '<strong>Anytime</strong>: if anything looks off, the Error Log captures the most recent server-side errors.',
       ])}`;
   res.page({ title: 'Help & Guide', active: '/help', noHeader: true, body });
+});
+
+// ---------- onboarding wizard ----------
+function getOnboardingSteps() {
+  const emailReady = !!(process.env.SMTP_HOST || process.env.RESEND_API_KEY);
+  const publicUrlSet = !!process.env.PUBLIC_URL;
+  const churchNameCustom = CHURCH_NAME !== 'Dunwell Methodist';
+  const userCount = db.prepare('SELECT COUNT(*) c FROM users WHERE deleted_at IS NULL').get().c;
+  const memberCount = db.prepare('SELECT COUNT(*) c FROM members WHERE deleted_at IS NULL').get().c;
+  const backupConfigured = !!process.env.BACKUP_UPLOAD_URL;
+  return [
+    { id: 'church_name', done: churchNameCustom,  label: 'Set your church name',        href: null,         hint: 'Set <code>CHURCH_NAME</code> in Fly secrets: <code>flyctl secrets set CHURCH_NAME="Your Church"</code>' },
+    { id: 'public_url',  done: publicUrlSet,       label: 'Set your public URL',         href: null,         hint: 'Set <code>PUBLIC_URL</code> in Fly secrets so password-reset links and unsubscribe URLs work.' },
+    { id: 'email',       done: emailReady,         label: 'Configure email',             href: '/settings',  hint: 'Add SMTP or Resend credentials so you can send member emails and alerts.' },
+    { id: 'users',       done: userCount > 1,      label: 'Add your first staff user',   href: '/users/new', hint: 'Create accounts for other administrators and staff members.' },
+    { id: 'members',     done: memberCount > 0,    label: 'Import your congregation',    href: '/members',   hint: 'Add members manually or import from a CSV file.' },
+    { id: 'backup',      done: backupConfigured,   label: 'Set up off-site backups',     href: '/backups',   hint: 'Set <code>BACKUP_UPLOAD_URL</code> so daily backups are stored off-server.' },
+  ];
+}
+
+app.get('/onboarding', requireAdmin, (req, res) => {
+  const steps = getOnboardingSteps();
+  const done = steps.filter((s) => s.done).length;
+  const rows = steps.map((s) => `
+    <div class="onboarding-step ${s.done ? 'done' : ''}">
+      <div class="onboarding-check">${s.done ? '✓' : ''}</div>
+      <div class="onboarding-detail">
+        <div class="onboarding-label">${s.done ? `<s>${s.label}</s>` : `<strong>${s.label}</strong>`}
+          ${s.href ? `<a class="btn ghost" href="${esc(s.href)}" style="margin-left:.75rem;font-size:.8rem;padding:.25rem .6rem">Go →</a>` : ''}
+        </div>
+        ${!s.done ? `<p class="muted-text" style="margin:.25rem 0 0;font-size:.85rem">${s.hint}</p>` : ''}
+      </div>
+    </div>`).join('');
+  const body = `
+    ${pageHero('Setup checklist', 'Complete these steps to get your church management system fully running.')}
+    <div class="card card--md">
+      <div class="card-head"><h2>Progress</h2><span class="meta">${done} / ${steps.length} complete</span></div>
+      <div class="onboarding-progress-bar"><div class="onboarding-progress-fill" style="width:${Math.round(done/steps.length*100)}%"></div></div>
+      <div class="onboarding-steps">${rows}</div>
+      ${done === steps.length
+        ? `<div class="flash flash-success" style="margin-top:1rem">All steps complete — your system is fully set up!</div>`
+        : ''}
+      <div class="actions form-actions" style="margin-top:1.5rem">
+        <a class="btn ghost" href="/">Back to dashboard</a>
+        ${done === steps.length
+          ? `<form method="post" action="/onboarding/dismiss" style="display:inline">
+               <button type="submit" class="btn primary">Dismiss checklist</button>
+             </form>` : ''}
+      </div>
+    </div>`;
+  res.page({ title: 'Setup checklist', active: null, body });
+});
+
+app.post('/onboarding/dismiss', requireAdmin, (req, res) => {
+  setState('onboarding_dismissed', '1');
+  res.redirect('/');
 });
 
 // ---------- data export ----------
@@ -3860,6 +3924,17 @@ app.post('/profile/password', (req, res) => {
   res.redirect('/profile?ok=1');
 });
 
+// --- 2FA helpers ---
+function generateRecoveryCodes() {
+  return Array.from({ length: 8 }, () => {
+    const raw = crypto.randomBytes(5).toString('hex').toUpperCase();
+    return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+  });
+}
+function hashRecoveryCode(code) {
+  return crypto.createHash('sha256').update(code.replace(/-/g, '').toLowerCase()).digest('hex');
+}
+
 // 2FA setup: show QR code.
 app.get('/profile/2fa/setup', (req, res) => {
   const u = db.prepare('SELECT username, totp_enabled FROM users WHERE user_id=?').get(res.locals.user.user_id);
@@ -3904,10 +3979,70 @@ app.post('/profile/2fa/enable', (req, res) => {
   const totp = new OTPAuth.TOTP({ algorithm: 'SHA1', digits: 6, period: 30, secret: OTPAuth.Secret.fromBase32(secretB32) });
   if (totp.validate({ token, window: 1 }) === null) return res.redirect('/profile?te=1');
   delete req.session.pendingTotpSecret;
-  db.prepare('UPDATE users SET totp_secret=?, totp_enabled=1 WHERE user_id=?')
-    .run(secretB32, res.locals.user.user_id);
+  const codes = generateRecoveryCodes();
+  const hashes = JSON.stringify(codes.map(hashRecoveryCode));
+  db.prepare('UPDATE users SET totp_secret=?, totp_enabled=1, totp_recovery_codes=? WHERE user_id=?')
+    .run(secretB32, hashes, res.locals.user.user_id);
   logSecurityEvent(req, 'totp_enabled', `user_id:${res.locals.user.user_id}`, res.locals.user.user_id);
-  res.redirect('/profile?ok=2fa_on');
+  req.session.newRecoveryCodes = codes;
+  res.redirect('/profile/2fa/recovery-codes');
+});
+
+app.get('/profile/2fa/recovery-codes', (req, res) => {
+  const codes = req.session.newRecoveryCodes || null;
+  const isNew = !!codes;
+  if (isNew) delete req.session.newRecoveryCodes;
+  const u = db.prepare('SELECT totp_enabled, totp_recovery_codes FROM users WHERE user_id=?').get(res.locals.user.user_id);
+  if (!u.totp_enabled) return res.redirect('/profile');
+  const remaining = u.totp_recovery_codes
+    ? JSON.parse(u.totp_recovery_codes).filter(Boolean).length : 0;
+  const codesHtml = codes
+    ? codes.map((c) => `<code class="recovery-code">${esc(c)}</code>`).join('')
+    : '';
+  const body = `
+    ${pageHero('Recovery codes', 'Store these somewhere safe — each can only be used once.')}
+    <div class="card card--md">
+      ${isNew ? `
+        <div class="flash flash-success" style="margin-bottom:1rem">
+          2FA is now enabled. Save these recovery codes before leaving this page — they will not be shown again.
+        </div>
+        <div class="recovery-codes-grid">${codesHtml}</div>
+        <p class="muted-text" style="margin-top:1rem">If you lose access to your authenticator app, use one of these codes to sign in. Each code works only once.</p>
+        <div class="actions form-actions" style="margin-top:1.5rem">
+          <a class="btn ghost" href="/profile/2fa/recovery-codes.txt" download>⬇ Download codes</a>
+          <a class="btn primary" href="/profile">I've saved these</a>
+        </div>` : `
+        <p>${remaining} of 8 recovery codes remaining.</p>
+        <p class="muted-text">If you're running low, regenerate a fresh set. Old codes are invalidated immediately.</p>
+        <form method="post" action="/profile/2fa/regen-codes">
+          <label>Confirm your password to regenerate<input type="password" name="password" required style="margin-top:.5rem"></label>
+          <div class="actions form-actions" style="margin-top:1.25rem">
+            <a class="btn ghost" href="/profile">Cancel</a>
+            <button type="submit">Regenerate codes</button>
+          </div>
+        </form>`}
+    </div>`;
+  res.page({ title: 'Recovery codes', active: '/profile', body });
+});
+
+app.get('/profile/2fa/recovery-codes.txt', (req, res) => {
+  const codes = req.session.newRecoveryCodes || null;
+  if (!codes) return res.redirect('/profile/2fa/recovery-codes');
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Content-Disposition', 'attachment; filename="recovery-codes.txt"');
+  res.send(`${CHURCH_NAME} — 2FA Recovery Codes\nGenerated: ${new Date().toISOString()}\n\n${codes.join('\n')}\n\nKeep these codes safe. Each can only be used once.\n`);
+});
+
+app.post('/profile/2fa/regen-codes', (req, res) => {
+  const u = db.prepare('SELECT password_hash, totp_enabled FROM users WHERE user_id=?').get(res.locals.user.user_id);
+  if (!u.totp_enabled) return res.redirect('/profile');
+  if (!bcrypt.compareSync(req.body.password || '', u.password_hash)) return res.redirect('/profile?te=1');
+  const codes = generateRecoveryCodes();
+  const hashes = JSON.stringify(codes.map(hashRecoveryCode));
+  db.prepare('UPDATE users SET totp_recovery_codes=? WHERE user_id=?').run(hashes, res.locals.user.user_id);
+  logSecurityEvent(req, 'totp_recovery_codes_regen', `user_id:${res.locals.user.user_id}`, res.locals.user.user_id);
+  req.session.newRecoveryCodes = codes;
+  res.redirect('/profile/2fa/recovery-codes');
 });
 
 app.post('/profile/2fa/disable', (req, res) => {
@@ -4591,6 +4726,7 @@ app.get('/login/totp', (req, res) => {
         <button class="btn--full" type="submit">Verify</button>
       </div>
     </form>
+    <p class="auth-link-row"><a href="/login/recovery">Can't access your app? Use a recovery code</a></p>
     <p class="auth-link-row"><a href="/login">← Back to sign in</a></p>
   `));
 });
@@ -4612,6 +4748,49 @@ app.post('/login/totp', (req, res) => {
   delete req.session.pendingTotpUserId;
   req.session.userId = user.user_id;
   logSecurityEvent(req, 'login_success', `user_id:${user.user_id}`, user.user_id);
+  res.redirect(trialHasExpired() ? '/billing' : '/');
+});
+
+app.get('/login/recovery', (req, res) => {
+  if (req.session.userId) return res.redirect('/');
+  if (!req.session.pendingTotpUserId) return res.redirect('/login');
+  const error = req.query.e ? 'Invalid or already-used recovery code.' : null;
+  res.send(authPage('Use a recovery code', `
+    ${error ? `<p class="error">${esc(error)}</p>` : ''}
+    <p class="muted" style="margin-bottom:1rem">Enter one of your 8 recovery codes. Each code can only be used once.</p>
+    <form method="post" action="/login/recovery" class="form form-bare">
+      <label class="wide">Recovery code
+        <input type="text" name="code" placeholder="XXXXX-XXXXX" required autocomplete="off" autofocus
+               style="font-family:monospace;letter-spacing:.1em">
+      </label>
+      <div class="actions form-actions">
+        <a class="btn ghost" href="/login/totp">← Use authenticator</a>
+        <button type="submit">Verify</button>
+      </div>
+    </form>
+    <p class="auth-link-row"><a href="/login">← Back to sign in</a></p>
+  `));
+});
+
+app.post('/login/recovery', (req, res) => {
+  if (!req.session.pendingTotpUserId) return res.redirect('/login');
+  const userId = req.session.pendingTotpUserId;
+  const user = db.prepare('SELECT user_id, totp_recovery_codes FROM users WHERE user_id=? AND deleted_at IS NULL').get(userId);
+  if (!user || !user.totp_recovery_codes) return res.redirect('/login');
+  const input = String(req.body.code || '').replace(/\s/g, '');
+  const inputHash = hashRecoveryCode(input);
+  let hashes;
+  try { hashes = JSON.parse(user.totp_recovery_codes); } catch { return res.redirect('/login/recovery?e=1'); }
+  const idx = hashes.indexOf(inputHash);
+  if (idx === -1) {
+    logSecurityEvent(req, 'recovery_code_failed', `user_id:${userId}`, null);
+    return res.redirect('/login/recovery?e=1');
+  }
+  hashes[idx] = null; // mark used
+  db.prepare('UPDATE users SET totp_recovery_codes=? WHERE user_id=?').run(JSON.stringify(hashes), user.user_id);
+  delete req.session.pendingTotpUserId;
+  req.session.userId = user.user_id;
+  logSecurityEvent(req, 'login_via_recovery_code', `user_id:${user.user_id};code_idx:${idx}`, user.user_id);
   res.redirect(trialHasExpired() ? '/billing' : '/');
 });
 
