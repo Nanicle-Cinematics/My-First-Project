@@ -3465,7 +3465,7 @@ app.get('/help', (req, res) => {
 app.get('/admin/export', requireAdmin, (req, res) => {
   const body = `
     ${pageHero('Data Export', 'Download a full copy of all church data in JSON format.')}
-    <div class="card" style="max-width:560px">
+    <div class="card card--md">
       <p>This export includes members, attendance, contributions, pledges, events, expenses, journal entries, and users (without password hashes). Use it for backups, migrations, or compliance.</p>
       <p class="muted-text">The file may be large for established congregations. All dates are in ISO 8601 format (UTC).</p>
       <div class="actions form-actions" style="margin-top:1.5rem">
@@ -3554,7 +3554,7 @@ app.get('/backups', requireOwner, (req, res) => {
           <td data-label="Backup"><span class="m-name">${esc(b.name)}</span></td>
           <td data-label="Size">${fmtBytes(b.size)}</td>
           <td data-label="Created">${b.mtime.toLocaleString('en-GB')}</td>
-          <td data-label="Actions"><div class="row-actions" style="gap:0.5rem">
+          <td data-label="Actions"><div class="row-actions row-actions--sm">
             <a class="btn ghost" href="/backups/${encodeURIComponent(b.name)}/download">⬇ Download</a>
             <form method="post" action="/backups/${encodeURIComponent(b.name)}/verify">
               <button class="btn ghost" type="submit">Verify</button></form>
@@ -3574,7 +3574,7 @@ app.get('/backups', requireOwner, (req, res) => {
       </div>`;
 
   const tools = `
-    <div class="card" style="margin-bottom:1rem">
+    <div class="card card--mb">
       <div class="card-head"><h2>Create &amp; restore</h2></div>
       <div class="filter-bar">
         <form method="post" action="/backups/create"><button class="btn primary" type="submit">＋ Create backup now</button></form>
@@ -3713,11 +3713,11 @@ app.get('/settings', requireOwner, (req, res) => {
       <div class="card-head"><h2>Send a test message</h2><span class="meta">Dry-run if provider unset</span></div>
       <p class="muted-text">Verify your settings by sending yourself a test. If a service isn't configured, you'll get a dry-run notice instead of a real send.</p>
       <form method="post" action="/settings/test-sms" class="filter-bar" data-no-confirm="1" style="margin-bottom:0.6rem">
-        <input type="tel" name="to" placeholder="Phone, e.g. 0244123456" required style="flex:1;min-width:200px">
+        <input type="tel" name="to" placeholder="Phone, e.g. 0244123456" required class="grow">
         <button class="btn primary" type="submit">＋ Send test SMS</button>
       </form>
       <form method="post" action="/settings/test-email" class="filter-bar" data-no-confirm="1">
-        <input type="email" name="to" placeholder="you@example.com" required style="flex:1;min-width:200px">
+        <input type="email" name="to" placeholder="you@example.com" required class="grow">
         <button class="btn primary" type="submit">＋ Send test email</button>
       </form>
     </div>
@@ -3789,7 +3789,7 @@ app.get('/profile', (req, res) => {
   const financeRoleLabel = FINANCE_ROLE_LABELS[u.finance_role || 'none'] || u.finance_role || 'No finance access';
   const body = `
     ${pageHero('Profile', 'Account controls for your signed-in user.')}
-    <div class="card" style="margin-bottom:1rem">
+    <div class="card card--mb">
       <div class="card-head"><h2>Account</h2><span class="meta">Signed-in user</span></div>
       <dl class="stats">
         <dt>Username</dt><dd><strong>${esc(u.username)}</strong></dd>
@@ -3798,20 +3798,20 @@ app.get('/profile', (req, res) => {
         <dt>Finance role</dt><dd><span class="pill">${esc(financeRoleLabel)}</span></dd>
       </dl>
     </div>
-    <div class="card" style="margin-bottom:1rem">
+    <div class="card card--mb">
       <div class="card-head"><h2>Email address</h2><span class="meta">Used for password reset</span></div>
       ${emailError ? `<p class="error">${esc(emailError)}</p>` : ''}
-      <form class="form" method="post" action="/profile/email" style="box-shadow:none;border:0;padding:0">
+      <form class="form form-bare" method="post" action="/profile/email">
         <label class="wide">Email<input type="email" name="email" value="${esc(dbUser.email || '')}" placeholder="you@example.com"></label>
         <div class="actions form-actions">
           <button type="submit">Save email</button>
         </div>
       </form>
     </div>
-    <div class="card" style="margin-bottom:1rem">
+    <div class="card card--mb">
       <div class="card-head"><h2>Change password</h2><span class="meta">Min 8 characters</span></div>
       ${pwError ? `<p class="error">${esc(pwError)}</p>` : ''}
-      <form class="form" method="post" action="/profile/password" style="box-shadow:none;border:0;padding:0">
+      <form class="form form-bare" method="post" action="/profile/password">
         <label class="wide">Current password<input type="password" name="current" required></label>
         <label class="wide">New password<input type="password" name="next" required minlength="8"></label>
         <label class="wide">Confirm new password<input type="password" name="next2" required></label>
@@ -3879,13 +3879,13 @@ app.get('/profile/2fa/setup', (req, res) => {
   QRCode.toDataURL(uri, (err, dataUrl) => {
     const body = `
       ${pageHero('Set up 2FA', 'Scan the QR code with your authenticator app, then verify.')}
-      <div class="card" style="max-width:460px">
+      <div class="card card--narrow">
         <p>1. Open your authenticator app (Google Authenticator, Authy, 1Password, etc.).</p>
         <p>2. Scan this QR code:</p>
-        ${err ? `<p class="error">Could not generate QR code.</p>` : `<img src="${esc(dataUrl)}" alt="2FA QR code" style="display:block;margin:1rem 0;max-width:220px">`}
-        <p>Or enter the key manually: <code style="word-break:break-all">${esc(secret.base32)}</code></p>
+        ${err ? `<p class="error">Could not generate QR code.</p>` : `<img src="${esc(dataUrl)}" alt="2FA QR code" class="qr-setup-img">`}
+        <p>Or enter the key manually: <code class="break-all">${esc(secret.base32)}</code></p>
         <p>3. Enter the 6-digit code from the app to confirm:</p>
-        <form method="post" action="/profile/2fa/enable" class="form" style="box-shadow:none;border:0;padding:0">
+        <form method="post" action="/profile/2fa/enable" class="form form-bare">
           <label class="wide">Verification code<input type="text" name="token" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code"></label>
           <div class="actions form-actions">
             <a class="btn ghost" href="/profile">Cancel</a>
@@ -4368,7 +4368,7 @@ app.get('/operations', requireOwner, (req, res) => {
         { cls: 'blue', icon: '🔑', value: Number(activeUsers).toLocaleString(), label: 'Active Users' },
       ])}
       ${listCard({ title: 'Operational Checks', count: checks.length, countLabel: 'checks', inner: table(['Check', 'Status', 'Detail', 'Link'], rows) })}
-      <section class="card" style="margin-top:1rem">
+      <section class="card card--mt">
         <div class="card-head"><h2>Operational Metrics</h2><span class="meta">Auth, errors, notifications</span></div>
         ${table(['Metric', 'Value', 'Notes'], [
           ['Login failures (24h)',  String(authMetrics.fails_24h  || 0),
@@ -4382,7 +4382,7 @@ app.get('/operations', requireOwner, (req, res) => {
             `${notifMetrics.total_sent || 0} sent · ${notifMetrics.total_failed || 0} failed`],
         ])}
       </section>
-      <div class="card" style="margin-top:1rem">
+      <div class="card card--mt">
         <div class="card-head"><h2>Runbook</h2><a href="/operations/health-report.txt">Download health report</a></div>
         <p>Use <code>docs/OPERATIONS_RUNBOOK.md</code> for deploy checks, monthly restore drills and rollback steps.</p>
       </div>`,
@@ -4449,13 +4449,13 @@ app.get('/forgot', (req, res) => {
        <p class="muted">Link expires in 1 hour. If you don't see it, ask an administrator to reset your password manually.</p>
        <div class="actions"><a class="btn" href="/login">← Back to sign in</a></div>`
     : `<p class="muted">Enter your username. If an email address is on file for your account, you'll receive a reset link.</p>
-       <form method="post" action="/forgot" class="form" style="border:0;box-shadow:none;padding:0">
+       <form method="post" action="/forgot" class="form form-bare">
          <label class="wide">Username<input name="username" required autocomplete="username" autofocus></label>
-         <div class="actions form-actions" style="margin-top:1.5rem">
-           <button type="submit" style="width:100%">Send reset link</button>
+         <div class="actions form-actions">
+           <button class="btn--full" type="submit">Send reset link</button>
          </div>
        </form>
-       <p style="margin-top:1rem;text-align:center"><a href="/login">← Back to sign in</a></p>`
+       <p class="auth-link-row"><a href="/login">← Back to sign in</a></p>`
   ));
 });
 
@@ -4505,11 +4505,11 @@ app.get('/reset-password/:token', (req, res) => {
   res.send(authPage('Set a new password', `
     ${error ? `<p class="error">${esc(error)}</p>` : ''}
     <p class="muted">Setting a new password for <strong>${esc(row.username)}</strong>.</p>
-    <form method="post" action="/reset-password/${esc(req.params.token)}" class="form" style="border:0;box-shadow:none;padding:0">
+    <form method="post" action="/reset-password/${esc(req.params.token)}" class="form form-bare">
       <label class="wide">New password<input type="password" name="password" required minlength="8" autofocus></label>
       <label class="wide">Confirm password<input type="password" name="password2" required></label>
-      <div class="actions form-actions" style="margin-top:1.5rem">
-        <button type="submit" style="width:100%">Set password</button>
+      <div class="actions form-actions">
+        <button class="btn--full" type="submit">Set password</button>
       </div>
     </form>`));
 });
@@ -4582,16 +4582,16 @@ app.get('/login/totp', (req, res) => {
   res.send(authPage('Two-factor authentication', `
     ${error ? `<p class="error">${esc(error)}</p>` : ''}
     <p class="muted" style="margin-bottom:1rem">Enter the 6-digit code from your authenticator app.</p>
-    <form method="post" action="/login/totp" class="form" style="border:0;box-shadow:none;padding:0">
+    <form method="post" action="/login/totp" class="form form-bare">
       <label class="wide">Authentication code
         <input type="text" name="token" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
-               required autocomplete="one-time-code" autofocus style="letter-spacing:.25em;font-size:1.4rem;text-align:center">
+               required autocomplete="one-time-code" autofocus class="otp-input">
       </label>
-      <div class="actions form-actions" style="margin-top:1.5rem">
-        <button type="submit" style="width:100%">Verify</button>
+      <div class="actions form-actions">
+        <button class="btn--full" type="submit">Verify</button>
       </div>
     </form>
-    <p style="margin-top:1rem;text-align:center"><a href="/login">← Back to sign in</a></p>
+    <p class="auth-link-row"><a href="/login">← Back to sign in</a></p>
   `));
 });
 
@@ -4658,11 +4658,11 @@ app.use((req, res) => {
   res.status(404).send(layout({
     title: 'Page not found', user: res.locals.user, active: null,
     body: `
-      <div style="text-align:center;padding:4rem 1rem">
-        <div style="font-size:4rem;font-weight:700;opacity:.15">404</div>
-        <h1 style="margin:.5rem 0 1rem">Page not found</h1>
+      <div class="error-page">
+        <div class="error-code">404</div>
+        <h1>Page not found</h1>
         <p class="muted-text">The page <code>${esc(req.path)}</code> doesn't exist.</p>
-        <div style="margin-top:2rem;display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap">
+        <div class="error-actions">
           <a class="btn primary" href="/">Dashboard</a>
           <a class="btn ghost" href="/members">Members</a>
           <a class="btn ghost" href="/finance">Finance</a>
@@ -4692,12 +4692,12 @@ app.use((err, req, res, next) => {
   res.status(500).send(layout({
     title: 'Something went wrong', user: res.locals.user, active: null,
     body: `
-      <div style="text-align:center;padding:4rem 1rem">
-        <div style="font-size:4rem;font-weight:700;opacity:.15">500</div>
-        <h1 style="margin:.5rem 0 1rem">Something went wrong</h1>
+      <div class="error-page">
+        <div class="error-code">500</div>
+        <h1>Something went wrong</h1>
         <p class="muted-text">An unexpected error occurred and has been logged.${errorRef ? ` (ref #${errorRef})` : ''}</p>
         <p class="muted-text">If this keeps happening, share the reference number with your system administrator.</p>
-        <div style="margin-top:2rem;display:flex;gap:.75rem;justify-content:center">
+        <div class="error-actions">
           <a class="btn primary" href="/">Back to dashboard</a>
           ${res.locals.user && res.locals.user.role === 'admin' ? `<a class="btn ghost" href="/errors">View error log</a>` : ''}
         </div>

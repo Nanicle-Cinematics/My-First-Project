@@ -7780,3 +7780,57 @@ body.public-landing .public-login:hover {
     width: 100%;
   }
 }
+
+/* ─── Design-system utilities (eliminates inline-style leakage) ─── */
+
+/* Strip .form card chrome when nested inside a .card */
+.form-bare {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  border-radius: 0;
+}
+.form-bare .form-actions,
+.form-bare .actions {
+  margin-top: 1.5rem;
+}
+
+/* Card width + spacing modifiers */
+.card--narrow { max-width: 460px; }
+.card--md     { max-width: 560px; }
+.card--mb     { margin-bottom: 1rem; }
+.card--mt     { margin-top: 1rem; }
+
+/* Full-width centred button */
+.btn--full { width: 100%; justify-content: center; }
+
+/* Tighter row-actions gap (when actions fit on one row) */
+.row-actions--sm { gap: 0.5rem; }
+
+/* Growing input inside a .filter-bar */
+.filter-bar .grow { flex: 1; min-width: 200px; }
+
+/* TOTP / OTP digit input — large centred numerals */
+.otp-input { letter-spacing: .25em; font-size: 1.4rem; text-align: center; }
+
+/* QR code image in 2FA setup */
+.qr-setup-img { display: block; margin: 1rem 0; max-width: 220px; }
+
+/* Inline code containing long tokens or secrets */
+code.break-all { word-break: break-all; }
+
+/* Centred link row beneath auth forms */
+.auth-link-row { margin-top: 1rem; text-align: center; }
+
+/* Error / empty-state hero — used on 404 and 500 pages */
+.error-page { text-align: center; padding: 4rem 1rem; }
+.error-page .error-code { font-size: 4rem; font-weight: 700; opacity: .15; line-height: 1; }
+.error-page h1 { margin: .5rem 0 1rem; }
+.error-page .error-actions {
+  margin-top: 2rem;
+  display: flex;
+  gap: .75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
