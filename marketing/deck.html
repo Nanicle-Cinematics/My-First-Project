@@ -1,0 +1,997 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Church Manager — Sales Deck — Nanicle Enterprise Solutions</title>
+<style>
+/* ── Brand tokens (matches marketing/styles.css) ─────────────────── */
+:root {
+  --blue:      #1d4e89;
+  --blue-dark: #102a55;
+  --blue-soft: #e9eef7;
+  --gold:      #d4a017;
+  --gold-dark: #a37c00;
+  --gold-soft: #fbedc4;
+  --ink:       #15233a;
+  --muted:     #6b7080;
+  --soft:      #f5f3ec;
+  --border:    #e3e6ec;
+  --white:     #ffffff;
+}
+
+/* ── Reset ────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  background: #2a2a2a;
+  color: var(--ink);
+}
+
+/* ── Slide container ──────────────────────────────────────────────── */
+.slide {
+  width: 297mm;        /* A4 landscape */
+  min-height: 210mm;
+  max-width: 100%;
+  margin: 24px auto;
+  background: var(--white);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.4);
+}
+
+/* ── Slide footer watermark ───────────────────────────────────────── */
+.slide::after {
+  content: "Nanicle Enterprise Solutions · naniclecinematics@gmail.com · +233 54 156 0648";
+  position: absolute;
+  bottom: 8mm;
+  right: 10mm;
+  font-size: 8pt;
+  color: rgba(255,255,255,0.45);
+  letter-spacing: 0.02em;
+}
+.slide.light-footer::after { color: rgba(15,35,70,0.35); }
+
+/* ── Page-break styles for print ─────────────────────────────────── */
+@media print {
+  body { background: white; }
+  .slide {
+    width: 100%;
+    min-height: 0;
+    height: 100vh;
+    margin: 0;
+    box-shadow: none;
+    page-break-after: always;
+    break-after: page;
+  }
+  .slide:last-child { page-break-after: avoid; break-after: avoid; }
+  .print-btn { display: none; }
+}
+
+/* ── Print button (screen only) ──────────────────────────────────── */
+.print-btn {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--gold);
+  color: var(--blue-dark);
+  border: none;
+  border-radius: 10px;
+  padding: 12px 22px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+  z-index: 99;
+}
+.print-btn:hover { background: var(--gold-dark); color: white; }
+
+/* ════════════════════════════════════════════════════════════════════
+   SLIDE 1 — COVER
+   ════════════════════════════════════════════════════════════════════ */
+.slide-cover {
+  background: linear-gradient(135deg, var(--blue-dark) 0%, var(--blue) 60%, #2563a8 100%);
+  justify-content: center;
+  align-items: flex-start;
+  padding: 18mm 20mm;
+  gap: 0;
+}
+.cover-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10mm;
+}
+.cover-logo-icon {
+  width: 52px; height: 52px;
+  background: var(--gold);
+  border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.6rem;
+}
+.cover-logo-name { color: white; font-size: 1.2rem; font-weight: 700; letter-spacing: -0.01em; }
+.cover-logo-by { color: rgba(255,255,255,0.55); font-size: 0.8rem; font-weight: 400; }
+
+.cover-headline {
+  color: white;
+  font-size: 3.2rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  max-width: 480px;
+  margin-bottom: 6mm;
+}
+.cover-sub {
+  color: rgba(255,255,255,0.75);
+  font-size: 1.25rem;
+  max-width: 440px;
+  line-height: 1.5;
+  margin-bottom: 14mm;
+}
+.cover-pills {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cover-pill {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.25);
+  color: rgba(255,255,255,0.9);
+  border-radius: 100px;
+  padding: 6px 16px;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+.cover-art {
+  position: absolute;
+  right: 12mm;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 105mm;
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  border: 2px solid rgba(255,255,255,0.12);
+  overflow: hidden;
+}
+.cover-art img { width: 100%; display: block; }
+
+/* ════════════════════════════════════════════════════════════════════
+   SLIDE 2 — THE PROBLEM
+   ════════════════════════════════════════════════════════════════════ */
+.slide-problem {
+  background: var(--soft);
+  padding: 14mm 16mm;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 14mm;
+  justify-content: flex-start;
+}
+.slide-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 3mm;
+}
+.label-blue { color: var(--blue); }
+.label-gold { color: var(--gold-dark); }
+.slide-title {
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  margin-bottom: 8mm;
+}
+.problem-left {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.problem-right {
+  flex: 1.1 1 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-content: center;
+}
+.pain-card {
+  background: white;
+  border-radius: 12px;
+  padding: 14px 16px;
+  border-left: 3px solid var(--gold);
+  box-shadow: 0 2px 8px rgba(15,35,70,0.07);
+}
+.pain-card .icon { font-size: 1.4rem; margin-bottom: 6px; }
+.pain-card h4 { font-size: 0.88rem; font-weight: 700; color: var(--ink); margin-bottom: 3px; }
+.pain-card p { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+.problem-intro {
+  font-size: 1.05rem;
+  color: var(--muted);
+  line-height: 1.6;
+  max-width: 340px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SLIDE 3 — THE SOLUTION
+   ════════════════════════════════════════════════════════════════════ */
+.slide-solution {
+  background: linear-gradient(135deg, var(--blue-dark) 0%, var(--blue) 100%);
+  padding: 14mm 16mm;
+  flex-direction: row;
+  align-items: center;
+  gap: 14mm;
+  color: white;
+}
+.solution-left {
+  flex: 1 1 0;
+}
+.solution-title {
+  font-size: 2.4rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: white;
+  letter-spacing: -0.03em;
+  margin-bottom: 5mm;
+}
+.solution-sub {
+  font-size: 1.05rem;
+  color: rgba(255,255,255,0.75);
+  line-height: 1.6;
+  margin-bottom: 8mm;
+  max-width: 360px;
+}
+.solution-modules {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sol-module {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.9);
+}
+.sol-module .mod-icon { font-size: 1.1rem; }
+.solution-right {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.solution-screenshot {
+  width: 100%;
+  max-width: 400px;
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.4);
+  border: 2px solid rgba(255,255,255,0.12);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SLIDE 4 — FEATURES
+   ════════════════════════════════════════════════════════════════════ */
+.slide-features {
+  background: white;
+  padding: 14mm 16mm;
+}
+.slide-features .slide-label { margin-bottom: 1.5mm; }
+.slide-features .slide-title { margin-bottom: 8mm; font-size: 1.8rem; }
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.feat-card {
+  background: var(--soft);
+  border-radius: 12px;
+  padding: 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.feat-card .feat-icon {
+  font-size: 1.5rem;
+  margin-bottom: 2px;
+}
+.feat-card h4 {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1.2;
+}
+.feat-card p {
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SLIDE 5 — HOW IT WORKS
+   ════════════════════════════════════════════════════════════════════ */
+.slide-how {
+  background: var(--blue-soft);
+  padding: 14mm 16mm;
+}
+.slide-how .slide-title { margin-bottom: 10mm; font-size: 1.8rem; }
+.how-grid {
+  display: grid;
+  grid-template-columns: 1fr 28px 1fr 28px 1fr 28px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.how-step {
+  background: white;
+  border-radius: 14px;
+  padding: 16px 16px;
+  position: relative;
+}
+.how-num {
+  width: 38px; height: 38px;
+  background: var(--blue);
+  color: white;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.05rem;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+.how-step h4 { font-size: 0.92rem; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
+.how-step p  { font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+.how-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: var(--blue);
+  align-self: center;
+}
+.timeline-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8mm;
+  padding: 10px 14px;
+  background: var(--gold-soft);
+  border-radius: 10px;
+  border-left: 4px solid var(--gold);
+  font-size: 0.85rem;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SLIDE 6 — PRICING
+   ════════════════════════════════════════════════════════════════════ */
+.slide-pricing {
+  background: var(--soft);
+  padding: 12mm 16mm;
+}
+.slide-pricing .slide-title { margin-bottom: 8mm; font-size: 1.8rem; }
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.plan-card {
+  background: white;
+  border-radius: 14px;
+  padding: 18px 18px;
+  border: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.plan-card.featured {
+  border-color: var(--blue);
+  box-shadow: 0 8px 28px rgba(29,78,137,0.18);
+}
+.plan-badge {
+  display: inline-block;
+  background: var(--blue);
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 10px;
+  border-radius: 100px;
+  margin-bottom: 8px;
+  align-self: flex-start;
+}
+.plan-name {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+.plan-target {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.plan-setup {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.plan-setup strong { color: var(--ink); }
+.plan-monthly {
+  font-size: 1.7rem;
+  font-weight: 800;
+  color: var(--blue);
+  line-height: 1;
+  margin-bottom: 10px;
+}
+.plan-monthly sup { font-size: 0.9rem; font-weight: 600; }
+.plan-monthly span { font-size: 0.78rem; color: var(--muted); font-weight: 400; }
+.plan-divider { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+.plan-features { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.plan-features li {
+  font-size: 0.78rem;
+  color: var(--muted);
+  padding-left: 16px;
+  position: relative;
+  line-height: 1.4;
+}
+.plan-features li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--blue);
+  font-weight: 700;
+  font-size: 0.72rem;
+}
+.pricing-note {
+  margin-top: 6mm;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SLIDE 7 — SECURITY & TRUST
+   ════════════════════════════════════════════════════════════════════ */
+.slide-trust {
+  background: linear-gradient(135deg, var(--blue-dark) 0%, #1a3f6e 100%);
+  padding: 14mm 16mm;
+  color: white;
+}
+.slide-trust .slide-label { color: var(--gold); }
+.slide-trust .slide-title { color: white; margin-bottom: 8mm; font-size: 1.8rem; }
+.trust-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.trust-card {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+.trust-icon { font-size: 1.6rem; margin-bottom: 8px; }
+.trust-card h4 { font-size: 0.9rem; font-weight: 700; color: white; margin-bottom: 5px; }
+.trust-card p  { font-size: 0.78rem; color: rgba(255,255,255,0.65); line-height: 1.5; }
+.trust-bottom {
+  margin-top: 8mm;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(212,160,23,0.18);
+  border: 1px solid rgba(212,160,23,0.35);
+  border-radius: 10px;
+  padding: 10px 16px;
+  color: var(--gold-soft);
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SLIDE 8 — GET STARTED
+   ════════════════════════════════════════════════════════════════════ */
+.slide-cta {
+  background: linear-gradient(135deg, var(--blue-dark) 0%, var(--blue) 60%, #2563a8 100%);
+  padding: 14mm 16mm;
+  flex-direction: row;
+  align-items: center;
+  gap: 16mm;
+  justify-content: center;
+  color: white;
+}
+.cta-left {
+  flex: 1 1 0;
+  max-width: 380px;
+}
+.cta-headline {
+  font-size: 2.4rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: white;
+  letter-spacing: -0.03em;
+  margin-bottom: 5mm;
+}
+.cta-sub {
+  font-size: 1rem;
+  color: rgba(255,255,255,0.75);
+  line-height: 1.6;
+  margin-bottom: 8mm;
+}
+.cta-contacts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cta-contact-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 12px;
+  padding: 10px 16px;
+}
+.cta-contact-item .ci-icon { font-size: 1.2rem; }
+.cta-contact-item .ci-label {
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.55);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1;
+}
+.cta-contact-item .ci-value {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: white;
+  line-height: 1;
+  margin-top: 2px;
+}
+.cta-right {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.cta-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 240px;
+}
+.cta-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.cta-step-num {
+  width: 28px; height: 28px;
+  background: var(--gold);
+  color: var(--blue-dark);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.cta-step-text h5 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: white;
+  margin-bottom: 2px;
+}
+.cta-step-text p {
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.6);
+  line-height: 1.4;
+}
+.cta-brand {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: rgba(255,255,255,0.4);
+  text-align: center;
+}
+
+/* ── Responsive: stack on mobile ──────────────────────────────────── */
+@media (max-width: 900px) {
+  .slide { width: 100%; margin: 0; border-radius: 0; }
+  .slide-problem, .slide-solution, .slide-how,
+  .slide-cta { flex-direction: column; }
+  .cover-art { display: none; }
+  .features-grid { grid-template-columns: repeat(2, 1fr); }
+  .how-grid { grid-template-columns: 1fr 1fr; }
+  .how-arrow { display: none; }
+  .pricing-grid { grid-template-columns: 1fr; }
+  .trust-grid { grid-template-columns: 1fr 1fr; }
+  .cta-right { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<button class="print-btn" onclick="window.print()">⬇ Export PDF</button>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE 1 — COVER
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="slide slide-cover">
+  <div class="cover-logo">
+    <div class="cover-logo-icon">⛪</div>
+    <div>
+      <div class="cover-logo-name">Church Manager</div>
+      <div class="cover-logo-by">by Nanicle Enterprise Solutions</div>
+    </div>
+  </div>
+
+  <h1 class="cover-headline">Your whole church. One system.</h1>
+  <p class="cover-sub">
+    Professional church management software built from the ground up for
+    congregations in Ghana — members, offerings, SMS, and reports.
+  </p>
+  <div class="cover-pills">
+    <span class="cover-pill">Members &amp; Attendance</span>
+    <span class="cover-pill">Tithes &amp; Harvests</span>
+    <span class="cover-pill">SMS Broadcasts</span>
+    <span class="cover-pill">Day-born Offerings</span>
+    <span class="cover-pill">Finance Reports</span>
+    <span class="cover-pill">Private Deployment</span>
+  </div>
+
+  <div class="cover-art">
+    <img src="images/dashboard.png" alt="Church Manager dashboard">
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE 2 — THE PROBLEM
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="slide slide-problem light-footer">
+  <div class="problem-left">
+    <div class="slide-label label-gold">The Challenge</div>
+    <h2 class="slide-title">Most churches are still managing data the hard way.</h2>
+    <p class="problem-intro">
+      Paper ledgers, WhatsApp groups, and scattered Excel sheets make it hard to
+      track who gave, who came, and who needs a birthday call. Your data deserves better.
+    </p>
+  </div>
+
+  <div class="problem-right">
+    <div class="pain-card">
+      <div class="icon">📓</div>
+      <h4>Paper contribution books</h4>
+      <p>Tithes recorded by hand — error-prone, hard to total, impossible to search.</p>
+    </div>
+    <div class="pain-card">
+      <div class="icon">💬</div>
+      <h4>WhatsApp member lists</h4>
+      <p>Contact lists buried in group chats with no history, no filtering, no export.</p>
+    </div>
+    <div class="pain-card">
+      <div class="icon">📊</div>
+      <h4>Multiple Excel files</h4>
+      <p>Different secretaries keeping different spreadsheets that never agree.</p>
+    </div>
+    <div class="pain-card">
+      <div class="icon">🎂</div>
+      <h4>Missed birthdays</h4>
+      <p>No automated reminders — members feel forgotten, leaders feel guilty.</p>
+    </div>
+    <div class="pain-card">
+      <div class="icon">📜</div>
+      <h4>No audit trail</h4>
+      <p>When a collection figure is questioned, there's no way to verify who entered what.</p>
+    </div>
+    <div class="pain-card">
+      <div class="icon">⏱</div>
+      <h4>Hours of Sunday prep</h4>
+      <p>Printing registers, filling forms, counting cash twice — it shouldn't take this long.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE 3 — THE SOLUTION
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="slide slide-solution">
+  <div class="solution-left">
+    <div class="slide-label" style="color:var(--gold);letter-spacing:.12em;font-size:.72rem;font-weight:700;text-transform:uppercase;margin-bottom:3mm;">The Solution</div>
+    <h2 class="solution-title">One system.<br>Every job.</h2>
+    <p class="solution-sub">
+      Church Manager replaces paper, WhatsApp lists, and spreadsheets with a single,
+      private web app your team can access from any phone or laptop.
+    </p>
+    <div class="solution-modules">
+      <div class="sol-module"><span class="mod-icon">👥</span> Member registry with photos, households &amp; history</div>
+      <div class="sol-module"><span class="mod-icon">💰</span> Tithes, harvests, day-born &amp; special offerings</div>
+      <div class="sol-module"><span class="mod-icon">📱</span> SMS &amp; email broadcasts to any segment</div>
+      <div class="sol-module"><span class="mod-icon">🗓</span> Attendance tracking with QR check-in</div>
+      <div class="sol-module"><span class="mod-icon">📈</span> Finance reports, budgets &amp; expense ledger</div>
+      <div class="sol-module"><span class="mod-icon">🎂</span> Automated birthday &amp; anniversary messages</div>
+    </div>
+  </div>
+  <div class="solution-right">
+    <img class="solution-screenshot" src="images/members.png" alt="Members list">
+    <img class="solution-screenshot" src="images/tithes.png" alt="Tithes tracking" style="margin-top:-20px;">
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE 4 — KEY FEATURES
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="slide slide-features light-footer">
+  <div class="slide-label label-blue">Features</div>
+  <h2 class="slide-title">Everything your church needs — nothing you don't.</h2>
+  <div class="features-grid">
+    <div class="feat-card">
+      <div class="feat-icon">📅</div>
+      <h4>Day-born Offerings</h4>
+      <p>Track by Sun–Sat day tradition. Crosstab totals and head counts per service.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">🌾</div>
+      <h4>Harvest Management</h4>
+      <p>Set harvest targets, record pledges and payments, print summary reports for leadership.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">📲</div>
+      <h4>SMS Broadcasts</h4>
+      <p>Send to all members, a class, a group, or a custom segment. Ghana numbers handled automatically.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">📸</div>
+      <h4>Member Photos</h4>
+      <p>Upload member photos. Ushers recognise faces at the door; leaders put names to faces.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">💳</div>
+      <h4>Expense Ledger</h4>
+      <p>Record and categorise church expenses. Monthly income-vs-expense balance for treasurer reports.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">📊</div>
+      <h4>Reports &amp; Exports</h4>
+      <p>Print-ready financial summaries, attendance trends, member lists — exportable to Excel.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">🔐</div>
+      <h4>Roles &amp; 2FA</h4>
+      <p>Admin, editor, and viewer roles. Two-factor authentication and a full audit log.</p>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">🇬🇭</div>
+      <h4>Built for Ghana</h4>
+      <p>GH₵ throughout. Phones normalised (+233, 0244…). Works on any mobile data connection.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE 5 — HOW IT WORKS
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="slide slide-how light-footer">
+  <div class="slide-label label-blue">Process</div>
+  <h2 class="slide-title">Up and running in a week.</h2>
+  <div class="how-grid">
+    <div class="how-step">
+      <div class="how-num">1</div>
+      <h4>Request a demo</h4>
+      <p>Fill in the contact form or send us a WhatsApp. We'll schedule a free 30-minute walkthrough at a time that suits you.</p>
+    </div>
+    <div class="how-arrow">→</div>
+    <div class="how-step">
+      <div class="how-num">2</div>
+      <h4>We set you up</h4>
+      <p>We provision your church's own private installation, set up SMS, import your member list from a spreadsheet, and brand it with your church name.</p>
+    </div>
+    <div class="how-arrow">→</div>
+    <div class="how-step">
+      <div class="how-num">3</div>
+      <h4>Train your team</h4>
+      <p>A 90-minute training session (in person or video call) for secretary, treasurer, and pastor. Written guide + recorded video included.</p>
+    </div>
+    <div class="how-arrow">→</div>
+    <div class="how-step">
+      <div class="how-num">4</div>
+      <h4>You're live</h4>
+      <p>Start recording offerings, sending birthday messages, and printing reports the same Sunday. We're a WhatsApp message away if you need anything.</p>
+    </div>
+  </div>
+  <div class="timeline-bar">
+    ⏱ Typical time from first contact to go-live: <strong style="margin-left:4px;">5–7 days</strong>
+    &nbsp;·&nbsp; No IT expertise required &nbsp;·&nbsp; We handle all the technical work
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE 6 — PRICING
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="slide slide-pricing light-footer">
+  <div class="slide-label label-blue">Pricing</div>
+  <h2 class="slide-title">Simple, honest pricing.</h2>
+  <div class="pricing-grid">
+
+    <div class="plan-card">
+      <div class="plan-name">Starter</div>
+      <div class="plan-target">Small congregations · up to 200 members</div>
+      <div class="plan-setup">One-time setup: <strong>GH₵ 3,000</strong></div>
+      <div class="plan-monthly"><sup>GH₵</sup>150<span>/month</span></div>
+      <hr class="plan-divider">
+      <ul class="plan-features">
+        <li>Up to 200 members</li>
+        <li>300 SMS credits / month</li>
+        <li>Members, tithes &amp; expenses</li>
+        <li>QR check-in</li>
+        <li>Email broadcasts</li>
+        <li>Email + WhatsApp support</li>
+      </ul>
+    </div>
+
+    <div class="plan-card featured">
+      <div class="plan-badge">Most popular</div>
+      <div class="plan-name">Pro</div>
+      <div class="plan-target">Growing churches · up to 500 members</div>
+      <div class="plan-setup">One-time setup: <strong>GH₵ 5,000</strong></div>
+      <div class="plan-monthly"><sup>GH₵</sup>300<span>/month</span></div>
+      <hr class="plan-divider">
+      <ul class="plan-features">
+        <li>Up to 500 members</li>
+        <li>1,000 SMS credits / month</li>
+        <li>Harvest &amp; pledge tracking</li>
+        <li>Day-born offering reports</li>
+        <li>Finance budgets &amp; reports</li>
+        <li>Priority support (same-day response)</li>
+        <li>Quarterly data backup sent to you</li>
+      </ul>
+    </div>
+
+    <div class="plan-card">
+      <div class="plan-name">Enterprise</div>
+      <div class="plan-target">Large &amp; multi-branch churches</div>
+      <div class="plan-setup">One-time setup: <strong>GH₵ 8,000</strong></div>
+      <div class="plan-monthly"><sup>GH₵</sup>600<span>/month</span></div>
+      <hr class="plan-divider">
+      <ul class="plan-features">
+        <li>Unlimited members</li>
+        <li>3,000 SMS credits / month</li>
+        <li>All Pro features</li>
+        <li>Custom domain (yourchurch.com)</li>
+        <li>Multi-branch support</li>
+        <li>Dedicated account manager</li>
+        <li>On-site training session</li>
+      </ul>
+    </div>
+
+  </div>
+  <p class="pricing-note">
+    All plans include: private hosting on your own server, 2FA security, nightly backups, full data export, and free updates.
+    &nbsp;·&nbsp; No hidden fees.
+  </p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE 7 — SECURITY & TRUST
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="slide slide-trust">
+  <div class="slide-label">Security &amp; Trust</div>
+  <h2 class="slide-title">Your church data stays yours — private, backed up, and secure.</h2>
+  <div class="trust-grid">
+    <div class="trust-card">
+      <div class="trust-icon">🏛</div>
+      <h4>Private deployment</h4>
+      <p>Your church gets its own server — your data is never shared with other organisations. You can request a full export at any time.</p>
+    </div>
+    <div class="trust-card">
+      <div class="trust-icon">🔐</div>
+      <h4>Two-factor authentication</h4>
+      <p>Admins can enable 2FA (authenticator app). Recovery codes ensure no one gets permanently locked out.</p>
+    </div>
+    <div class="trust-card">
+      <div class="trust-icon">📋</div>
+      <h4>Audit log</h4>
+      <p>Every sensitive action — login, deletion, bulk SMS — is logged with timestamp and user. Full accountability.</p>
+    </div>
+    <div class="trust-card">
+      <div class="trust-icon">💾</div>
+      <h4>Nightly backups</h4>
+      <p>Automated backups every night. Quarterly backup files emailed directly to the church treasurer on Pro and Enterprise plans.</p>
+    </div>
+    <div class="trust-card">
+      <div class="trust-icon">🩺</div>
+      <h4>Always-on uptime</h4>
+      <p>Health monitoring, auto-restart, and at least one machine always running ensures the system is available when you need it.</p>
+    </div>
+    <div class="trust-card">
+      <div class="trust-icon">🔒</div>
+      <h4>HTTPS everywhere</h4>
+      <p>All traffic encrypted in transit. Passwords hashed with bcrypt. No plain-text credentials stored anywhere.</p>
+    </div>
+  </div>
+  <div class="trust-bottom">
+    🇬🇭 &nbsp;Built and supported by a Ghanaian technology company. We understand local church culture, local bank structures, and local needs.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SLIDE 8 — GET STARTED
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="slide slide-cta">
+  <div class="cta-left">
+    <h2 class="cta-headline">Ready to see it in action?</h2>
+    <p class="cta-sub">
+      A free 30-minute demo shows you exactly how Church Manager works for
+      your congregation. No commitment. We do all the setup for you.
+    </p>
+    <div class="cta-contacts">
+      <div class="cta-contact-item">
+        <div class="ci-icon">💬</div>
+        <div>
+          <div class="ci-label">WhatsApp</div>
+          <div class="ci-value">+233 54 156 0648</div>
+        </div>
+      </div>
+      <div class="cta-contact-item">
+        <div class="ci-icon">✉️</div>
+        <div>
+          <div class="ci-label">Email</div>
+          <div class="ci-value">naniclecinematics@gmail.com</div>
+        </div>
+      </div>
+      <div class="cta-contact-item">
+        <div class="ci-icon">🌐</div>
+        <div>
+          <div class="ci-label">Website</div>
+          <div class="ci-value">Ask us for the link to the live demo</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cta-right">
+    <div class="cta-steps">
+      <div class="cta-step">
+        <div class="cta-step-num">1</div>
+        <div class="cta-step-text">
+          <h5>Send us a WhatsApp</h5>
+          <p>Tell us your church name and size. We'll book a demo time.</p>
+        </div>
+      </div>
+      <div class="cta-step">
+        <div class="cta-step-num">2</div>
+        <div class="cta-step-text">
+          <h5>Free 30-min demo</h5>
+          <p>We walk through the full system live, with your questions.</p>
+        </div>
+      </div>
+      <div class="cta-step">
+        <div class="cta-step-num">3</div>
+        <div class="cta-step-text">
+          <h5>Proposal in 24 hrs</h5>
+          <p>Written quote, setup timeline, and payment schedule.</p>
+        </div>
+      </div>
+      <div class="cta-step">
+        <div class="cta-step-num">4</div>
+        <div class="cta-step-text">
+          <h5>Live in one week</h5>
+          <p>We handle everything. Your team starts using it Sunday.</p>
+        </div>
+      </div>
+    </div>
+    <div class="cta-brand">Nanicle Enterprise Solutions · Ghana</div>
+  </div>
+</div>
+
+</body>
+</html>
