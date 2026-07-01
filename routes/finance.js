@@ -61,6 +61,27 @@ function financeTabs(activePath) {
   }).join('');
   return `<div class="finance-tabs" role="navigation" aria-label="Finance sections">${groups}</div>`;
 }
+
+function financeHero(activePath, title, subtitle) {
+  const groups = FINANCE_TABS.map((group, i) => {
+    const sep = i > 0 ? '<span class="fhn-sep" aria-hidden="true"></span>' : '';
+    const label = group.label
+      ? `<span class="fhn-label">${esc(group.label)}</span>`
+      : '<span class="fhn-label" aria-hidden="true"></span>';
+    const links = `<div class="fhn-links">${group.links.map(([href, text]) =>
+      `<a class="${href === activePath ? 'active' : ''}" href="${href}">${esc(text)}</a>`
+    ).join('')}</div>`;
+    return `${sep}<div class="fhn-group">${label}${links}</div>`;
+  }).join('');
+  return `<div class="page-hero command-center finance-hero" data-command-center="true">
+    <div class="hero-kicker">Command Center</div>
+    <div class="hero-text">
+      <h1>${esc(title)}</h1>${subtitle ? `<p>${esc(subtitle)}</p>` : ''}
+    </div>
+    <nav class="finance-hero-nav" aria-label="Finance sections">${groups}</nav>
+  </div>`;
+}
+
 function loadServiceTypes() {
   return db.prepare(`SELECT service_type_id, type_name FROM service_types WHERE is_active=1 ORDER BY type_name`).all();
 }
@@ -408,7 +429,7 @@ app.get('/finance', (req, res) => {
   const dayBornMap = Object.fromEntries(dayBornYtd.map((r) => [r.day_born, r]));
 
   const body = `
-    ${pageHero('Finance', 'Offerings, tithes, harvests and expenses — this year at a glance.')}
+    ${financeHero('/finance', 'Finance', 'Offerings, tithes, harvests and expenses — this year at a glance.')}
     <div class="page-actions">
       <a class="btn primary" href="/finance/services">＋ Record Service</a>
       <a class="btn purple" href="/finance/special">＋ Special Offering</a>

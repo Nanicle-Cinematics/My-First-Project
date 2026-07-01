@@ -160,56 +160,66 @@ a:hover { text-decoration: underline; }
   width: 20px; display: inline-flex; justify-content: center; opacity: 0.85;
 }
 
-/* Finance sidebar sub-nav */
-.sidebar nav a.active-parent {
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.9);
+/* Finance hero — gradient card with embedded nav */
+.finance-hero { padding-bottom: 0.75rem; }
+.finance-hero-nav {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.3rem 0;
+  margin-top: 1rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
 }
-.finance-subnav {
-  margin: 0.2rem 0 0.4rem 1.5rem;
-  border-left: 1px solid rgba(255, 255, 255, 0.12);
-  padding-left: 0.65rem;
+.fhn-group {
   display: flex;
   flex-direction: column;
-  gap: 0.05rem;
+  align-items: flex-start;
+  gap: 0.12rem;
 }
-.subnav-group {
+.fhn-links {
   display: flex;
-  flex-direction: column;
-  gap: 0.02rem;
-  margin-top: 0.35rem;
+  align-items: center;
+  gap: 0.1rem;
 }
-.subnav-group:first-child { margin-top: 0; }
-.subnav-label {
+.fhn-label {
   font-size: 0.6rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.3);
-  padding: 0.25rem 0.5rem 0.1rem;
+  color: rgba(255, 255, 255, 0.35);
+  padding: 0 0.6rem;
+  min-height: 0.9rem;
+  line-height: 1;
 }
-.finance-subnav a {
-  display: block;
-  padding: 0.28rem 0.5rem;
-  border-radius: 5px;
+.fhn-sep {
+  width: 1px;
+  height: 2.1rem;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 0.3rem 0.25rem;
+  flex-shrink: 0;
+  align-self: flex-end;
+}
+.finance-hero-nav a {
+  display: inline-block;
+  padding: 0.38rem 0.65rem;
+  border-radius: 6px;
   font-size: 0.8rem;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.55);
-  text-decoration: none;
+  color: rgba(255, 255, 255, 0.6);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+  text-decoration: none;
+  transition: background 0.13s var(--ease), color 0.13s var(--ease);
 }
-.finance-subnav a:hover {
-  background: rgba(255, 255, 255, 0.08);
+.finance-hero-nav a:hover {
+  background: rgba(255, 255, 255, 0.1);
   color: #fff;
   text-decoration: none;
 }
-.finance-subnav a.active {
-  background: rgba(212, 160, 23, 0.18);
-  color: #f0c040;
-  font-weight: 600;
+.finance-hero-nav a.active {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-weight: 700;
 }
 
 /* Scripture — subtle translucent card on the blue bar */
