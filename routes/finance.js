@@ -17,28 +17,47 @@ module.exports.register = function register(app, ctx) {
 
 // ---------- finance: shared helpers ----------
 const FINANCE_TABS = [
-  ['/finance',          'Overview'],
-  ['/finance/services', 'Services'],
-  ['/finance/tithes',   'Tithes'],
-  ['/finance/income',   'Generic Income'],
-  ['/finance/day-borns', 'Day-Borns'],
-  ['/finance/harvests', 'Harvests'],
-  ['/finance/special',  'Special Offerings'],
-  ['/finance/pledges',  'Pledges'],
-  ['/finance/statements', 'Statements'],
-  ['/finance/receipts', 'Receipts'],
-  ['/finance/funds', 'Funds'],
-  ['/finance/projects', 'Projects'],
-  ['/finance/budgets', 'Budgets'],
-  ['/finance/expenses', 'Expenses'],
-  ['/finance/vouchers', 'Vouchers'],
-  ['/finance/accounting', 'Accounting'],
-  ['/finance/audit',      'Audit Trail'],
-  ['/finance/settings', 'Settings'],
+  { label: null, links: [
+    ['/finance', 'Overview'],
+  ]},
+  { label: 'Income', links: [
+    ['/finance/services',  'Services'],
+    ['/finance/tithes',    'Tithes'],
+    ['/finance/income',    'Income'],
+    ['/finance/day-borns', 'Day-Borns'],
+    ['/finance/harvests',  'Harvests'],
+    ['/finance/special',   'Special Offerings'],
+  ]},
+  { label: 'Expenses', links: [
+    ['/finance/expenses', 'Expenses'],
+    ['/finance/vouchers', 'Vouchers'],
+  ]},
+  { label: 'Pledges', links: [
+    ['/finance/pledges',    'Pledges'],
+    ['/finance/statements', 'Statements'],
+    ['/finance/receipts',   'Receipts'],
+  ]},
+  { label: 'Planning', links: [
+    ['/finance/funds',    'Funds'],
+    ['/finance/projects', 'Projects'],
+    ['/finance/budgets',  'Budgets'],
+  ]},
+  { label: 'Accounting', links: [
+    ['/finance/accounting', 'Accounting'],
+    ['/finance/audit',      'Audit Trail'],
+    ['/finance/settings',   'Settings'],
+  ]},
 ];
 function financeTabs(activePath) {
-  return `<div class="finance-tabs">${FINANCE_TABS.map(([href, label]) =>
-    `<a class="${href === activePath ? 'active' : ''}" href="${href}">${esc(label)}</a>`).join('')}</div>`;
+  const groups = FINANCE_TABS.map((group, i) => {
+    const sep = i > 0 ? '<span class="ftab-sep" aria-hidden="true"></span>' : '';
+    const label = group.label ? `<span class="ftab-label">${esc(group.label)}</span>` : '';
+    const links = group.links.map(([href, text]) =>
+      `<a class="${href === activePath ? 'active' : ''}" href="${href}">${esc(text)}</a>`
+    ).join('');
+    return `${sep}<div class="ftab-group">${label}${links}</div>`;
+  }).join('');
+  return `<div class="finance-tabs" role="navigation" aria-label="Finance sections">${groups}</div>`;
 }
 function loadServiceTypes() {
   return db.prepare(`SELECT service_type_id, type_name FROM service_types WHERE is_active=1 ORDER BY type_name`).all();
