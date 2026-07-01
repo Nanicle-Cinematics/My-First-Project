@@ -409,7 +409,6 @@ app.get('/finance', (req, res) => {
 
   const body = `
     ${pageHero('Finance', 'Offerings, tithes, harvests and expenses — this year at a glance.')}
-    ${financeTabs('/finance')}
     <div class="page-actions">
       <a class="btn primary" href="/finance/services">＋ Record Service</a>
       <a class="btn purple" href="/finance/special">＋ Special Offering</a>
@@ -557,7 +556,6 @@ app.get('/finance/income', (req, res) => {
          </form>
        </details>` : '';
   const body = `
-    ${financeTabs('/finance/income')}
     ${statsRow([
       { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent generic income' },
       { cls: 'blue', icon: '#', value: rows.length, label: 'Records shown' },
@@ -678,7 +676,6 @@ app.get('/finance/day-borns', (req, res) => {
        </details>` : '';
   const total = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const body = `
-    ${financeTabs('/finance/day-borns')}
     ${statsRow([
       { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent standalone collections' },
       { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
@@ -797,7 +794,6 @@ app.get('/finance/services', (req, res) => {
          </form>
        </details>` : '';
   const body = `
-    ${financeTabs('/finance/services')}
     ${addForm}
     ${recent.length ? table(['Date', 'Type', 'Total', 'Recorded by', ''],
       recent.map((s) => [esc(s.service_date),
@@ -868,7 +864,6 @@ app.get('/finance/services/:id', (req, res) => {
   const splitTotal = splits.reduce((a, b) => a + b.amount, 0);
   const headTotal = splits.reduce((a, b) => a + (b.head_count || 0), 0);
   const body = `
-    ${financeTabs('/finance/services')}
     <div class="card">
       <div class="card-head"><h2>${esc(s.type_name)} · ${esc(s.service_date)}</h2>
         <span class="meta">${fmtMoney(s.total_amount)}</span></div>
@@ -941,7 +936,6 @@ app.get('/finance/harvests', (req, res) => {
          </form>
        </details>` : '';
   const body = `
-    ${financeTabs('/finance/harvests')}
     ${addForm}
     ${recent.length ? table(['Year', 'Type', 'Name', 'Organization', 'Date', 'Collected', ''],
       recent.map((h) => [h.harvest_year, esc(h.harvest_type),
@@ -1009,7 +1003,6 @@ app.get('/finance/harvests/:id', (req, res) => {
        </form>` : '';
 
   const body = `
-    ${financeTabs('/finance/harvests')}
     <div class="card">
       <div class="card-head"><h2>${esc(h.harvest_name)}</h2>
         <span class="meta">${esc(h.harvest_type)} · ${h.harvest_year}</span></div>
@@ -1097,7 +1090,6 @@ app.get('/finance/special', (req, res) => {
          </form>
        </details>` : '';
   const body = `
-    ${financeTabs('/finance/special')}
     ${addForm}
     ${rows.length ? table(['Date', 'Donor', 'Category', 'Amount', 'Receipt', 'Purpose'],
       rows.map((r) => [esc(r.offering_date),
@@ -1250,7 +1242,7 @@ app.get('/finance/tithes', (req, res) => {
 
   res.page({
     title: 'Finance · Tithes', active: '/finance',
-    body: `${financeTabs('/finance/tithes')}
+    body: `
       ${memberFilter}
       ${stats}
       ${addForm}
@@ -1337,7 +1329,6 @@ app.get('/finance/pledges', (req, res) => {
                <a class="btn-link" href="/finance/pledges/${p.pledge_id}/edit" style="margin-left:0.5rem">Edit</a>` : '']))
     : '<p class="muted-text">No pledges recorded yet.</p>';
   const body = `
-    ${financeTabs('/finance/pledges')}
     ${addForm}
     ${tbl}`;
   res.page({ title: 'Finance · Pledges', active: '/finance', body });
@@ -1696,7 +1687,6 @@ app.get('/finance/statements', (req, res) => {
   res.page({
     title: 'Finance · Statements', active: '/finance', noHeader: true,
     body: `${pageHero('Giving Statements', 'Per-member annual contribution summaries for year-end records.')}
-      ${financeTabs('/finance/statements')}
       ${statsRow([
         { cls: 'gold', icon: '🧾', value: rows.length.toLocaleString(), label: `Givers in ${year}` },
         { cls: 'green', icon: '₵', value: fmtMoney(totalGiving), label: `Attributed Giving ${year}` },
@@ -1802,7 +1792,6 @@ app.get('/finance/receipts', (req, res) => {
     : '<p class="muted-text">No payment receipts yet. Record a payment on the Pledges tab to issue one.</p>';
 
   const body = `
-    ${financeTabs('/finance/receipts')}
     <section class="card" style="margin-bottom:1rem">
       <div class="card-head"><h2>Members with outstanding pledges</h2>
         <span class="meta">Total outstanding: <strong>${fmtMoney(totalOutstanding)}</strong></span></div>
@@ -1860,7 +1849,6 @@ app.get('/finance/settings', requireFundViewer, (req, res) => {
   const s = financeSettings();
   const canManage = res.locals.canFinanceManageFunds;
   const body = `
-    ${financeTabs('/finance/settings')}
     <section class="card">
       <div class="card-head"><h2>Finance settings</h2><span class="meta">Receipt and voucher numbering</span></div>
       <form class="form" method="post" action="/finance/settings">
@@ -1972,7 +1960,6 @@ app.get('/finance/funds', requireFundViewer, (req, res) => {
     ];
   });
   const body = `
-    ${financeTabs('/finance/funds')}
     ${statsRow([
       { cls: 'blue', icon: '₵', value: fmtMoney(totalBalance), label: 'Total fund balances' },
       { cls: 'orange', icon: 'R', value: fmtMoney(restrictedTotal), label: 'Restricted balances' },
@@ -2169,7 +2156,6 @@ app.get('/finance/projects', requireFundViewer, (req, res) => {
     return acc;
   }, { target: 0, raised: 0, spent: 0 });
   const body = `
-    ${financeTabs('/finance/projects')}
     ${statsRow([
       { cls: 'blue', icon: '#', value: enriched.length, label: 'Projects' },
       { cls: 'green', icon: '₵', value: fmtMoney(totals.raised), label: 'Raised' },
@@ -2264,7 +2250,6 @@ app.get('/finance/projects/:id', requireFundViewer, (req, res) => {
   const target = Number(project.target_amount || 0);
   const pct = target > 0 ? Math.min(100, Math.round((raised / target) * 100)) : 0;
   const body = `
-    ${financeTabs('/finance/projects')}
     <p><a href="/finance/projects">← Back to projects</a></p>
     ${pageHero(esc(project.name), `${esc(project.status.replace(/_/g, ' '))} · ${project.fund_name ? 'Fund: ' + esc(project.fund_name) : 'No linked fund'}`)}
     <div class="page-actions">
@@ -2363,7 +2348,6 @@ app.get('/finance/budgets', requireFinanceAccounting, (req, res) => {
          </form>
        </details>` : '';
   const body = `
-    ${financeTabs('/finance/budgets')}
     <div class="page-actions"><a class="btn ghost" href="/finance/budgets.csv">Export CSV</a></div>
     ${addForm}
     <section class="card">
@@ -2495,7 +2479,6 @@ app.get('/finance/budgets/:id', requireFinanceAccounting, (req, res) => {
          <button type="submit">Update status</button>
        </form>` : '';
   const body = `
-    ${financeTabs('/finance/budgets')}
     <p><a href="/finance/budgets">← Back to budgets</a></p>
     ${pageHero(esc(budget.name), `${budget.scope === 'MONTHLY' ? 'Monthly' : 'Annual'} budget · ${budget.year}${budget.month ? '-' + String(budget.month).padStart(2, '0') : ''} · ${budget.status}`)}
     <div class="page-actions"><a class="btn ghost" href="/finance/budgets/${budget.budget_id}.csv">Export CSV</a></div>
@@ -2541,7 +2524,6 @@ app.get('/finance/budgets/:id/lines/:lineId/edit', requireFundManager, (req, res
     WHERE budget_id=? AND line_id=?`).get(budget.budget_id, Number(req.params.lineId));
   if (!line) return res.redirect(`/finance/budgets/${budget.budget_id}`);
   const body = `
-    ${financeTabs('/finance/budgets')}
     <p><a href="/finance/budgets/${budget.budget_id}">← Back to budget</a></p>
     <form class="form" method="post" action="/finance/budgets/${budget.budget_id}/lines/${line.line_id}/edit">
       ${budgetLineFormFields(line)}
@@ -2654,7 +2636,6 @@ app.get('/finance/accounting', requireFinanceAccounting, (req, res) => {
   const journalCount = db.prepare(`SELECT COUNT(*) c FROM journal_entries`).get().c;
   const lineCount = db.prepare(`SELECT COUNT(*) c FROM journal_lines`).get().c;
   const body = `
-    ${financeTabs('/finance/accounting')}
     <div class="page-actions">
       <a class="btn ghost" href="/finance/accounting/trial-balance.csv">Export trial balance</a>
       <a class="btn ghost" href="/finance/accounting/ledger.csv">Export ledger</a>
@@ -2754,7 +2735,6 @@ app.get('/finance/vouchers', (req, res) => {
     ORDER BY pv.voucher_date DESC, pv.voucher_id DESC
     LIMIT 150`).all();
   const body = `
-    ${financeTabs('/finance/vouchers')}
     <div class="page-actions"><a class="btn ghost" href="/finance/vouchers.csv">Export CSV</a></div>
     <section class="card">
       <div class="card-head"><h2>Payment Vouchers</h2><span class="meta">Expense disbursement register</span></div>
@@ -2908,7 +2888,6 @@ app.get('/finance/expenses', (req, res) => {
          </form>
        </details>` : '';
   const body = `
-    ${financeTabs('/finance/expenses')}
     ${addForm}
     ${rows.length ? table(['Date', 'Category', 'Description', 'Fund', 'Project', 'Paid to', 'Method', 'Amount', 'Status', 'Receipt', 'Voucher', 'Actions'],
       rows.map((e) => [esc(e.spent_on), esc(e.cat_name || e.legacy_cat),
@@ -3164,7 +3143,6 @@ app.get('/finance/audit', (req, res) => {
     </div>` : '';
 
   const body = `
-    ${financeTabs('/finance/audit')}
     ${filterForm}
     <section class="card">
       <div class="card-head"><h2>Finance Audit Trail</h2><span class="meta">${total} event${total === 1 ? '' : 's'}</span></div>
