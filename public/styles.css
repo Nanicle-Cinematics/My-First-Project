@@ -268,18 +268,20 @@ a:hover { text-decoration: underline; }
 .error { color: var(--danger); margin: 0; }
 
 .finance-tabs {
-  display: flex; align-items: center; flex-wrap: wrap;
-  gap: 0.25rem 0; margin-bottom: 1.25rem;
+  display: flex; align-items: flex-end; flex-wrap: wrap;
+  gap: 0.4rem 0; margin-bottom: 1.25rem;
   border-bottom: 1px solid var(--border); padding-bottom: 0.35rem;
 }
-.ftab-group { display: flex; align-items: center; gap: 0.15rem; }
+.ftab-group { display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem; }
+.ftab-links { display: flex; align-items: center; gap: 0.1rem; }
 .ftab-label {
-  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
-  font-weight: 700; color: var(--muted); padding: 0.2rem 0.35rem; white-space: nowrap;
+  font-size: 0.63rem; text-transform: uppercase; letter-spacing: 0.07em;
+  font-weight: 700; color: var(--muted); padding: 0 0.65rem; white-space: nowrap;
+  min-height: 1rem; line-height: 1;
 }
 .ftab-sep {
-  width: 1px; height: 1.2rem; background: var(--border);
-  margin: 0 0.3rem; flex-shrink: 0; align-self: center;
+  width: 1px; height: 2.4rem; background: var(--border);
+  margin: 0 0.3rem 0.3rem; flex-shrink: 0; align-self: flex-end;
 }
 .finance-tabs a {
   padding: 0.5rem 0.75rem; border-radius: 6px;
@@ -4270,39 +4272,47 @@ button.link {
 /* ---------- Finance tabs ---------- */
 .finance-tabs {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   flex-wrap: wrap;
-  gap: 0.3rem 0;
+  gap: 0.4rem 0;
   background: var(--soft);
   border-radius: var(--e-radius);
-  padding: 0.4rem 0.5rem;
+  padding: 0.5rem 0.5rem 0.3rem;
   margin-bottom: var(--e-space-4);
 }
 
 .ftab-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+}
+
+.ftab-links {
   display: flex;
   align-items: center;
   gap: 0.1rem;
 }
 
 .ftab-label {
-  font-size: 0.67rem;
+  font-size: 0.63rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   font-weight: 700;
   color: var(--muted);
-  padding: 0.2rem 0.4rem;
+  padding: 0 0.65rem;
   white-space: nowrap;
+  min-height: 1rem;
   line-height: 1;
 }
 
 .ftab-sep {
   width: 1px;
-  height: 1.4rem;
+  height: 2.4rem;
   background: var(--border);
-  margin: 0 0.35rem;
+  margin: 0 0.35rem 0.3rem;
   flex-shrink: 0;
-  align-self: center;
+  align-self: flex-end;
 }
 
 .finance-tabs a {

@@ -51,10 +51,12 @@ const FINANCE_TABS = [
 function financeTabs(activePath) {
   const groups = FINANCE_TABS.map((group, i) => {
     const sep = i > 0 ? '<span class="ftab-sep" aria-hidden="true"></span>' : '';
-    const label = group.label ? `<span class="ftab-label">${esc(group.label)}</span>` : '';
-    const links = group.links.map(([href, text]) =>
+    const label = group.label
+      ? `<span class="ftab-label">${esc(group.label)}</span>`
+      : '<span class="ftab-label" aria-hidden="true"></span>';
+    const links = `<div class="ftab-links">${group.links.map(([href, text]) =>
       `<a class="${href === activePath ? 'active' : ''}" href="${href}">${esc(text)}</a>`
-    ).join('');
+    ).join('')}</div>`;
     return `${sep}<div class="ftab-group">${label}${links}</div>`;
   }).join('');
   return `<div class="finance-tabs" role="navigation" aria-label="Finance sections">${groups}</div>`;
