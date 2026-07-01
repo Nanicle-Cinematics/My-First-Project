@@ -1,0 +1,1447 @@
+// =============================================================================
+//  CHURCH MANAGEMENT SYSTEM — Prisma schema (PostgreSQL)
+//  Multi-tenant SaaS. Tenant = Church. Every domain row carries `churchId`,
+//  and tenant isolation is enforced centrally by the Prisma client extension
+//  in lib/tenant.js (mirrors poultry-manager's src/lib/tenant.ts) —
+//  application code never filters by churchId by hand.
+//
+//  Ported from schema.sql (the SQLite base) PLUS the extra tables/columns
+//  that only exist via server.js's own incremental `addColumnIfMissing`/
+//  `CREATE TABLE IF NOT EXISTS` bootstrap (error_log, password_reset_tokens,
+//  app_state, tithes, event_rsvps, broadcasts, broadcast_recipients; users
+//  2FA columns; events.checkin_token; members.photo_filename) — schema.sql
+//  had drifted out of sync with the real live schema, so this file is the
+//  union of both, verified against server.js:141-820.
+//
+//  Deliberately DROPPED vs. the SQLite schema:
+//  - `households` — server.js wipes this table on every boot ("Households
+//    are no longer used"); not carried forward.
+//  - `app_migrations` — SQLite-side one-time-migration tracking, made
+//    obsolete by Prisma's own migration history.
+//
+//  Modeling conventions:
+//  - All existing tables KEEP integer/serial primary keys (mapped via
+//    @@map/@map to their original snake_case table/column names) — only
+//    Church.id is a new cuid(). This keeps the one-time SQLite->Postgres
+//    data migration a straight row-copy-plus-one-column, not an ID remap.
+//  - CHECK(...) IN (...) constraints become real Prisma enums.
+//  - "Who did this" audit references (recorded_by/approved_by/posted_by/
+//    created_by/actor_id/prepared_by/paid_by/closed_by/sent_by) are kept as
+//    plain Int? scalar columns, NOT formal Prisma relations — modeling every
+//    one as a named relation would force 10+ back-relation arrays onto User.
+//    Core domain relations (the member/fund/account/ministry/etc. a record
+//    is actually about) ARE modeled as real relations.
+//  - Money amounts stay Float (parity with SQLite's REAL — no precision
+//    change from what's live today).
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+//  ENUMS
+// ---------------------------------------------------------------------------
+enum Gender {
+  M
+  F
+  O
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+  WIDOWED
+  SEPARATED
+  OTHER
+}
+
+enum MembershipStatus {
+  VISITOR
+  REGULAR
+  MEMBER
+  INACTIVE
+  TRANSFERRED
+  DECEASED
+  OTHER
+}
+
+enum PreferredChannel {
+  EITHER
+  SMS_ONLY
+  EMAIL_ONLY
+  NONE
+}
+
+enum EventType {
+  SERVICE
+  PRAYER
+  BIBLE_STUDY
+  OUTREACH
+  YOUTH
+  WEDDING
+  FUNERAL
+  BAPTISM
+  CONFIRMATION
+  OTHER
+}
+
+enum RsvpResponse {
+  GOING
+  MAYBE
+  NO
+}
+
+enum FundType {
+  GENERAL
+  BUILDING
+  WELFARE
+  MISSION
+  HARVEST
+  ANNIVERSARY
+  YOUTH
+  MUSIC
+  CHILDREN
+  PROJECT
+  RESTRICTED_DONATION
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  FUND_EQUITY
+  INCOME
+  EXPENSE
+}
+
+enum NormalBalance {
+  DEBIT
+  CREDIT
+}
+
+enum PeriodStatus {
+  OPEN
+  CLOSED
+  LOCKED
+}
+
+enum JournalStatus {
+  DRAFT
+  POSTED
+  REVERSED
+}
+
+enum SacramentType {
+  BAPTISM
+  DEDICATION
+  CONFIRMATION
+  MARRIAGE
+  FUNERAL
+}
+
+enum PastoralCategory {
+  VISIT
+  CALL
+  PRAYER_REQUEST
+  COUNSELING
+  OTHER
+}
+
+enum ApprovalStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  PAID
+  REJECTED
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum BudgetScope {
+  ANNUAL
+  MONTHLY
+}
+
+enum BudgetStatus {
+  DRAFT
+  APPROVED
+  CLOSED
+}
+
+enum ContributionMethod {
+  CASH
+  CHECK
+  CARD
+  ONLINE
+  TRANSFER
+  OTHER
+}
+
+enum WelfareCategory {
+  MEDICAL
+  FINANCIAL
+  BEREAVEMENT
+  MARITAL
+  FOOD
+  OTHER
+}
+
+enum WelfareStatus {
+  OPEN
+  IN_PROGRESS
+  CLOSED
+}
+
+enum DayBorn {
+  SUNDAY
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+}
+
+enum HarvestType {
+  ORGANIZATIONAL
+  END_OF_YEAR
+  OTHER
+}
+
+enum PledgeStatus {
+  PENDING
+  PARTIAL
+  FULFILLED
+  CANCELLED
+}
+
+enum UserRole {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+enum FinanceRole {
+  NONE
+  CASHIER
+  TREASURER
+  AUDITOR
+  FINANCE_ADMIN
+}
+
+enum EmailProvider {
+  SMTP
+  RESEND
+}
+
+enum EmailLogStatus {
+  SENT
+  FAILED
+}
+
+enum TrialPlan {
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum BroadcastChannel {
+  SMS
+  EMAIL
+  BOTH
+}
+
+enum BroadcastStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  DRY_RUN
+}
+
+enum RecipientStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// ---------------------------------------------------------------------------
+//  TENANT ROOT
+// ---------------------------------------------------------------------------
+
+/// The tenant. Every other model (except TrialSignup, which happens before a
+/// Church exists) carries a churchId and is scoped by lib/tenant.js.
+model Church {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members             Member[]
+  ministries          Ministry[]
+  organizations       Organization[]
+  orgMemberships      OrganizationMembership[]
+  ministryMemberships MinistryMembership[]
+  events              Event[]
+  attendance          Attendance[]
+  eventRsvps          EventRsvp[]
+  contributions       Contribution[]
+  sacraments          Sacrament[]
+  pastoralNotes       PastoralNote[]
+  welfareCases        WelfareCase[]
+  announcements       Announcement[]
+  activityLogs        ActivityLog[]
+  securityAuditLogs   SecurityAuditLog[]
+  emailSettings       EmailSetting?
+  emailLogs           EmailLog[]
+  users               User[]
+  passwordResetTokens PasswordResetToken[]
+  preachingPlans      PreachingPlan[]
+  inventoryItems      InventoryItem[]
+  inventoryCategories InventoryCategory[]
+  broadcasts          Broadcast[]
+  broadcastRecipients BroadcastRecipient[]
+  errorLogs           ErrorLog[]
+  appState            AppState[]
+
+  funds              Fund[]
+  accounts           Account[]
+  financialPeriods   FinancialPeriod[]
+  journalEntries     JournalEntry[]
+  journalLines       JournalLine[]
+  expenses           Expense[]
+  financeProjects    FinanceProject[]
+  financeBudgets     FinanceBudget[]
+  financeBudgetLines FinanceBudgetLine[]
+  paymentVouchers    PaymentVoucher[]
+  financeSettings    FinanceSetting?
+  incomeRecords      IncomeRecord[]
+  dayBornCollections DayBornCollection[]
+  financeReceipts    FinanceReceipt[]
+  tithes             Tithe[]
+  serviceTypes       ServiceType[]
+  services           Service[]
+  harvests           Harvest[]
+  dayBornSplits      DayBornSplit[]
+  specialCategories  SpecialCategory[]
+  specialOfferings   SpecialOffering[]
+  pledges            Pledge[]
+  pledgePayments     PledgePayment[]
+  expenseCategories  ExpenseCategory[]
+
+  @@map("churches")
+}
+
+/// Pre-tenant marketing funnel. Genuinely global — a Church doesn't exist yet.
+model TrialSignup {
+  id                  Int       @id @default(autoincrement()) @map("signup_id")
+  churchName          String    @map("church_name")
+  contactName         String    @map("contact_name")
+  role                String?
+  phone               String
+  email               String?
+  plan                TrialPlan @default(PRO)
+  memberCount         String?   @map("member_count")
+  notes               String?
+  status              String    @default("new")
+  activationToken     String?   @map("activation_token")
+  activationSentAt    DateTime? @map("activation_sent_at")
+  activationExpiresAt DateTime? @map("activation_expires_at")
+  activatedAt         DateTime? @map("activated_at")
+  activatedUserId     Int?      @map("activated_user_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  @@map("trial_signups")
+}
+
+// ---------------------------------------------------------------------------
+//  MEMBERS / GROUPS
+// ---------------------------------------------------------------------------
+
+model Member {
+  id                       Int              @id @default(autoincrement()) @map("member_id")
+  churchId                 String           @map("church_id")
+  church                   Church           @relation(fields: [churchId], references: [id])
+  externalId               String?          @map("external_id")
+  bibleClassId             Int?             @map("bible_class_id")
+  bibleClass               Ministry?        @relation("MemberBibleClass", fields: [bibleClassId], references: [id])
+  firstName                String           @map("first_name")
+  lastName                 String           @map("last_name")
+  preferredName            String?          @map("preferred_name")
+  gender                   Gender?
+  dateOfBirth              DateTime?        @map("date_of_birth") @db.Date
+  dayBorn                  String?          @map("day_born")
+  email                    String?
+  mobilePhone              String?          @map("mobile_phone")
+  maritalStatus            MaritalStatus?   @map("marital_status")
+  membershipStatus         MembershipStatus @default(VISITOR) @map("membership_status")
+  joinDate                 DateTime?        @map("join_date") @db.Date
+  baptismDate              DateTime?        @map("baptism_date") @db.Date
+  baptismLocation          String?          @map("baptism_location")
+  confirmationDate         DateTime?        @map("confirmation_date") @db.Date
+  notes                    String?
+  preferredChannel         PreferredChannel @default(NONE) @map("preferred_channel")
+  unsubscribeToken         String?          @unique @map("unsubscribe_token")
+  photoFilename            String?          @map("photo_filename")
+  emergencyContactName     String?          @map("emergency_contact_name")
+  emergencyContactPhone    String?          @map("emergency_contact_phone")
+  emergencyContactRelation String?          @map("emergency_contact_relation")
+  createdAt                DateTime         @default(now()) @map("created_at")
+  deletedAt                DateTime?        @map("deleted_at")
+
+  ministriesLed       Ministry[]               @relation("MinistryLeader")
+  organizationsLed    Organization[]           @relation("OrganizationLeader")
+  orgMemberships      OrganizationMembership[]
+  ministryMemberships MinistryMembership[]
+  attendance          Attendance[]
+  eventRsvps          EventRsvp[]
+  contributions       Contribution[]
+  sacraments          Sacrament[]              @relation("SacramentMember")
+  pastoralNotes       PastoralNote[]           @relation("PastoralNoteSubject")
+  welfareCases        WelfareCase[]
+  incomeRecords       IncomeRecord[]
+  tithes              Tithe[]
+  specialOfferings    SpecialOffering[]
+  pledges             Pledge[]
+  preachingPlans      PreachingPlan[]
+  broadcastRecipients BroadcastRecipient[]
+
+  @@unique([churchId, externalId])
+  @@index([churchId])
+  @@index([membershipStatus])
+  @@index([lastName])
+  @@map("members")
+}
+
+/// "Bible classes" in the UI.
+model Ministry {
+  id           Int           @id @default(autoincrement()) @map("ministry_id")
+  churchId     String        @map("church_id")
+  church       Church        @relation(fields: [churchId], references: [id])
+  name         String
+  description  String?
+  leaderId     Int?          @map("leader_id")
+  leader       Member?       @relation("MinistryLeader", fields: [leaderId], references: [id])
+  orgId        Int?          @map("org_id")
+  organization Organization? @relation(fields: [orgId], references: [id])
+  meetsOn      String?       @map("meets_on")
+  active       Boolean       @default(true)
+
+  bibleClassMembers Member[]             @relation("MemberBibleClass")
+  memberships       MinistryMembership[]
+  events            Event[]
+
+  @@unique([churchId, name])
+  @@index([churchId])
+  @@map("ministries")
+}
+
+/// Top-level church groups (Choir, Gospel Band, Fellowships…) — NOT a tenant.
+model Organization {
+  id          Int     @id @default(autoincrement()) @map("org_id")
+  churchId    String  @map("church_id")
+  church      Church  @relation(fields: [churchId], references: [id])
+  name        String
+  description String?
+  leaderId    Int?    @map("leader_id")
+  leader      Member? @relation("OrganizationLeader", fields: [leaderId], references: [id])
+  meetsOn     String? @map("meets_on")
+  active      Boolean @default(true)
+
+  ministries  Ministry[]
+  memberships OrganizationMembership[]
+  harvests    Harvest[]
+  broadcasts  Broadcast[]
+
+  @@unique([churchId, name])
+  @@index([churchId])
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  churchId     String       @map("church_id")
+  church       Church       @relation(fields: [churchId], references: [id])
+  orgId        Int          @map("org_id")
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  memberId     Int          @map("member_id")
+  member       Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  role         String       @default("member")
+  joinedDate   DateTime     @default(now()) @map("joined_date") @db.Date
+
+  @@id([orgId, memberId])
+  @@index([churchId])
+  @@map("organization_memberships")
+}
+
+model MinistryMembership {
+  churchId   String    @map("church_id")
+  church     Church    @relation(fields: [churchId], references: [id])
+  ministryId Int       @map("ministry_id")
+  ministry   Ministry  @relation(fields: [ministryId], references: [id], onDelete: Cascade)
+  memberId   Int       @map("member_id")
+  member     Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  role       String    @default("member")
+  joinedDate DateTime  @default(now()) @map("joined_date") @db.Date
+  leftDate   DateTime? @map("left_date") @db.Date
+
+  @@id([ministryId, memberId])
+  @@index([churchId])
+  @@map("ministry_memberships")
+}
+
+// ---------------------------------------------------------------------------
+//  EVENTS / ATTENDANCE
+// ---------------------------------------------------------------------------
+
+model Event {
+  id                 Int       @id @default(autoincrement()) @map("event_id")
+  churchId           String    @map("church_id")
+  church             Church    @relation(fields: [churchId], references: [id])
+  title              String
+  eventType          EventType @default(SERVICE) @map("event_type")
+  startsAt           DateTime  @map("starts_at")
+  endsAt             DateTime? @map("ends_at")
+  location           String?
+  ministryId         Int?      @map("ministry_id")
+  ministry           Ministry? @relation(fields: [ministryId], references: [id])
+  notes              String?
+  checkinToken       String?   @unique @map("checkin_token")
+  attendanceMen      Int?      @map("attendance_men")
+  attendanceWomen    Int?      @map("attendance_women")
+  attendanceChildren Int?      @map("attendance_children")
+  attendanceTotal    Int?      @map("attendance_total")
+
+  attendance Attendance[]
+  rsvps      EventRsvp[]
+
+  @@index([churchId])
+  @@index([startsAt])
+  @@map("events")
+}
+
+model Attendance {
+  churchId    String   @map("church_id")
+  church      Church   @relation(fields: [churchId], references: [id])
+  eventId     Int      @map("event_id")
+  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  memberId    Int      @map("member_id")
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  checkedInAt DateTime @default(now()) @map("checked_in_at")
+
+  @@id([eventId, memberId])
+  @@index([churchId])
+  @@map("attendance")
+}
+
+/// A member's intended response to an event (added via server.js bootstrap,
+/// not present in schema.sql).
+model EventRsvp {
+  churchId    String       @map("church_id")
+  church      Church       @relation(fields: [churchId], references: [id])
+  eventId     Int          @map("event_id")
+  event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  memberId    Int          @map("member_id")
+  member      Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  response    RsvpResponse @default(GOING)
+  respondedAt DateTime     @default(now()) @map("responded_at")
+
+  @@id([eventId, memberId])
+  @@index([churchId])
+  @@map("event_rsvps")
+}
+
+// ---------------------------------------------------------------------------
+//  PASTORAL / LIFE EVENTS
+// ---------------------------------------------------------------------------
+
+/// Legacy giving table — the native Finance ledger (IncomeRecord etc.)
+/// replaced it for new entries, but historical rows/reads (giving
+/// statements) still exist. Carried forward as-is.
+model Contribution {
+  id            Int                 @id @default(autoincrement()) @map("contribution_id")
+  churchId      String              @map("church_id")
+  church        Church              @relation(fields: [churchId], references: [id])
+  memberId      Int?                @map("member_id")
+  member        Member?             @relation(fields: [memberId], references: [id])
+  fundId        Int                 @map("fund_id")
+  fund          Fund                @relation(fields: [fundId], references: [id])
+  amount        Float
+  contributedOn DateTime            @map("contributed_on") @db.Date
+  method        ContributionMethod?
+  reference     String?
+  notes         String?
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  @@index([churchId])
+  @@index([memberId])
+  @@index([contributedOn])
+  @@index([fundId])
+  @@map("contributions")
+}
+
+model Sacrament {
+  id            Int           @id @default(autoincrement()) @map("sacrament_id")
+  churchId      String        @map("church_id")
+  church        Church        @relation(fields: [churchId], references: [id])
+  sacramentType SacramentType @map("sacrament_type")
+  memberId      Int?          @map("member_id")
+  member        Member?       @relation("SacramentMember", fields: [memberId], references: [id])
+  spouseId      Int?          @map("spouse_id")
+  officiantId   Int?          @map("officiant_id")
+  occurredOn    DateTime      @map("occurred_on") @db.Date
+  location      String?
+  notes         String?
+
+  @@index([churchId])
+  @@map("sacraments")
+}
+
+model PastoralNote {
+  id           Int              @id @default(autoincrement()) @map("note_id")
+  churchId     String           @map("church_id")
+  church       Church           @relation(fields: [churchId], references: [id])
+  memberId     Int              @map("member_id")
+  member       Member           @relation("PastoralNoteSubject", fields: [memberId], references: [id], onDelete: Cascade)
+  recordedBy   Int?             @map("recorded_by")
+  occurredOn   DateTime         @default(now()) @map("occurred_on") @db.Date
+  category     PastoralCategory
+  summary      String
+  confidential Boolean          @default(false)
+
+  @@index([churchId])
+  @@map("pastoral_notes")
+}
+
+model WelfareCase {
+  id              Int             @id @default(autoincrement()) @map("case_id")
+  churchId        String          @map("church_id")
+  church          Church          @relation(fields: [churchId], references: [id])
+  memberId        Int             @map("member_id")
+  member          Member          @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  category        WelfareCategory
+  status          WelfareStatus   @default(OPEN)
+  amountDisbursed Float           @default(0) @map("amount_disbursed")
+  openedOn        DateTime        @default(now()) @map("opened_on") @db.Date
+  closedOn        DateTime?       @map("closed_on") @db.Date
+  summary         String
+  notes           String?
+
+  @@index([churchId])
+  @@index([status])
+  @@map("welfare_cases")
+}
+
+// ---------------------------------------------------------------------------
+//  COMMUNICATIONS
+// ---------------------------------------------------------------------------
+
+model Announcement {
+  id       Int      @id @default(autoincrement()) @map("announcement_id")
+  churchId String   @map("church_id")
+  church   Church   @relation(fields: [churchId], references: [id])
+  title    String
+  body     String
+  audience String   @default("all")
+  postedBy Int?     @map("posted_by")
+  postedAt DateTime @default(now()) @map("posted_at")
+
+  @@index([churchId])
+  @@index([postedAt])
+  @@map("announcements")
+}
+
+model Broadcast {
+  id              Int              @id @default(autoincrement()) @map("broadcast_id")
+  churchId        String           @map("church_id")
+  church          Church           @relation(fields: [churchId], references: [id])
+  channel         BroadcastChannel
+  audienceLabel   String           @map("audience_label")
+  orgId           Int?             @map("org_id")
+  organization    Organization?    @relation(fields: [orgId], references: [id])
+  subject         String?
+  body            String
+  totalRecipients Int              @default(0) @map("total_recipients")
+  successfulSends Int              @default(0) @map("successful_sends")
+  failedSends     Int              @default(0) @map("failed_sends")
+  status          BroadcastStatus  @default(PENDING)
+  sentBy          Int?             @map("sent_by")
+  sentAt          DateTime         @default(now()) @map("sent_at")
+
+  recipients BroadcastRecipient[]
+
+  @@index([churchId])
+  @@map("broadcasts")
+}
+
+model BroadcastRecipient {
+  id          Int             @id @default(autoincrement()) @map("recipient_id")
+  churchId    String          @map("church_id")
+  church      Church          @relation(fields: [churchId], references: [id])
+  broadcastId Int             @map("broadcast_id")
+  broadcast   Broadcast       @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  memberId    Int?            @map("member_id")
+  member      Member?         @relation(fields: [memberId], references: [id])
+  channel     String
+  destination String
+  status      RecipientStatus @default(PENDING)
+  error       String?
+  sentAt      DateTime?       @map("sent_at")
+
+  @@index([churchId])
+  @@index([broadcastId])
+  @@map("broadcast_recipients")
+}
+
+// ---------------------------------------------------------------------------
+//  SYSTEM: LOGGING, EMAIL, USERS, INVENTORY
+// ---------------------------------------------------------------------------
+
+model ActivityLog {
+  id          Int      @id @default(autoincrement()) @map("activity_id")
+  churchId    String   @map("church_id")
+  church      Church   @relation(fields: [churchId], references: [id])
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+  userId      Int?     @map("user_id")
+  kind        String
+  description String
+  link        String?
+
+  @@index([churchId])
+  @@index([occurredAt(sort: Desc)])
+  @@map("activity_log")
+}
+
+model SecurityAuditLog {
+  id         Int      @id @default(autoincrement()) @map("audit_id")
+  churchId   String   @map("church_id")
+  church     Church   @relation(fields: [churchId], references: [id])
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  actorId    Int?     @map("actor_id")
+  event      String
+  subject    String?
+  ip         String?
+  userAgent  String?  @map("user_agent")
+
+  @@index([churchId])
+  @@index([occurredAt(sort: Desc)])
+  @@map("security_audit_log")
+}
+
+/// Server-side error log for the admin error page.
+model ErrorLog {
+  id         Int      @id @default(autoincrement()) @map("error_id")
+  churchId   String?  @map("church_id")
+  church     Church?  @relation(fields: [churchId], references: [id])
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  method     String?
+  path       String?
+  message    String?
+  stack      String?
+  userId     Int?     @map("user_id")
+
+  @@index([churchId])
+  @@map("error_log")
+}
+
+/// Per-church scheduled-job state (was a global singleton keyed by `key`;
+/// composite-keyed by church now).
+model AppState {
+  churchId String  @map("church_id")
+  church   Church  @relation(fields: [churchId], references: [id])
+  key      String
+  value    String?
+
+  @@id([churchId, key])
+  @@map("app_state")
+}
+
+model EmailSetting {
+  churchId           String        @unique @map("church_id")
+  church             Church        @relation(fields: [churchId], references: [id])
+  provider           EmailProvider @default(SMTP)
+  senderName         String        @default("") @map("sender_name")
+  senderEmail        String        @default("") @map("sender_email")
+  replyToEmail       String        @default("") @map("reply_to_email")
+  testRecipientEmail String        @default("") @map("test_recipient_email")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  @@map("email_settings")
+}
+
+model EmailLog {
+  id           Int      @id @default(autoincrement()) @map("email_log_id")
+  churchId     String   @map("church_id")
+  church       Church   @relation(fields: [churchId], references: [id])
+  occurredAt   DateTime @default(now()) @map("occurred_at")
+  recipient    String
+  subject      String
+  status       String
+  sentAt       DateTime @default(now()) @map("sent_at")
+  errorMessage String?  @map("error_message")
+  provider     String?
+  senderName   String?  @map("sender_name")
+  senderEmail  String?  @map("sender_email")
+  replyToEmail String?  @map("reply_to_email")
+
+  @@index([churchId])
+  @@index([occurredAt(sort: Desc)])
+  @@index([status])
+  @@map("email_logs")
+}
+
+/// Login identifier is `email` — globally unique across ALL tenants (mirrors
+/// poultry-manager). `username`/`displayName` stay per-church, non-unique.
+model User {
+  id                Int         @id @default(autoincrement()) @map("user_id")
+  churchId          String      @map("church_id")
+  church            Church      @relation(fields: [churchId], references: [id])
+  username          String
+  email             String?     @unique
+  passwordHash      String      @map("password_hash")
+  displayName       String?     @map("display_name")
+  role              UserRole    @default(ADMIN)
+  financeRole       FinanceRole @default(NONE) @map("finance_role")
+  totpSecret        String?     @map("totp_secret")
+  totpEnabled       Boolean     @default(false) @map("totp_enabled")
+  totpRecoveryCodes String?     @map("totp_recovery_codes")
+  failedAttempts    Int         @default(0) @map("failed_attempts")
+  lockedUntil       DateTime?   @map("locked_until")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  deletedAt         DateTime?   @map("deleted_at")
+
+  passwordResetTokens PasswordResetToken[]
+
+  @@unique([churchId, username])
+  @@index([churchId])
+  @@map("users")
+}
+
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement()) @map("token_id")
+  churchId  String    @map("church_id")
+  church    Church    @relation(fields: [churchId], references: [id])
+  userId    Int       @map("user_id")
+  user      User      @relation(fields: [userId], references: [id])
+  token     String    @unique
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([churchId])
+  @@map("password_reset_tokens")
+}
+
+model PreachingPlan {
+  id             Int       @id @default(autoincrement()) @map("plan_id")
+  churchId       String    @map("church_id")
+  church         Church    @relation(fields: [churchId], references: [id])
+  preachDate     DateTime  @map("preach_date") @db.Date
+  serviceLabel   String?   @map("service_label")
+  memberId       Int?      @map("member_id")
+  member         Member?   @relation(fields: [memberId], references: [id])
+  preacherName   String?   @map("preacher_name")
+  preacherPhone  String?   @map("preacher_phone")
+  preacherEmail  String?   @map("preacher_email")
+  topic          String?
+  scripture      String?
+  notes          String?
+  reminderSentAt DateTime? @map("reminder_sent_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime? @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  @@index([churchId])
+  @@index([preachDate])
+  @@map("preaching_plan")
+}
+
+model InventoryItem {
+  id         Int       @id @default(autoincrement()) @map("item_id")
+  churchId   String    @map("church_id")
+  church     Church    @relation(fields: [churchId], references: [id])
+  name       String
+  quantity   Int       @default(0)
+  category   String?
+  acquiredOn DateTime? @map("acquired_on") @db.Date
+  notes      String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime? @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at")
+
+  @@index([churchId])
+  @@index([deletedAt])
+  @@map("inventory_items")
+}
+
+model InventoryCategory {
+  id        Int       @id @default(autoincrement()) @map("category_id")
+  churchId  String    @map("church_id")
+  church    Church    @relation(fields: [churchId], references: [id])
+  name      String
+  createdAt DateTime  @default(now()) @map("created_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@unique([churchId, name])
+  @@index([deletedAt])
+  @@map("inventory_categories")
+}
+
+// ---------------------------------------------------------------------------
+//  FINANCE: LEDGER BACKBONE
+// ---------------------------------------------------------------------------
+
+model Fund {
+  id                 Int      @id @default(autoincrement()) @map("fund_id")
+  churchId           String   @map("church_id")
+  church             Church   @relation(fields: [churchId], references: [id])
+  code               String?
+  name               String
+  fundType           FundType @default(GENERAL) @map("fund_type")
+  restricted         Boolean  @default(false)
+  openingBalance     Float    @default(0) @map("opening_balance")
+  responsibleOfficer String?  @map("responsible_officer")
+  notes              String?
+  active             Boolean  @default(true)
+
+  journalLines       JournalLine[]
+  contributions      Contribution[]
+  expenses           Expense[]
+  incomeRecords      IncomeRecord[]
+  dayBornCollections DayBornCollection[]
+  financeProjects    FinanceProject[]
+  financeBudgetLines FinanceBudgetLine[]
+
+  @@unique([churchId, code])
+  @@unique([churchId, name])
+  @@index([churchId])
+  @@map("funds")
+}
+
+/// Double-entry chart of accounts.
+model Account {
+  id            Int           @id @default(autoincrement()) @map("account_id")
+  churchId      String        @map("church_id")
+  church        Church        @relation(fields: [churchId], references: [id])
+  code          String
+  name          String
+  accountType   AccountType   @map("account_type")
+  normalBalance NormalBalance @map("normal_balance")
+  isSystem      Boolean       @default(false) @map("is_system")
+  parentId      Int?          @map("parent_id")
+  parent        Account?      @relation("AccountParent", fields: [parentId], references: [id])
+  active        Boolean       @default(true)
+
+  children     Account[]     @relation("AccountParent")
+  journalLines JournalLine[]
+
+  @@unique([churchId, code])
+  @@index([churchId])
+  @@index([accountType])
+  @@map("accounts")
+}
+
+model FinancialPeriod {
+  id           Int          @id @default(autoincrement()) @map("period_id")
+  churchId     String       @map("church_id")
+  church       Church       @relation(fields: [churchId], references: [id])
+  year         Int
+  month        Int?
+  status       PeriodStatus @default(OPEN)
+  closedAt     DateTime?    @map("closed_at")
+  closedBy     Int?         @map("closed_by")
+  reopenReason String?      @map("reopen_reason")
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  journalEntries JournalEntry[]
+
+  @@unique([churchId, year, month])
+  @@index([churchId])
+  @@map("financial_periods")
+}
+
+model JournalEntry {
+  id         Int              @id @default(autoincrement()) @map("entry_id")
+  churchId   String           @map("church_id")
+  church     Church           @relation(fields: [churchId], references: [id])
+  entryNo    String           @map("entry_no")
+  entryDate  DateTime         @map("entry_date") @db.Date
+  memo       String?
+  status     JournalStatus    @default(POSTED)
+  sourceType String           @default("OTHER") @map("source_type")
+  sourceId   String?          @map("source_id")
+  periodId   Int?             @map("period_id")
+  period     FinancialPeriod? @relation(fields: [periodId], references: [id])
+  reversesId Int?             @unique @map("reverses_id")
+  reverses   JournalEntry?    @relation("JournalReversal", fields: [reversesId], references: [id])
+  reversedBy JournalEntry?    @relation("JournalReversal")
+  createdBy  Int?             @map("created_by")
+  createdAt  DateTime         @default(now()) @map("created_at")
+
+  lines JournalLine[]
+
+  @@unique([churchId, entryNo])
+  @@index([churchId])
+  @@index([sourceType, sourceId])
+  @@index([entryDate])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id        Int          @id @default(autoincrement()) @map("line_id")
+  churchId  String       @map("church_id")
+  church    Church       @relation(fields: [churchId], references: [id])
+  entryId   Int          @map("entry_id")
+  entry     JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  accountId Int          @map("account_id")
+  account   Account      @relation(fields: [accountId], references: [id])
+  fundId    Int?         @map("fund_id")
+  fund      Fund?        @relation(fields: [fundId], references: [id])
+  debit     Float        @default(0)
+  credit    Float        @default(0)
+  memo      String?
+
+  @@index([churchId])
+  @@index([accountId])
+  @@index([fundId])
+  @@map("journal_lines")
+}
+
+// ---------------------------------------------------------------------------
+//  FINANCE: OPERATIONAL (income, expenses, projects, budgets)
+// ---------------------------------------------------------------------------
+
+model Expense {
+  id              Int              @id @default(autoincrement()) @map("expense_id")
+  churchId        String           @map("church_id")
+  church          Church           @relation(fields: [churchId], references: [id])
+  expenseCatId    Int?             @map("expense_cat_id")
+  expenseCategory ExpenseCategory? @relation(fields: [expenseCatId], references: [id])
+  category        String
+  amount          Float
+  spentOn         DateTime         @map("spent_on") @db.Date
+  description     String?
+  paidTo          String?          @map("paid_to")
+  paymentMethod   String?          @map("payment_method")
+  referenceNumber String?          @map("reference_number")
+  approvedBy      Int?             @map("approved_by")
+  receiptAttached Boolean          @default(false) @map("receipt_attached")
+  fundId          Int?             @map("fund_id")
+  fund            Fund?            @relation(fields: [fundId], references: [id])
+  projectId       Int?             @map("project_id")
+  project         FinanceProject?  @relation(fields: [projectId], references: [id])
+  journalEntryId  Int?             @map("journal_entry_id")
+  approvalStatus  ApprovalStatus   @default(PAID) @map("approval_status")
+  submittedAt     DateTime?        @map("submitted_at")
+  approvedAt      DateTime?        @map("approved_at")
+  paidAt          DateTime?        @map("paid_at")
+  rejectedAt      DateTime?        @map("rejected_at")
+  approvalNote    String?          @map("approval_note")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  paymentVoucher PaymentVoucher?
+
+  @@index([churchId])
+  @@index([spentOn])
+  @@map("expenses")
+}
+
+model FinanceProject {
+  id                 Int           @id @default(autoincrement()) @map("project_id")
+  churchId           String        @map("church_id")
+  church             Church        @relation(fields: [churchId], references: [id])
+  name               String
+  description        String?
+  fundId             Int?          @map("fund_id")
+  fund               Fund?         @relation(fields: [fundId], references: [id])
+  targetAmount       Float         @default(0) @map("target_amount")
+  responsibleOfficer String?       @map("responsible_officer")
+  startDate          DateTime?     @map("start_date") @db.Date
+  endDate            DateTime?     @map("end_date") @db.Date
+  status             ProjectStatus @default(ACTIVE)
+  createdAt          DateTime      @default(now()) @map("created_at")
+
+  expenses      Expense[]
+  incomeRecords IncomeRecord[]
+
+  @@unique([churchId, name])
+  @@index([churchId])
+  @@index([status])
+  @@map("finance_projects")
+}
+
+model FinanceBudget {
+  id        Int          @id @default(autoincrement()) @map("budget_id")
+  churchId  String       @map("church_id")
+  church    Church       @relation(fields: [churchId], references: [id])
+  name      String
+  year      Int
+  month     Int?
+  scope     BudgetScope  @default(ANNUAL)
+  status    BudgetStatus @default(DRAFT)
+  notes     String?
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  lines FinanceBudgetLine[]
+
+  @@index([churchId])
+  @@index([year, month])
+  @@map("finance_budgets")
+}
+
+model FinanceBudgetLine {
+  id        Int           @id @default(autoincrement()) @map("line_id")
+  churchId  String        @map("church_id")
+  church    Church        @relation(fields: [churchId], references: [id])
+  budgetId  Int           @map("budget_id")
+  budget    FinanceBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  lineType  String        @map("line_type")
+  category  String
+  accountId Int?          @map("account_id")
+  fundId    Int?          @map("fund_id")
+  fund      Fund?         @relation(fields: [fundId], references: [id])
+  amount    Float
+  notes     String?
+
+  @@index([churchId])
+  @@index([budgetId])
+  @@map("finance_budget_lines")
+}
+
+model PaymentVoucher {
+  id               Int      @id @default(autoincrement()) @map("voucher_id")
+  churchId         String   @map("church_id")
+  church           Church   @relation(fields: [churchId], references: [id])
+  voucherNo        String   @map("voucher_no")
+  expenseId        Int      @unique @map("expense_id")
+  expense          Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  voucherDate      DateTime @map("voucher_date") @db.Date
+  amountInWords    String   @map("amount_in_words")
+  supportingDocRef String?  @map("supporting_doc_ref")
+  preparedBy       Int?     @map("prepared_by")
+  checkedBy        String?  @map("checked_by")
+  approvedBy       Int?     @map("approved_by")
+  paidBy           Int?     @map("paid_by")
+  receivedBy       String?  @map("received_by")
+  notes            String?
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@unique([churchId, voucherNo])
+  @@index([churchId])
+  @@index([voucherDate])
+  @@map("payment_vouchers")
+}
+
+/// Was a global singleton (`setting_id CHECK = 1`); now one row per church.
+model FinanceSetting {
+  churchId         String   @unique @map("church_id")
+  church           Church   @relation(fields: [churchId], references: [id])
+  receiptPrefix    String   @default("RCT") @map("receipt_prefix")
+  voucherPrefix    String   @default("PV") @map("voucher_prefix")
+  smallExpenseMax  Float    @default(500) @map("small_expense_max")
+  mediumExpenseMax Float    @default(5000) @map("medium_expense_max")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("finance_settings")
+}
+
+model IncomeRecord {
+  id              Int             @id @default(autoincrement()) @map("income_id")
+  churchId        String          @map("church_id")
+  church          Church          @relation(fields: [churchId], references: [id])
+  transactionDate DateTime        @map("transaction_date") @db.Date
+  category        String
+  subcategory     String?
+  receivedFrom    String?         @map("received_from")
+  memberId        Int?            @map("member_id")
+  member          Member?         @relation(fields: [memberId], references: [id])
+  amount          Float
+  paymentMethod   String          @default("Cash") @map("payment_method")
+  fundId          Int?            @map("fund_id")
+  fund            Fund?           @relation(fields: [fundId], references: [id])
+  projectId       Int?            @map("project_id")
+  project         FinanceProject? @relation(fields: [projectId], references: [id])
+  referenceNumber String?         @map("reference_number")
+  description     String?
+  receiptNumber   String?         @map("receipt_number")
+  recordedBy      Int?            @map("recorded_by")
+  journalEntryId  Int?            @map("journal_entry_id")
+  deletedAt       DateTime?       @map("deleted_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@unique([churchId, receiptNumber])
+  @@index([churchId])
+  @@index([transactionDate])
+  @@index([category])
+  @@map("income_records")
+}
+
+model DayBornCollection {
+  id              Int       @id @default(autoincrement()) @map("collection_id")
+  churchId        String    @map("church_id")
+  church          Church    @relation(fields: [churchId], references: [id])
+  collectionDate  DateTime  @map("collection_date") @db.Date
+  dayBorn         DayBorn   @map("day_born")
+  amount          Float
+  headCount       Int       @default(0) @map("head_count")
+  paymentMethod   String    @default("Cash") @map("payment_method")
+  fundId          Int?      @map("fund_id")
+  fund            Fund?     @relation(fields: [fundId], references: [id])
+  referenceNumber String?   @map("reference_number")
+  receiptNumber   String?   @map("receipt_number")
+  recordedBy      Int?      @map("recorded_by")
+  journalEntryId  Int?      @map("journal_entry_id")
+  notes           String?
+  deletedAt       DateTime? @map("deleted_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  @@unique([churchId, receiptNumber])
+  @@index([churchId])
+  @@index([collectionDate])
+  @@index([dayBorn])
+  @@map("day_born_collections")
+}
+
+model FinanceReceipt {
+  id            Int       @id @default(autoincrement()) @map("receipt_id")
+  churchId      String    @map("church_id")
+  church        Church    @relation(fields: [churchId], references: [id])
+  receiptNumber String    @map("receipt_number")
+  sourceType    String    @map("source_type")
+  sourceId      Int       @map("source_id")
+  receiptDate   DateTime  @map("receipt_date") @db.Date
+  receivedFrom  String?   @map("received_from")
+  amount        Float
+  description   String?
+  createdBy     Int?      @map("created_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  voidedAt      DateTime? @map("voided_at")
+  voidReason    String?   @map("void_reason")
+
+  @@unique([churchId, receiptNumber])
+  @@index([churchId])
+  @@index([receiptDate])
+  @@index([sourceType, sourceId])
+  @@map("finance_receipts")
+}
+
+/// Per-member tithes, distinct from general/special offerings.
+model Tithe {
+  id             Int       @id @default(autoincrement()) @map("tithe_id")
+  churchId       String    @map("church_id")
+  church         Church    @relation(fields: [churchId], references: [id])
+  memberId       Int       @map("member_id")
+  member         Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  amount         Float
+  titheDate      DateTime  @map("tithe_date") @db.Date
+  method         String?
+  reference      String?
+  notes          String?
+  recordedBy     Int?      @map("recorded_by")
+  journalEntryId Int?      @map("journal_entry_id")
+  deletedAt      DateTime? @map("deleted_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([churchId])
+  @@index([memberId])
+  @@index([titheDate])
+  @@map("tithes")
+}
+
+// ---------------------------------------------------------------------------
+//  FINANCE: SERVICES / HARVESTS / DAY-BORN / SPECIAL / PLEDGES
+// ---------------------------------------------------------------------------
+
+model ServiceType {
+  id          Int      @id @default(autoincrement()) @map("service_type_id")
+  churchId    String   @map("church_id")
+  church      Church   @relation(fields: [churchId], references: [id])
+  typeName    String   @map("type_name")
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  services Service[]
+
+  @@unique([churchId, typeName])
+  @@index([churchId])
+  @@map("service_types")
+}
+
+model Service {
+  id             Int         @id @default(autoincrement()) @map("service_id")
+  churchId       String      @map("church_id")
+  church         Church      @relation(fields: [churchId], references: [id])
+  serviceTypeId  Int         @map("service_type_id")
+  serviceType    ServiceType @relation(fields: [serviceTypeId], references: [id])
+  serviceDate    DateTime    @map("service_date") @db.Date
+  totalAmount    Float       @default(0) @map("total_amount")
+  recordedBy     Int?        @map("recorded_by")
+  journalEntryId Int?        @map("journal_entry_id")
+  notes          String?
+  deletedAt      DateTime?   @map("deleted_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  dayBornSplits DayBornSplit[]
+
+  @@index([churchId])
+  @@index([serviceDate])
+  @@map("services")
+}
+
+model Harvest {
+  id             Int           @id @default(autoincrement()) @map("harvest_id")
+  churchId       String        @map("church_id")
+  church         Church        @relation(fields: [churchId], references: [id])
+  harvestType    HarvestType   @map("harvest_type")
+  harvestName    String        @map("harvest_name")
+  harvestYear    Int           @map("harvest_year")
+  harvestDate    DateTime?     @map("harvest_date") @db.Date
+  theme          String?
+  orgId          Int?          @map("org_id")
+  organization   Organization? @relation(fields: [orgId], references: [id])
+  totalCollected Float         @default(0) @map("total_collected")
+  recordedBy     Int?          @map("recorded_by")
+  journalEntryId Int?          @map("journal_entry_id")
+  notes          String?
+  deletedAt      DateTime?     @map("deleted_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  dayBornSplits DayBornSplit[]
+  pledges       Pledge[]
+
+  @@index([churchId])
+  @@index([harvestYear])
+  @@map("harvests")
+}
+
+model DayBornSplit {
+  id        Int      @id @default(autoincrement()) @map("split_id")
+  churchId  String   @map("church_id")
+  church    Church   @relation(fields: [churchId], references: [id])
+  serviceId Int?     @map("service_id")
+  service   Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  harvestId Int?     @map("harvest_id")
+  harvest   Harvest? @relation(fields: [harvestId], references: [id], onDelete: Cascade)
+  dayBorn   DayBorn  @map("day_born")
+  amount    Float    @default(0)
+  headCount Int?     @default(0) @map("head_count")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([churchId])
+  @@index([serviceId])
+  @@index([harvestId])
+  @@map("day_born_splits")
+}
+
+model SpecialCategory {
+  id           Int      @id @default(autoincrement()) @map("special_cat_id")
+  churchId     String   @map("church_id")
+  church       Church   @relation(fields: [churchId], references: [id])
+  categoryName String   @map("category_name")
+  description  String?
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  specialOfferings SpecialOffering[]
+
+  @@unique([churchId, categoryName])
+  @@index([churchId])
+  @@map("special_categories")
+}
+
+model SpecialOffering {
+  id              Int             @id @default(autoincrement()) @map("special_id")
+  churchId        String          @map("church_id")
+  church          Church          @relation(fields: [churchId], references: [id])
+  specialCatId    Int             @map("special_cat_id")
+  specialCategory SpecialCategory @relation(fields: [specialCatId], references: [id])
+  offeringDate    DateTime        @map("offering_date") @db.Date
+  donorId         Int?            @map("donor_id")
+  donor           Member?         @relation(fields: [donorId], references: [id])
+  donorNameManual String?         @map("donor_name_manual")
+  amount          Float
+  purpose         String?
+  receiptNumber   String?         @map("receipt_number")
+  recordedBy      Int?            @map("recorded_by")
+  journalEntryId  Int?            @map("journal_entry_id")
+  notes           String?
+  deletedAt       DateTime?       @map("deleted_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@index([churchId])
+  @@index([offeringDate])
+  @@map("special_offerings")
+}
+
+model Pledge {
+  id            Int          @id @default(autoincrement()) @map("pledge_id")
+  churchId      String       @map("church_id")
+  church        Church       @relation(fields: [churchId], references: [id])
+  memberId      Int          @map("member_id")
+  member        Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  harvestId     Int          @map("harvest_id")
+  harvest       Harvest      @relation(fields: [harvestId], references: [id], onDelete: Cascade)
+  pledgedAmount Float        @map("pledged_amount")
+  paidAmount    Float        @default(0) @map("paid_amount")
+  pledgeDate    DateTime     @map("pledge_date") @db.Date
+  status        PledgeStatus @default(PENDING)
+  notes         String?
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  payments PledgePayment[]
+
+  @@index([churchId])
+  @@map("pledges")
+}
+
+model PledgePayment {
+  id             Int       @id @default(autoincrement()) @map("payment_id")
+  churchId       String    @map("church_id")
+  church         Church    @relation(fields: [churchId], references: [id])
+  pledgeId       Int       @map("pledge_id")
+  pledge         Pledge    @relation(fields: [pledgeId], references: [id], onDelete: Cascade)
+  amount         Float
+  paidOn         DateTime  @map("paid_on") @db.Date
+  receiptNumber  String    @map("receipt_number")
+  recordedBy     Int?      @map("recorded_by")
+  journalEntryId Int?      @map("journal_entry_id")
+  sentAt         DateTime? @map("sent_at")
+  sentChannel    String?   @map("sent_channel")
+  notes          String?
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@unique([churchId, receiptNumber])
+  @@index([churchId])
+  @@index([pledgeId])
+  @@map("pledge_payments")
+}
+
+model ExpenseCategory {
+  id           Int     @id @default(autoincrement()) @map("expense_cat_id")
+  churchId     String  @map("church_id")
+  church       Church  @relation(fields: [churchId], references: [id])
+  categoryName String  @map("category_name")
+  description  String?
+  isActive     Boolean @default(true) @map("is_active")
+
+  expenses Expense[]
+
+  @@unique([churchId, categoryName])
+  @@index([churchId])
+  @@map("expense_categories")
+}

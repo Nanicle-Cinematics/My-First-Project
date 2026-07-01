@@ -9,21 +9,26 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-force-exit \"test/**/*.test.js\"",
+    "test": "node --test --test-concurrency=1 --test-force-exit \"test/**/*.test.js\"",
+    "check:raw-sql-tenant-scoping": "node scripts/check-raw-sql-tenant-scoping.js",
     "build-db": "bash build.sh",
     "migrate-live-db": "node scripts/migrate-live-db.js",
     "deploy:dry-run": "node scripts/deploy-dry-run.js"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.3.0",
     "better-sqlite3-session-store": "^0.1.0",
+    "connect-pg-simple": "^10.0.0",
     "csv-parse": "^6.2.1",
     "express": "^4.21.0",
     "express-session": "^1.18.0",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.3",
     "otpauth": "^9.5.1",
+    "pg": "^8.22.0",
+    "prisma": "^6.19.3",
     "qrcode": "^1.5.4"
   }
 }
