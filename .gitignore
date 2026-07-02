@@ -8,6 +8,7 @@ cloudflare/workers-autoconfig
 church.db
 demo.db
 dev.db
+scripts/migration-prep/*.db
 *.db-wal
 *.db-shm
 *.db-journal

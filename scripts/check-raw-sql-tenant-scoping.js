@@ -15,6 +15,7 @@ const path = require('path');
 
 const ROOTS = [
   path.join(__dirname, '..', 'routes-pg'),
+  path.join(__dirname, '..', 'routes-pg-html'),
   path.join(__dirname, '..', 'lib', 'ledger-pg.js'),
 ];
 const RAW_SQL_CALL = /\$(?:query|execute)Raw(?:Unsafe)?\s*(?:\(|`)/;

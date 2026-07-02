@@ -281,15 +281,30 @@ enum RecipientStatus {
 // ---------------------------------------------------------------------------
 //  TENANT ROOT
 // ---------------------------------------------------------------------------
+//  NOTE: the express-session store (`session` table, connect-pg-simple) is
+//  deliberately NOT declared here. It's created by
+//  scripts/ensure-session-table.js via raw SQL, outside Prisma entirely.
+//  A `model Session { ... } @@ignore` was tried and rejected: even with
+//  @@ignore, `prisma db push` still tries to reconcile the table's actual
+//  DDL (not just skip Client codegen for it), and proposed changing the
+//  live PK constraint with an explicit "could be left without a primary key
+//  constraint if it partially fails" warning — too risky for a table
+//  holding live sessions. Schema changes below were applied via a scoped
+//  raw ALTER TABLE instead of `db push`; DO NOT run a bare `prisma db push`
+//  against a database with an existing `session` table without checking
+//  its diff output first (`--accept-data-loss` should never be reflexive).
 
 /// The tenant. Every other model (except TrialSignup, which happens before a
 /// Church exists) carries a churchId and is scoped by lib/tenant.js.
 model Church {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   name      String
-  slug      String   @unique
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  slug      String    @unique
+  plan      String    @default("free") // "free" | "pro" — mirrors poultry-manager's Farm.plan
+  proSince  DateTime? @map("pro_since")
+  proUntil  DateTime? @map("pro_until") // null = no expiry once set; manual activation for now
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
 
   members             Member[]
   ministries          Ministry[]
