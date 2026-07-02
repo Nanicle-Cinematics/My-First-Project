@@ -9,9 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm install
 
 COPY . .
+
+# prisma (the CLI) is a devDependency, so it's only present for this step —
+# `prisma generate` needs prisma/schema.prisma, which requires COPY . . to
+# have already happened. Pruning afterward removes devDependencies but
+# keeps the generated client output (node_modules/.prisma, @prisma/client),
+# which aren't themselves devDependencies.
+RUN npx prisma generate
+RUN npm prune --omit=dev
 
 ENV NODE_ENV=production
 ENV PORT=3000
