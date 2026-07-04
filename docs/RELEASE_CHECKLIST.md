@@ -7,9 +7,12 @@ Use this checklist for every production release.
 - [ ] Confirm branch is `main` and up to date.
 - [ ] Run tests:
   - `npm test`
-- [ ] Review DB-impacting changes in `server.js`, `schema.sql`, and route queries.
-- [ ] If DB migrations are needed for existing production data, run:
-  - `npm run migrate-live-db -- /path/to/church.db`
+- [ ] Run the tenant-scope audit:
+  - `npm run check:raw-sql-tenant-scoping`
+- [ ] Review DB-impacting changes in `prisma/schema.prisma`, `lib/tenant.js`,
+  `lib/ledger-pg.js`, and Postgres route queries.
+- [ ] Test Prisma schema changes against a non-production database before
+  applying them to production.
 
 ## 2) Deploy
 
@@ -44,23 +47,18 @@ Use this checklist for every production release.
   - `flyctl logs -a church-management-system`
 - [ ] If errors spike, rollback immediately and investigate.
 
-## 5) Nightly backup verification
+## 5) PostgreSQL backup verification
 
-- [ ] Verify downloaded backups are readable before archiving:
-  - `./scripts/verify-backup.sh backups/<slug>-<timestamp>.db`
-- [ ] Add a cron to automate backup+verify:
-  - `0 2 * * * cd /path/to/repo && for d in deploys/*/; do s=$(basename "$d"); ./deploy/manage.sh "$s" backup; latest=$(ls -1t backups/${s}-*.db | head -n1); ./scripts/verify-backup.sh "$latest"; done`
-- [ ] Run restore drill weekly on latest backup:
-  - `./scripts/dr-restore-drill.sh backups/<slug>-<timestamp>.db`
+- [ ] Confirm the PostgreSQL provider's automated backups/PITR are enabled.
+- [ ] Record the retention window and responsible operator.
+- [ ] Run a restore drill into a separate database before major releases.
+- [ ] Verify the restored database with `/readyz` and tenant-isolation smoke tests.
 
-## 6) Incident quick-fix (DB schema drift)
+## 6) Incident response (DB schema drift)
 
-If a route errors with `no such table: ...`, run migration directly on live DB:
-
-1. `flyctl ssh console -a church-management-system`
-2. `CHURCH_DB=/data/church.db node scripts/migrate-live-db.js`
-3. `exit`
-4. `flyctl machine restart <machine-id> -a church-management-system`
+Do not run ad-hoc destructive SQL against production. Reproduce the drift
+against a separate database, prepare a reviewed Prisma migration/schema change,
+take or confirm a current backup, then apply it through the release process.
 
 ## 7) Security gate
 

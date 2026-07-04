@@ -3,8 +3,9 @@
 # 2. flyctl auth login
 # 3. flyctl launch --copy-config --no-deploy   (accept the existing fly.toml)
 # 4. flyctl volumes create church_data --size 1 --region <your-region>
-# 5. flyctl secrets set SESSION_SECRET=$(openssl rand -hex 32)
-# 6. flyctl deploy
+# 5. flyctl secrets set DATABASE_URL='postgresql://...'
+# 6. flyctl secrets set SESSION_SECRET=$(openssl rand -hex 32)
+# 7. flyctl deploy
 
 app = "church-management-system"
 primary_region = "lhr"
@@ -14,9 +15,7 @@ primary_region = "lhr"
 [env]
   NODE_ENV   = "production"
   PORT       = "3000"
-  CHURCH_DB  = "/data/church.db"
   PHOTO_DIR  = "/data/photos"
-  BACKUP_DIR = "/data/backups"
 
 [mounts]
   source      = "church_data"
