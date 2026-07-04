@@ -760,7 +760,7 @@ model SecurityAuditLog {
 model ErrorLog {
   id         Int      @id @default(autoincrement()) @map("error_id")
   churchId   String?  @map("church_id")
-  church     Church?  @relation(fields: [churchId], references: [id])
+  church     Church?  @relation(fields: [churchId], references: [id], onDelete: Cascade)
   occurredAt DateTime @default(now()) @map("occurred_at")
   method     String?
   path       String?
