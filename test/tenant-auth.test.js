@@ -33,6 +33,7 @@ test.after(async () => {
     // not an implicit cascade), so clean up dependents before the church.
     await db.preachingPlan.deleteMany({ where });
     await db.account.deleteMany({ where });
+    await db.securityAuditLog.deleteMany({ where });
     await db.user.deleteMany({ where });
     await db.specialCategory.deleteMany({ where });
     await db.serviceType.deleteMany({ where });
@@ -72,6 +73,7 @@ function cookieClient() {
       remember(res);
       return { status: res.status, body: await res.text() };
     },
+    cookie: () => cookie,
   };
 }
 
@@ -145,10 +147,22 @@ test('login works and wrong password is rejected generically', async () => {
   const fresh = cookieClient();
   const bad = await fresh.post('/login', { email, password: 'wrong-password' });
   assert.strictEqual(bad.status, 401);
+  const cookieAfterFailure = fresh.cookie();
 
   const good = await fresh.post('/login', { email, password: 'correct-password' });
   assert.strictEqual(good.status, 200);
   assert.strictEqual(good.body.user.email, email);
+  assert.notStrictEqual(fresh.cookie(), cookieAfterFailure);
+
+  const events = await db.securityAuditLog.findMany({
+    where: { churchId: signup.body.church.id },
+    orderBy: { occurredAt: 'asc' },
+  });
+  assert.deepStrictEqual(events.map((row) => row.event), [
+    'auth.login_failed',
+    'auth.login_succeeded',
+  ]);
+  assert.ok(events.every((row) => row.ip));
 });
 
 test('account locks after 5 failed attempts', async () => {

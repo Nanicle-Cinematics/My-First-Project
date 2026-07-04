@@ -40,3 +40,11 @@ jobs:
             echo "healthz attempt ${i} failed, retrying..."; sleep 5
           done
           curl -fsS --max-time 10 "${BASE_URL}/readyz" >/dev/null && echo "readyz: OK"
+
+      - name: Verify public auth surfaces
+        env:
+          BASE_URL: https://church-management-system.fly.dev
+        run: |
+          curl -fsS --max-time 10 "${BASE_URL}/" >/dev/null
+          curl -fsS --max-time 10 "${BASE_URL}/login" >/dev/null
+          curl -fsS --max-time 10 "${BASE_URL}/signup" >/dev/null
