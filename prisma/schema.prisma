@@ -743,7 +743,7 @@ model ActivityLog {
 model SecurityAuditLog {
   id         Int      @id @default(autoincrement()) @map("audit_id")
   churchId   String   @map("church_id")
-  church     Church   @relation(fields: [churchId], references: [id])
+  church     Church   @relation(fields: [churchId], references: [id], onDelete: Cascade)
   occurredAt DateTime @default(now()) @map("occurred_at")
   actorId    Int?     @map("actor_id")
   event      String
@@ -859,6 +859,18 @@ model PasswordResetToken {
 
   @@index([churchId])
   @@map("password_reset_tokens")
+}
+
+// Managed by connect-pg-simple at runtime. Keeping it in Prisma's data model
+// prevents `prisma db push` from treating active sessions as an unknown table
+// that should be dropped.
+model Session {
+  sid    String   @id @db.VarChar
+  sess   Json     @db.Json
+  expire DateTime @db.Timestamp(6)
+
+  @@index([expire], map: "IDX_session_expire")
+  @@map("session")
 }
 
 model PreachingPlan {
