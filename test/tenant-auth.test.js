@@ -67,6 +67,11 @@ function cookieClient() {
       remember(res);
       return { status: res.status, body: await res.json() };
     },
+    async getHtml(p) {
+      const res = await fetch(base + p, { headers: cookie ? { cookie } : {} });
+      remember(res);
+      return { status: res.status, body: await res.text() };
+    },
   };
 }
 
@@ -112,6 +117,23 @@ test('two churches can each have a user with the same display username, no colli
   assert.strictEqual(signupA.status, 201);
   assert.strictEqual(signupB.status, 201);
   createdChurchIds.push(signupA.body.church.id, signupB.body.church.id);
+});
+
+test('authenticated shell uses each tenant church name without cross-tenant branding', async () => {
+  const clientA = cookieClient();
+  const clientB = cookieClient();
+  const signupA = await clientA.post('/signup', { churchName: 'Brand Alpha Church', name: 'Owner A', email: uniqueEmail('brand-a'), password: 'password123' });
+  const signupB = await clientB.post('/signup', { churchName: 'Brand Beta Church', name: 'Owner B', email: uniqueEmail('brand-b'), password: 'password123' });
+  createdChurchIds.push(signupA.body.church.id, signupB.body.church.id);
+
+  const pageA = await clientA.getHtml('/');
+  const pageB = await clientB.getHtml('/');
+  assert.strictEqual(pageA.status, 200);
+  assert.strictEqual(pageB.status, 200);
+  assert.match(pageA.body, /Brand Alpha Church/);
+  assert.doesNotMatch(pageA.body, /Brand Beta Church/);
+  assert.match(pageB.body, /Brand Beta Church/);
+  assert.doesNotMatch(pageB.body, /Brand Alpha Church/);
 });
 
 test('login works and wrong password is rejected generically', async () => {
