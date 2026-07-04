@@ -1,0 +1,3 @@
+ALTER TABLE churches
+  ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS suspension_reason TEXT;

@@ -303,6 +303,8 @@ model Church {
   plan      String    @default("free") // "free" | "pro" — mirrors poultry-manager's Farm.plan
   proSince  DateTime? @map("pro_since")
   proUntil  DateTime? @map("pro_until") // null = no expiry once set; manual activation for now
+  suspendedAt     DateTime? @map("suspended_at")
+  suspensionReason String?  @map("suspension_reason")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 

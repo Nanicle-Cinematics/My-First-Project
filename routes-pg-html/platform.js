@@ -15,6 +15,7 @@ const { pageHero, statsRow, listCard, table } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { db: rawDb } = require('../lib/tenant');
 const { isPro } = require('../routes-pg/settings');
+const { requestIp, requestUserAgent } = require('../lib/security-audit');
 
 // requirePlatformAdmin* is JSON-only (403 JSON) — this HTML variant redirects
 // to / instead, matching every other module's admin-gate HTML convention.
@@ -38,14 +39,28 @@ function register(app) {
     const rows = churches.map((c) => [
       esc(c.name), esc(c.slug),
       isPro(c) ? '<span class="pill pill-fulfilled">Pro</span>' : '<span class="pill pill-pending">Free</span>',
+      c.suspendedAt
+        ? `<span class="pill pill-overdue">Suspended</span><br><small>${esc(c.suspensionReason || '')}</small>`
+        : '<span class="pill pill-fulfilled">Active</span>',
       c.proUntil ? esc(c.proUntil.toISOString().slice(0, 10)) : '—',
       c._count.users, c._count.members,
       esc(c.createdAt.toISOString().slice(0, 10)),
       `<form method="post" action="/platform/churches/${c.id}/plan" class="inline">
          <select name="plan"><option value="free" ${c.plan === 'free' ? 'selected' : ''}>free</option><option value="pro" ${c.plan === 'pro' ? 'selected' : ''}>pro</option></select>
          <input type="number" name="months" placeholder="months" min="1" style="width:80px">
-         <button type="submit">Save</button>
-       </form>`,
+         <button type="submit">${c.plan === 'pro' ? 'Update / downgrade' : 'Upgrade'}</button>
+       </form>
+       ${c.suspendedAt
+         ? `<form method="post" action="/platform/churches/${c.id}/access" class="inline">
+              <input type="hidden" name="action" value="reactivate">
+              <button type="submit">Reactivate</button>
+            </form>`
+         : `<form method="post" action="/platform/churches/${c.id}/access" class="inline"
+              onsubmit="return confirm('Suspend access for this church? Its users will be blocked immediately.')">
+              <input type="hidden" name="action" value="suspend">
+              <input name="reason" required maxlength="500" placeholder="Reason for suspension">
+              <button type="submit" class="danger">Suspend</button>
+            </form>`}`,
     ]);
 
     const body = `
@@ -58,7 +73,7 @@ function register(app) {
       ])}
       ${listCard({
         title: 'Churches', count: churches.length, countLabel: 'churches',
-        inner: churches.length ? table(['Name', 'Slug', 'Plan', 'Pro until', 'Users', 'Members', 'Signed up', 'Set plan'], rows) : '<p class="muted-text">No churches yet.</p>',
+        inner: churches.length ? table(['Name', 'Slug', 'Plan', 'Access', 'Pro until', 'Users', 'Members', 'Signed up', 'Controls'], rows) : '<p class="muted-text">No churches yet.</p>',
       })}`;
     res.page({ title: 'Platform Admin', active: '/platform', noHeader: true, body });
   }));
@@ -75,13 +90,51 @@ function register(app) {
       data.proUntil = null;
     }
     try {
-      await rawDb.church.update({ where: { id: req.params.id }, data });
-      flash(req, 'Plan updated.', 'success');
+      const church = await rawDb.church.update({ where: { id: req.params.id }, data });
+      await rawDb.securityAuditLog.create({ data: {
+        churchId: church.id, actorId: res.locals.user.id,
+        event: plan === 'pro' ? 'platform.plan_upgraded' : 'platform.plan_downgraded',
+        subject: `${church.name} (${church.slug}) -> ${plan}`,
+        ip: requestIp(req), userAgent: requestUserAgent(req),
+      } });
+      flash(req, plan === 'pro' ? 'Church upgraded to Pro.' : 'Church downgraded to Free.', 'success');
     } catch (e) {
       if (e.code !== 'P2025') throw e;
       flash(req, 'Church not found.');
     }
     res.redirect('/platform');
+  }));
+
+  app.post('/platform/churches/:id/access', requirePlatformAdmin, asyncHandler(async (req, res) => {
+    const action = String(req.body?.action || '');
+    const reason = String(req.body?.reason || '').trim().slice(0, 500);
+    if (!['suspend', 'reactivate'].includes(action)) {
+      flash(req, 'Invalid access action.');
+      return res.redirect('/platform');
+    }
+    if (action === 'suspend' && !reason) {
+      flash(req, 'A suspension reason is required.');
+      return res.redirect('/platform');
+    }
+    try {
+      const church = await rawDb.church.update({
+        where: { id: req.params.id },
+        data: action === 'suspend'
+          ? { suspendedAt: new Date(), suspensionReason: reason }
+          : { suspendedAt: null, suspensionReason: null },
+      });
+      await rawDb.securityAuditLog.create({ data: {
+        churchId: church.id, actorId: res.locals.user.id,
+        event: action === 'suspend' ? 'platform.church_suspended' : 'platform.church_reactivated',
+        subject: action === 'suspend' ? reason : `${church.name} reactivated`,
+        ip: requestIp(req), userAgent: requestUserAgent(req),
+      } });
+      flash(req, action === 'suspend' ? 'Church access suspended.' : 'Church access reactivated.', 'success');
+    } catch (e) {
+      if (e.code !== 'P2025') throw e;
+      flash(req, 'Church not found.');
+    }
+    return res.redirect('/platform');
   }));
 }
 

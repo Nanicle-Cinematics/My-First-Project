@@ -107,6 +107,29 @@ test('platform admin can activate a church to Pro; the change is visible via tha
 
   const targetSettings = await target.client.get('/api/settings');
   assert.strictEqual(targetSettings.body.plan.key, 'pro');
+
+  const downgraded = await platformAdminClient.post(`/api/platform/churches/${target.churchId}/plan`, { plan: 'free' });
+  assert.strictEqual(downgraded.status, 200);
+  assert.strictEqual(downgraded.body.plan, 'free');
+});
+
+test('platform admin can suspend and reactivate a church, and suspension blocks tenant access', async () => {
+  const target = await newSignedInChurch('platform-suspend-target');
+
+  const missingReason = await platformAdminClient.post(`/api/platform/churches/${target.churchId}/access`, { action: 'suspend' });
+  assert.strictEqual(missingReason.status, 400);
+
+  const suspended = await platformAdminClient.post(`/api/platform/churches/${target.churchId}/access`, {
+    action: 'suspend', reason: 'Subscription payment overdue',
+  });
+  assert.strictEqual(suspended.status, 200);
+  assert.ok(suspended.body.suspendedAt);
+  assert.strictEqual((await target.client.get('/api/settings')).status, 403);
+
+  const reactivated = await platformAdminClient.post(`/api/platform/churches/${target.churchId}/access`, { action: 'reactivate' });
+  assert.strictEqual(reactivated.status, 200);
+  assert.strictEqual(reactivated.body.suspendedAt, null);
+  assert.strictEqual((await target.client.get('/api/settings')).status, 200);
 });
 
 test('summary counts reflect churches actually created in this run', async () => {

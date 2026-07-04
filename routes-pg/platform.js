@@ -23,6 +23,7 @@
 const asyncHandler = require('../lib/async-handler');
 const { db: rawDb } = require('../lib/tenant');
 const { isPro } = require('./settings');
+const { requestIp, requestUserAgent } = require('../lib/security-audit');
 
 function platformAdminEmails() {
   return String(process.env.PLATFORM_ADMIN_EMAILS || '')
@@ -43,6 +44,7 @@ function register(app) {
     });
     res.json(churches.map((c) => ({
       id: c.id, name: c.name, slug: c.slug, plan: c.plan, proUntil: c.proUntil,
+      suspendedAt: c.suspendedAt, suspensionReason: c.suspensionReason,
       isPro: isPro(c), createdAt: c.createdAt,
       userCount: c._count.users, memberCount: c._count.members,
     })));
@@ -74,7 +76,49 @@ function register(app) {
     }
     try {
       const church = await rawDb.church.update({ where: { id: req.params.id }, data });
+      await rawDb.securityAuditLog.create({ data: {
+        churchId: church.id, actorId: res.locals.user.id,
+        event: plan === 'pro' ? 'platform.plan_upgraded' : 'platform.plan_downgraded',
+        subject: `${church.name} (${church.slug}) -> ${plan}`,
+        ip: requestIp(req), userAgent: requestUserAgent(req),
+      } });
       res.json({ id: church.id, plan: church.plan, proUntil: church.proUntil });
+    } catch (e) {
+      if (e.code === 'P2025') return res.status(404).json({ error: 'Not found' });
+      throw e;
+    }
+  }));
+
+  app.post('/api/platform/churches/:id/access', requirePlatformAdmin, asyncHandler(async (req, res) => {
+    const action = String(req.body?.action || '');
+    if (!['suspend', 'reactivate'].includes(action)) {
+      return res.status(400).json({ error: 'action must be "suspend" or "reactivate"' });
+    }
+    const reason = String(req.body?.reason || '').trim().slice(0, 500);
+    if (action === 'suspend' && !reason) {
+      return res.status(400).json({ error: 'a suspension reason is required' });
+    }
+    try {
+      const church = await rawDb.church.update({
+        where: { id: req.params.id },
+        data: action === 'suspend'
+          ? { suspendedAt: new Date(), suspensionReason: reason }
+          : { suspendedAt: null, suspensionReason: null },
+      });
+      await rawDb.securityAuditLog.create({
+        data: {
+          churchId: church.id,
+          actorId: res.locals.user.id,
+          event: action === 'suspend' ? 'platform.church_suspended' : 'platform.church_reactivated',
+          subject: action === 'suspend' ? reason : `${church.name} reactivated`,
+          ip: String(req.ip || '').slice(0, 128) || null,
+          userAgent: String(req.get('user-agent') || '').slice(0, 512) || null,
+        },
+      });
+      return res.json({
+        id: church.id, suspendedAt: church.suspendedAt,
+        suspensionReason: church.suspensionReason,
+      });
     } catch (e) {
       if (e.code === 'P2025') return res.status(404).json({ error: 'Not found' });
       throw e;
