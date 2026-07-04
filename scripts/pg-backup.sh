@@ -7,8 +7,13 @@ BACKUP_KEEP_DAYS="${BACKUP_KEEP_DAYS:-30}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$BACKUP_DIR"
 file="$BACKUP_DIR/church-manager-$stamp.dump"
+PG_URL="$(node -e '
+  const u = new URL(process.env.DATABASE_URL);
+  for (const key of ["connection_limit", "pool_timeout", "pgbouncer"]) u.searchParams.delete(key);
+  process.stdout.write(u.toString());
+')"
 
-pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl --file="$file"
+pg_dump "$PG_URL" --format=custom --no-owner --no-acl --file="$file"
 pg_restore --list "$file" >/dev/null
 sha256sum "$file" >"$file.sha256"
 
