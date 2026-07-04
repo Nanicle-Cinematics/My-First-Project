@@ -30,6 +30,7 @@ test.after(async () => {
     await db.dayBornSplit.deleteMany({ where });
     await db.service.deleteMany({ where });
     await db.serviceType.deleteMany({ where });
+    await db.expenseCategory.deleteMany({ where });
     await db.pledgePayment.deleteMany({ where });
     await db.pledge.deleteMany({ where });
     await db.specialOffering.deleteMany({ where });
@@ -97,7 +98,8 @@ test('day-born: crosstab and bars are computed only from this church\'s data', a
   const a = await signupChurch('rep-dayborn-a');
   const b = await signupChurch('rep-dayborn-b');
 
-  const st = await db.serviceType.create({ data: { churchId: a.churchId, typeName: 'Sunday Service' } });
+  // 'Sunday Service' is already seeded per-church at signup (Phase 9e) — look it up rather than re-create it.
+  const st = await db.serviceType.findFirst({ where: { churchId: a.churchId, typeName: 'Sunday Service' } });
   const svc1 = await db.service.create({ data: { churchId: a.churchId, serviceTypeId: st.id, serviceDate: new Date('2026-06-07'), totalAmount: 500 } });
   const svc2 = await db.service.create({ data: { churchId: a.churchId, serviceTypeId: st.id, serviceDate: new Date('2026-06-14'), totalAmount: 300 } });
   await db.dayBornSplit.create({ data: { churchId: a.churchId, serviceId: svc1.id, dayBorn: 'SUNDAY', amount: 500 } });

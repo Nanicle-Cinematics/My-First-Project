@@ -4,12 +4,12 @@
 // /api/communications/..., this is the bare-path HTML surface).
 //
 // SCOPE matches routes-pg/communications.js exactly: announcements CRUD,
-// per-church email settings (view/edit only), and full broadcast
-// audience-resolution + recipient bookkeeping. Real SMS/email DELIVERY is
-// NOT wired in (always dry-run, per routes-pg/communications.js's own
-// deferral) — so the original's provider-readiness banners (ARKESEL_API_KEY/
-// SMTP_HOST env checks) and "Send Test Email" button are dropped here too;
-// there is no live delivery path backing them yet.
+// per-church email settings, and full broadcast audience-resolution +
+// recipient bookkeeping.
+//
+// Phase 9a: real SMS/email delivery is now wired in via lib/delivery.js +
+// lib/broadcast-delivery.js — dry-run only when the relevant secret isn't
+// configured (same as routes-pg/communications.js), not a hardcoded stub.
 //
 // Role model: admin-only writes. The original's separate isOwner-only gate
 // on email settings is folded into the same admin-only-writes gate — no
@@ -20,6 +20,8 @@ const { esc } = require('../lib/format');
 const { pageHero, statsRow, table } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
+const { normalizePhoneGH, emailDeliveryInfo } = require('../lib/delivery');
+const { sendBroadcastAndTally, canReceive } = require('../lib/broadcast-delivery');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -28,25 +30,7 @@ function requireAdmin(req, res, next) {
 
 const PREF_LABELS = { EITHER: 'Both', SMS_ONLY: 'SMS only', EMAIL_ONLY: 'Email only', NONE: 'Do not contact' };
 
-// Verbatim port of routes-pg/communications.js's normalizePhoneGH/canReceive/isEmailish.
-function normalizePhoneGH(raw) {
-  if (!raw) return null;
-  let s = String(raw).replace(/[\s\-()]/g, '');
-  if (s.startsWith('+')) return /^\+\d{8,15}$/.test(s) ? s : null;
-  if (s.startsWith('00')) s = '+' + s.slice(2);
-  else if (s.startsWith('0') && s.length === 10) s = '+233' + s.slice(1);
-  else if (/^\d{9}$/.test(s)) s = '+233' + s;
-  else if (/^233\d{9}$/.test(s)) s = '+' + s;
-  return /^\+\d{8,15}$/.test(s) ? s : null;
-}
 function isEmailish(s) { return /^\S+@\S+\.\S+$/.test(String(s || '')); }
-function canReceive(member, channel) {
-  const pref = member.preferredChannel || 'NONE';
-  if (pref === 'NONE') return false;
-  if (channel === 'sms') return pref !== 'EMAIL_ONLY';
-  if (channel === 'email') return pref !== 'SMS_ONLY';
-  return true;
-}
 
 async function resolveAudience(db, { allMembers, orgIds, memberId }) {
   if (memberId) {
@@ -146,7 +130,7 @@ function register(app) {
 
     res.page({
       title: 'Communications', active: '/communications', noHeader: true,
-      body: `${pageHero('Communications', 'Announcements, broadcast history and member messaging readiness. Deliveries currently run in dry-run mode (no live SMS/email provider is wired in yet).')}
+      body: `${pageHero('Communications', 'Announcements, broadcast history and member messaging readiness.')}
         ${statsRow([
           { cls: 'gold', icon: '✉', value: announcementCount.toLocaleString(), label: 'Announcements' },
           { cls: 'green', icon: '📣', value: broadcastCount.toLocaleString(), label: 'Broadcasts' },
@@ -189,7 +173,13 @@ function register(app) {
     const reachableSms = bothCount + smsOnlyCount;
     const reachableEmail = bothCount + emailOnlyCount;
 
-    const statusBanner = `<div class="flash"><strong>Dry-run mode.</strong> No live SMS/email provider is wired in yet — broadcasts are logged with a full recipient breakdown but nothing is actually delivered.</div>`;
+    const smsReady = !!process.env.ARKESEL_API_KEY;
+    const emailSettings = await db.emailSetting.findFirst();
+    const emailReady = emailDeliveryInfo(emailSettings, '').ready;
+    const statusBanner = (smsReady && emailReady) ? '' : `<div class="flash">
+      ${smsReady ? '' : '<strong>SMS dry-run mode.</strong> No SMS provider secret is configured — messages will be logged but not delivered. '}
+      ${emailReady ? '' : '<strong>Email dry-run mode.</strong> No email provider secret is configured for this channel — messages will be logged but not delivered.'}
+    </div>`;
 
     const audienceForm = `
       <form method="get" action="/communications/broadcast" class="card" style="margin-bottom:1rem">
@@ -308,10 +298,14 @@ function register(app) {
       }
     }
     await db.broadcastRecipient.createMany({ data: recipientRows });
-    // Deferred real delivery (see module header) — always dry-run for now.
-    await db.broadcast.update({ where: { id: broadcast.id }, data: { status: 'DRY_RUN', successfulSends: 0, failedSends: 0 } });
 
-    await logActivity(res.locals.db, 'announcement', `Broadcast to ${audienceLbl}: ${audience.length} recipient(s) [dry_run]`, `/communications/broadcasts/${broadcast.id}`, res.locals.user.id);
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const updated = await sendBroadcastAndTally(db, {
+      broadcastId: broadcast.id, audience, channel, subject, body, ignorePrefs, churchName: church.name,
+    });
+
+    await logActivity(res.locals.db, 'announcement', `Broadcast to ${audienceLbl}: ${audience.length} recipient(s) [${updated.status.toLowerCase()}]`, `/communications/broadcasts/${broadcast.id}`, res.locals.user.id);
+    flash(req, `Broadcast sent — ${updated.successfulSends} delivered, ${updated.failedSends} failed.`, updated.failedSends > 0 ? 'error' : 'success');
     res.redirect(`/communications/broadcasts/${broadcast.id}`);
   }));
 
@@ -374,16 +368,23 @@ function register(app) {
   app.get('/communications/email-settings', requireAdmin, asyncHandler(async (req, res) => {
     const settings = await res.locals.db.emailSetting.findUnique({ where: { churchId: res.locals.churchId } })
       || { provider: 'SMTP', senderName: '', senderEmail: '', replyToEmail: '', testRecipientEmail: '' };
+    const ready = emailDeliveryInfo(settings, '').ready;
     const body = `
       <div class="card">
         <h2>Delivery profile</h2>
         <dl class="stats">
-          <dt>Provider</dt><dd>${esc(settings.provider)} <span class="pill pill-dry_run">dry-run only</span></dd>
+          <dt>Provider</dt><dd>${esc(settings.provider)} <span class="pill pill-${ready ? 'sent' : 'dry_run'}">${ready ? 'ready' : 'dry-run only'}</span></dd>
           <dt>Sender</dt><dd>${esc(settings.senderName || '')} &lt;${esc(settings.senderEmail || '')}&gt;</dd>
           <dt>Reply-to</dt><dd>${esc(settings.replyToEmail || '—')}</dd>
           <dt>Test recipient</dt><dd>${esc(settings.testRecipientEmail || '—')}</dd>
         </dl>
-        <p class="muted-text">No live SMS/email provider is wired in yet — these settings are stored for when delivery is turned on.</p>
+        <p class="muted-text">${ready ? 'This provider is configured and ready to send.' : 'No live provider secret is configured for this church\'s selected provider — these settings are stored, but sends will run in dry-run mode until it\'s configured.'}</p>
+      </div>
+      <div class="card">
+        <h2>SMS delivery</h2>
+        <dl class="stats">
+          <dt>Provider</dt><dd>Arkesel <span class="pill pill-${process.env.ARKESEL_API_KEY ? 'sent' : 'dry_run'}">${process.env.ARKESEL_API_KEY ? 'ready' : 'dry-run only'}</span></dd>
+        </dl>
       </div>
       <div class="card">
         <h2>Configure email</h2>

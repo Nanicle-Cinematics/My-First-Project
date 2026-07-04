@@ -22,6 +22,7 @@ test.after(async () => {
   server.close();
   if (createdChurchIds.length) {
     const where = { churchId: { in: createdChurchIds } };
+    await db.emailLog.deleteMany({ where });
     await db.broadcastRecipient.deleteMany({ where });
     await db.broadcast.deleteMany({ where });
     await db.emailSetting.deleteMany({ where });
@@ -31,6 +32,9 @@ test.after(async () => {
     await db.member.deleteMany({ where });
     await db.account.deleteMany({ where });
     await db.user.deleteMany({ where });
+    await db.specialCategory.deleteMany({ where });
+    await db.serviceType.deleteMany({ where });
+    await db.expenseCategory.deleteMany({ where });
     await db.church.deleteMany({ where: { id: { in: createdChurchIds } } });
   }
   await db.$disconnect();

@@ -28,9 +28,11 @@ test.after(async () => {
     await db.dayBornSplit.deleteMany({ where });
     await db.service.deleteMany({ where });
     await db.serviceType.deleteMany({ where });
+    await db.expenseCategory.deleteMany({ where });
     await db.member.deleteMany({ where });
     await db.account.deleteMany({ where });
     await db.user.deleteMany({ where });
+    await db.specialCategory.deleteMany({ where });
     await db.church.deleteMany({ where: { id: { in: createdChurchIds } } });
   }
   await db.$disconnect();
@@ -134,7 +136,8 @@ test('members: create without CSRF is rejected, with CSRF succeeds, edit and arc
 
 test('reports: day-born, income, and members reports render with real data across the raw SQL joins', async () => {
   const { client, churchId } = await signedInClient('html-rep-data');
-  const svcType = await db.serviceType.create({ data: { churchId, typeName: 'Sunday Service' } });
+  // 'Sunday Service' is already seeded per-church at signup (Phase 9e) — look it up rather than re-create it.
+  const svcType = await db.serviceType.findFirst({ where: { churchId, typeName: 'Sunday Service' } });
   const svc = await db.service.create({ data: { churchId, serviceTypeId: svcType.id, serviceDate: new Date(), totalAmount: 500 } });
   await db.dayBornSplit.create({ data: { churchId, serviceId: svc.id, dayBorn: 'MONDAY', amount: 200 } });
   const member = await db.member.create({ data: { churchId, externalId: 'MBR-001', firstName: 'Ama', lastName: 'Owusu', membershipStatus: 'MEMBER', unsubscribeToken: 'tok-rep-1' } });

@@ -2,17 +2,17 @@
 // Phase 3, module 1 of 3: Postgres/Prisma port of routes/communications.js.
 // Same coexistence approach as the routes-pg/*.js modules from Phase 2.
 //
-// SCOPE: ports announcements CRUD, per-church email settings, and the full
-// broadcast audience-resolution + recipient bookkeeping (the parts that
-// actually need tenant isolation and are worth testing). Real SMS/email
-// DELIVERY (Arkesel API / SMTP / Resend, server.js:1539 sendSmsBatch /
-// server.js:1704 sendEmailEach) is NOT wired in — it's an external-service
-// integration depending on live secrets, orthogonal to the multi-tenant
-// schema work, and is stubbed to always return a dry-run result so the
-// audience/recipient logic stays fully real and testable. Wire real
-// delivery in at the actual per-route cutover.
+// SCOPE: announcements CRUD, per-church email settings, and the full
+// broadcast audience-resolution + recipient bookkeeping.
+//
+// Phase 9a: real SMS/email delivery is now wired in via lib/delivery.js +
+// lib/broadcast-delivery.js (Arkesel for SMS, SMTP/Resend for email) —
+// dry-run only when the relevant secret isn't configured, matching the
+// original app's own dry-run behavior, not a stub anymore.
 
 const asyncHandler = require('../lib/async-handler');
+const { normalizePhoneGH } = require('../lib/delivery');
+const { sendBroadcastAndTally, canReceive } = require('../lib/broadcast-delivery');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -24,32 +24,7 @@ function requireAuth(req, res, next) {
   next();
 }
 
-// Verbatim port of server.js:1528 normalizePhoneGH.
-function normalizePhoneGH(raw) {
-  if (!raw) return null;
-  let s = String(raw).replace(/[\s\-()]/g, '');
-  if (s.startsWith('+')) return /^\+\d{8,15}$/.test(s) ? s : null;
-  if (s.startsWith('00')) s = '+' + s.slice(2);
-  else if (s.startsWith('0') && s.length === 10) s = '+233' + s.slice(1);
-  else if (/^\d{9}$/.test(s)) s = '+233' + s;
-  else if (/^233\d{9}$/.test(s)) s = '+' + s;
-  return /^\+\d{8,15}$/.test(s) ? s : null;
-}
-
 function isEmailish(s) { return /^\S+@\S+\.\S+$/.test(String(s || '')); }
-
-// Decide whether a member can receive a given channel, respecting preferredChannel.
-function canReceive(member, channel) {
-  const pref = member.preferredChannel || 'NONE';
-  if (pref === 'NONE') return false;
-  if (channel === 'sms') return pref !== 'EMAIL_ONLY';
-  if (channel === 'email') return pref !== 'SMS_ONLY';
-  return true;
-}
-
-// Deferred real delivery — see module header.
-async function sendSmsBatchStub() { return { ok: true, dryRun: true }; }
-async function sendEmailEachStub() { return { ok: true, dryRun: true }; }
 
 async function resolveAudience(db, { allMembers, orgIds, memberId }) {
   if (memberId) {
@@ -202,13 +177,9 @@ function register(app) {
     }
     await db.broadcastRecipient.createMany({ data: recipientRows });
 
-    // Deferred real delivery (see module header) — always dry-run for now;
-    // PENDING recipient rows above already correctly represent "would send".
-    await Promise.all([sendSmsBatchStub(), sendEmailEachStub()]);
-
-    const updated = await db.broadcast.update({
-      where: { id: broadcast.id },
-      data: { status: 'DRY_RUN', successfulSends: 0, failedSends: 0 },
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const updated = await sendBroadcastAndTally(db, {
+      broadcastId: broadcast.id, audience, channel, subject, body, ignorePrefs, churchName: church.name,
     });
     res.status(201).json(updated);
   }));

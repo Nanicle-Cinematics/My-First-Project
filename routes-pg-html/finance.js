@@ -3,22 +3,32 @@
 // Registered ALONGSIDE routes-pg/finance.js (JSON at /api/finance/..., this
 // is the bare-path HTML surface).
 //
-// SCOPE matches routes-pg/finance.js exactly (its own header comment
-// explains why — highest-stakes module, deliberately bounded): chart of
-// accounts (read-only), funds CRUD, generic income record + reversal,
-// expense record (simplified always-PAID, no approval workflow), journal
-// entry detail + manual reversal, financial period lock/unlock. DEFERRED:
-// day-borns/harvests/tithes/pledges/vouchers/budgets/projects/receipts-
-// printing/CSV-exports/settings UI — all thin wrappers around the same
-// postCashIncome/postExpensePayment primitives already proven here, same
-// documented-deferral pattern as every prior phase.
+// SCOPE matches routes-pg/finance.js: chart of accounts (read-only), funds
+// CRUD, generic income record + reversal, expense record (simplified
+// always-PAID, no approval workflow), journal entry detail + manual
+// reversal, financial period lock/unlock, (Phase 9d) tithes/special
+// offerings/standalone day-born collections with CSV exports (a NEW
+// convention — no CSV export existed anywhere in the new stack before
+// this; see the small csvEscape/sendCsv helpers below, copied from the
+// original's routes/finance.js:318-326 pattern since nothing shared exists
+// to import), (Phase 9e) services/harvests with the shared DayBornSplit
+// table, and (Phase 9f) pledges/pledge-payments/printable receipts/giving
+// statements — pledge creation/edit never touch the ledger (only payments
+// do), pledge payments get their OWN independent receipt-number scheme
+// (RCT-##### off the payment id, stored on PledgePayment.receiptNumber),
+// separate from the FinanceReceipt-based scheme used by generic income/
+// day-borns — matches the original's real (slightly inconsistent) design,
+// not a cleaned-up version. STILL DEFERRED: vouchers/budgets/projects/
+// settings UI.
 
 const asyncHandler = require('../lib/async-handler');
-const { esc, fmtMoney, todayISO, isMoneyPositive, isMoneyNonNeg, isValidDate } = require('../lib/format');
+const { esc, fmtMoney, fmtOutstanding, todayISO, isMoneyPositive, isMoneyNonNeg, isValidDate, DAYS_OF_WEEK } = require('../lib/format');
 const { pageHero, statsRow, listCard, table } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
 const ledger = require('../lib/ledger-pg');
+const { sendSmsBatch, sendEmailEach, normalizePhoneGH } = require('../lib/delivery');
+const { amountInWords } = require('../lib/money');
 
 function requireFinanceWrite(req, res, next) {
   const u = res.locals.user;
@@ -80,13 +90,317 @@ async function nextReceiptNo(db, dateStr) {
   return `${base}${String(next).padStart(5, '0')}`;
 }
 
+// Same shape as nextReceiptNo, but 4-digit padding and its own prefix
+// (FinanceSetting.voucherPrefix, default 'PV') — a completely independent
+// numbering scheme from receipts, matching the original.
+async function nextVoucherNo(db, dateStr) {
+  const settings = await db.financeSetting.findFirst();
+  const prefix = (settings && settings.voucherPrefix) || 'PV';
+  const year = String(dateStr || new Date().toISOString()).slice(0, 4);
+  const base = `${prefix}-${year}-`;
+  const last = await db.paymentVoucher.findFirst({ where: { voucherNo: { startsWith: base } }, orderBy: { voucherNo: 'desc' } });
+  const next = last ? Number(String(last.voucherNo).slice(base.length)) + 1 : 1;
+  return `${base}${String(next).padStart(4, '0')}`;
+}
+
+// Vouchers are 100% derived from expenses — never independently created.
+// Direct port of the original's syncExpenseVoucher(): find-or-create,
+// re-deriving fields from the (already-updated) expense row every time.
+async function syncExpenseVoucher(db, expense, userId) {
+  const existing = await db.paymentVoucher.findFirst({ where: { expenseId: expense.id } });
+  const fields = {
+    voucherDate: expense.spentOn, amountInWords: amountInWords(expense.amount), supportingDocRef: expense.referenceNumber || null,
+    approvedBy: expense.approvedBy || null, paidBy: userId, receivedBy: expense.paidTo || null, notes: expense.description || null,
+  };
+  if (existing) {
+    await db.paymentVoucher.update({ where: { id: existing.id }, data: fields });
+  } else {
+    await db.paymentVoucher.create({ data: { ...fields, voucherNo: await nextVoucherNo(db, expense.spentOn.toISOString().slice(0, 10)), expenseId: expense.id, preparedBy: userId } });
+  }
+}
+
+// ---------- Finance projects ----------
+const PROJECT_STATUSES = ['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED'];
+const PROJECT_STATUS_LABELS = { PLANNING: 'Planning', ACTIVE: 'Active', ON_HOLD: 'On hold', COMPLETED: 'Completed', CANCELLED: 'Cancelled' };
+function projectStatusOptions(selected) {
+  return PROJECT_STATUSES.map((s) => `<option value="${s}" ${s === selected ? 'selected' : ''}>${esc(PROJECT_STATUS_LABELS[s])}</option>`).join('');
+}
+// Only PLANNING/ACTIVE/ON_HOLD projects are offered on expense/income forms
+// — matches the original's projectOptions(), which excludes
+// COMPLETED/CANCELLED from the picker.
+async function projectOptions(db, selected) {
+  const projects = await db.financeProject.findMany({ where: { status: { in: ['PLANNING', 'ACTIVE', 'ON_HOLD'] } }, orderBy: { name: 'asc' } });
+  return '<option value="">— no project —</option>' + projects.map((p) => `<option value="${p.id}" ${Number(selected) === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+}
+async function projectFinanceRow(db, churchId, project) {
+  let raised = 0, spent = 0;
+  if (project.fundId) {
+    const rs = await ledger.fundRaisedSpent(db, churchId, project.fundId);
+    raised = rs.raised; spent = rs.spent;
+  } else {
+    const agg = await db.expense.aggregate({ where: { projectId: project.id }, _sum: { amount: true } });
+    spent = agg._sum.amount || 0;
+  }
+  const pct = project.targetAmount > 0 ? Math.min(100, Math.round((raised / project.targetAmount) * 100)) : 0;
+  return { raised, spent, balance: raised - spent, pct };
+}
+
+// ---------- Finance budgets ----------
+const BUDGET_LINE_TYPES = ['INCOME', 'EXPENSE'];
+async function accountOptionsForBudget(db, accountType, selected) {
+  const accounts = await db.account.findMany({ where: { active: true, accountType }, orderBy: { code: 'asc' } });
+  return '<option value="">— all accounts —</option>' + accounts.map((a) => `<option value="${a.id}" ${Number(selected) === a.id ? 'selected' : ''}>${esc(a.code + ' · ' + a.name)}</option>`).join('');
+}
+
+const DAY_BORN_VALUES = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+function dayBornLabel(v) { return String(v || '').charAt(0) + String(v || '').slice(1).toLowerCase(); }
+
+// Required-member picker (no "anonymous" option) — tithes always belong to
+// a specific member, unlike generic income's optional memberOptions().
+async function requiredMemberOptions(db, selected) {
+  const members = await db.member.findMany({ where: { deletedAt: null }, orderBy: { lastName: 'asc' }, select: { id: true, firstName: true, lastName: true, externalId: true } });
+  return members.map((m) => `<option value="${m.id}" ${Number(selected) === m.id ? 'selected' : ''}>${esc(m.firstName + ' ' + m.lastName)}${m.externalId ? ' · ' + esc(m.externalId) : ''}</option>`).join('');
+}
+async function specialCategoryOptions(db, selected) {
+  const cats = await db.specialCategory.findMany({ where: { isActive: true }, orderBy: { categoryName: 'asc' } });
+  return cats.map((c) => `<option value="${c.id}" ${Number(selected) === c.id ? 'selected' : ''}>${esc(c.categoryName)}</option>`).join('');
+}
+async function serviceTypeOptions(db, selected) {
+  const types = await db.serviceType.findMany({ where: { isActive: true }, orderBy: { typeName: 'asc' } });
+  return types.map((t) => `<option value="${t.id}" ${Number(selected) === t.id ? 'selected' : ''}>${esc(t.typeName)}</option>`).join('');
+}
+async function orgOptions(db, selected) {
+  const orgs = await db.organization.findMany({ where: { active: true }, orderBy: { name: 'asc' } });
+  return '<option value="">— church-wide —</option>' +
+    orgs.map((o) => `<option value="${o.id}" ${Number(selected) === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('');
+}
+
+const HARVEST_TYPES = ['ORGANIZATIONAL', 'END_OF_YEAR', 'OTHER'];
+const HARVEST_TYPE_LABELS = { ORGANIZATIONAL: 'Organizational', END_OF_YEAR: 'End-of-Year', OTHER: 'Other' };
+function harvestTypeOptions(selected) {
+  return HARVEST_TYPES.map((t) => `<option value="${t}" ${t === selected ? 'selected' : ''}>${esc(HARVEST_TYPE_LABELS[t])}</option>`).join('');
+}
+
+// Shared day-born-split grid, used by both Services and Harvests — direct
+// port of the original's parseDayBornInputs()/dayBornFormInputs(). Splits
+// are purely descriptive (never separately posted to the ledger, never
+// validated against the parent record's total — confirmed against the
+// original; the single postCashIncome call for the record's own total is
+// the only ledger interaction). DayBornSplit has no DB-level constraint
+// enforcing "exactly one of serviceId/harvestId" (unlike the original's
+// SQLite CHECK, not carried into schema.prisma) — callers here always
+// pass exactly one and never both.
+function parseDayBornSplitInputs(b) {
+  return DAY_BORN_VALUES
+    .map((day) => ({ dayBorn: day, amount: Number(b[`day_${day}_amount`] || 0), headCount: Number(b[`day_${day}_heads`] || 0) }))
+    .filter((r) => r.amount > 0 || r.headCount > 0);
+}
+function dayBornSplitFormInputs(splitsByDay) {
+  return `<div class="day-born-grid">${DAY_BORN_VALUES.map((day) => `
+    <div class="db-cell">
+      <div class="db-day">${esc(dayBornLabel(day))}</div>
+      <label>Amount<input type="number" step="0.01" min="0" name="day_${day}_amount" value="${(splitsByDay[day] && splitsByDay[day].amount) || ''}"></label>
+      <label>Heads<input type="number" min="0" name="day_${day}_heads" value="${(splitsByDay[day] && splitsByDay[day].headCount) || ''}"></label>
+    </div>`).join('')}</div>`;
+}
+
+// ---------- Pledges / receipts / statements (Phase 9f) ----------
+async function harvestSelectOptions(db, selected) {
+  const harvests = await db.harvest.findMany({ where: { deletedAt: null }, orderBy: { harvestYear: 'desc' } });
+  return harvests.map((h) => `<option value="${h.id}" ${Number(selected) === h.id ? 'selected' : ''}>${esc(h.harvestName)}</option>`).join('');
+}
+function pledgeStatusFor(pledged, paid) {
+  return paid <= 0 ? 'PENDING' : paid >= pledged ? 'FULFILLED' : 'PARTIAL';
+}
+// Pledge payments get their own independent receipt-number scheme
+// (RCT-##### off the payment's own id) — NOT the same as nextReceiptNo()/
+// FinanceReceipt used by generic income and day-borns. Matches the
+// original exactly (see routes-pg-html/finance.js module header note).
+function pledgePaymentReceiptNo(paymentId) {
+  return 'RCT-' + String(paymentId).padStart(5, '0');
+}
+// Records a payment toward a pledge: a new PledgePayment row with its own
+// receipt number, bumps the pledge's paidAmount/status, posts to the
+// ledger. Sequential awaits, not a hard $transaction wrapper — matches
+// this file's established convention for other multi-step postCashIncome
+// flows (postCashIncome already wraps its own posting in a transaction).
+async function recordPledgePayment(db, churchId, pledgeId, amount, paidOn, userId) {
+  const pledge = await db.pledge.findFirst({ where: { id: pledgeId }, include: { harvest: { select: { harvestName: true } } } });
+  if (!pledge) return null;
+  const payment = await db.pledgePayment.create({ data: { pledgeId, amount, paidOn: new Date(paidOn), receiptNumber: '', recordedBy: userId } });
+  const receiptNumber = pledgePaymentReceiptNo(payment.id);
+  await db.pledgePayment.update({ where: { id: payment.id }, data: { receiptNumber } });
+  const newPaid = Number(pledge.paidAmount) + amount;
+  const status = newPaid >= Number(pledge.pledgedAmount) ? 'FULFILLED' : 'PARTIAL';
+  await db.pledge.update({ where: { id: pledgeId }, data: { paidAmount: newPaid, status } });
+  const entryId = await ledger.postCashIncome(db, churchId, {
+    date: paidOn, amount, incomeAccount: ledger.ACC.PLEDGES, fundId: await defaultFundId(db),
+    sourceType: 'PLEDGE_PAYMENT', sourceId: payment.id, createdBy: userId,
+    memo: `${(pledge.harvest && pledge.harvest.harvestName) || 'Harvest'} pledge payment ${receiptNumber}`,
+  });
+  await db.pledgePayment.update({ where: { id: payment.id }, data: { journalEntryId: entryId } });
+  return { paymentId: payment.id, receiptNumber };
+}
+// One payment receipt, with the running balance as of that payment so
+// reprints stay stable even after later payments.
+async function loadPaymentReceipt(db, paymentId) {
+  const pay = await db.pledgePayment.findFirst({
+    where: { id: paymentId },
+    include: { pledge: { include: { member: true, harvest: { select: { harvestName: true, harvestYear: true } } } } },
+  });
+  if (!pay) return null;
+  const priorSum = await db.pledgePayment.aggregate({ where: { pledgeId: pay.pledgeId, id: { lte: pay.id } }, _sum: { amount: true } });
+  const recorder = pay.recordedBy ? await db.user.findFirst({ where: { id: pay.recordedBy }, select: { displayName: true } }) : null;
+  return { ...pay, paidToDate: priorSum._sum.amount || 0, recordedByName: (recorder && recorder.displayName) || '—' };
+}
+// Members who still owe on at least one (non-cancelled) pledge.
+async function membersWithOutstanding(db) {
+  const pledges = await db.pledge.findMany({ where: { status: { not: 'CANCELLED' } }, include: { member: { select: { id: true, firstName: true, lastName: true, deletedAt: true } } } });
+  const byMember = new Map();
+  for (const p of pledges) {
+    if (p.member.deletedAt) continue;
+    const outstanding = Number(p.pledgedAmount) - Number(p.paidAmount);
+    if (outstanding <= 0.005) continue;
+    const cur = byMember.get(p.memberId) || { memberId: p.memberId, name: `${p.member.firstName} ${p.member.lastName}`, pledged: 0, paid: 0, outstanding: 0, pledgeCount: 0 };
+    cur.pledged += Number(p.pledgedAmount); cur.paid += Number(p.paidAmount); cur.outstanding += outstanding; cur.pledgeCount++;
+    byMember.set(p.memberId, cur);
+  }
+  return [...byMember.values()].sort((a, b) => b.outstanding - a.outstanding);
+}
+// A member's still-outstanding pledges, for the statement.
+async function memberOutstandingDetail(db, memberId) {
+  const member = await db.member.findFirst({ where: { id: memberId, deletedAt: null } });
+  if (!member) return null;
+  const allPledges = await db.pledge.findMany({ where: { memberId, status: { not: 'CANCELLED' } }, include: { harvest: { select: { harvestName: true, harvestYear: true } } }, orderBy: { pledgeDate: 'asc' } });
+  const pledges = allPledges.filter((p) => Number(p.pledgedAmount) - Number(p.paidAmount) > 0.005);
+  return { member, pledges };
+}
+// Sends a message to a member over the channel(s) their preference allows —
+// direct port of the original's sendMemberMessage(), using Phase 9a's
+// lib/delivery.js instead of the old SQLite-era sendSmsBatch/sendEmailEach.
+async function sendMemberMessage(db, member, churchName, smsText, emailSubject, emailText) {
+  const pref = member.preferredChannel || 'NONE';
+  if (pref === 'NONE') return { ok: false, reason: 'do_not_contact' };
+  const phone = (pref === 'EITHER' || pref === 'SMS_ONLY') ? normalizePhoneGH(member.mobilePhone) : null;
+  const email = (pref === 'EITHER' || pref === 'EMAIL_ONLY') ? (member.email || null) : null;
+  if (!phone && !email) return { ok: false, reason: 'no_contact' };
+  let sms = null, mail = null;
+  if (phone) { try { sms = await sendSmsBatch([phone], smsText); } catch (e) { sms = { ok: false, error: e.message }; } }
+  if (email) { try { mail = await sendEmailEach(db, [{ addr: email, token: member.unsubscribeToken }], emailSubject, emailText, { churchName }); } catch (e) { mail = { ok: false, error: e.message }; } }
+  const channels = [];
+  if (phone) channels.push('SMS');
+  if (email) channels.push('email');
+  return {
+    ok: true, dryRun: (sms && sms.dryRun) || (mail && mail.dryRun), channels: channels.join(' + '),
+    smsOk: sms ? (sms.ok || sms.dryRun) : null, emailOk: mail ? (mail.ok || mail.dryRun) : null,
+  };
+}
+
+const RECEIPT_FLASH = {
+  new: 'Payment recorded. Here is the receipt — print it or send it to the member.',
+  sent: 'Receipt sent to the member.',
+  dry: 'Receipt logged as a dry run — SMS/email are not configured, so nothing was actually delivered.',
+  nocontact: "Could not send: the member has no phone or email matching their contact preference.",
+  donotcontact: 'Could not send: this member is set to "Do not contact". Update their preference first.',
+};
+
+// ---------- Annual giving statements ----------
+function givingYears() {
+  const now = new Date().getFullYear();
+  const years = [];
+  for (let y = now; y >= now - 6; y--) years.push(y);
+  return years;
+}
+function safeYear(v) {
+  const y = String(v || '').replace(/[^0-9]/g, '');
+  return /^\d{4}$/.test(y) ? y : String(new Date().getFullYear());
+}
+// A member's giving for one calendar year, unioned across tithes, special
+// offerings (as donor), legacy contributions, and pledge payments —
+// direct port of lib/finance.js's memberGivingForYear().
+async function memberGivingForYear(db, memberId, year) {
+  const start = new Date(`${year}-01-01`);
+  const end = new Date(`${Number(year) + 1}-01-01`);
+  const [tithes, specials, contributions, pledgePayments] = await Promise.all([
+    db.tithe.findMany({ where: { memberId, deletedAt: null, titheDate: { gte: start, lt: end } } }),
+    db.specialOffering.findMany({ where: { donorId: memberId, deletedAt: null, offeringDate: { gte: start, lt: end } }, include: { specialCategory: { select: { categoryName: true } } } }),
+    db.contribution.findMany({ where: { memberId, contributedOn: { gte: start, lt: end } }, include: { fund: { select: { name: true } } } }),
+    db.pledgePayment.findMany({ where: { paidOn: { gte: start, lt: end }, pledge: { memberId } }, include: { pledge: { include: { harvest: { select: { harvestName: true } } } } } }),
+  ]);
+  const lines = [];
+  const byGroup = {};
+  const add = (dt, group, category, detail, amount) => {
+    lines.push({ dt, group, category, detail, amount });
+    byGroup[group] = (byGroup[group] || 0) + Number(amount);
+  };
+  for (const t of tithes) add(t.titheDate.toISOString().slice(0, 10), 'Tithes', 'Tithe', [t.method, t.reference].filter(Boolean).join(' · '), t.amount);
+  for (const s of specials) add(s.offeringDate.toISOString().slice(0, 10), 'Special Offerings', s.specialCategory.categoryName, [s.purpose, s.receiptNumber].filter(Boolean).join(' · '), s.amount);
+  for (const c of contributions) add(c.contributedOn.toISOString().slice(0, 10), 'Contributions', (c.fund && c.fund.name) || 'Fund', [c.method, c.reference].filter(Boolean).join(' · '), c.amount);
+  for (const p of pledgePayments) add(p.paidOn.toISOString().slice(0, 10), 'Pledge Redemptions', (p.pledge.harvest && p.pledge.harvest.harvestName) || 'Harvest', p.receiptNumber, p.amount);
+  lines.sort((a, b) => a.dt.localeCompare(b.dt));
+  const total = lines.reduce((s, l) => s + Number(l.amount), 0);
+  return { lines, byGroup, total };
+}
+// Every member with any giving in a year, for the /finance/statements index.
+async function givingByMember(db, year) {
+  const start = new Date(`${year}-01-01`);
+  const end = new Date(`${Number(year) + 1}-01-01`);
+  const [tithes, specials, contributions, pledgePayments] = await Promise.all([
+    db.tithe.findMany({ where: { deletedAt: null, titheDate: { gte: start, lt: end } }, select: { memberId: true, amount: true } }),
+    db.specialOffering.findMany({ where: { deletedAt: null, donorId: { not: null }, offeringDate: { gte: start, lt: end } }, select: { donorId: true, amount: true } }),
+    db.contribution.findMany({ where: { memberId: { not: null }, contributedOn: { gte: start, lt: end } }, select: { memberId: true, amount: true } }),
+    db.pledgePayment.findMany({ where: { paidOn: { gte: start, lt: end } }, select: { amount: true, pledge: { select: { memberId: true } } } }),
+  ]);
+  const byMember = new Map();
+  const bump = (memberId, amount) => {
+    if (!memberId) return;
+    const cur = byMember.get(memberId) || { memberId, gifts: 0, total: 0 };
+    cur.gifts++; cur.total += Number(amount);
+    byMember.set(memberId, cur);
+  };
+  for (const t of tithes) bump(t.memberId, t.amount);
+  for (const s of specials) bump(s.donorId, s.amount);
+  for (const c of contributions) bump(c.memberId, c.amount);
+  for (const p of pledgePayments) bump(p.pledge.memberId, p.amount);
+  if (byMember.size === 0) return [];
+  const members = await db.member.findMany({ where: { id: { in: [...byMember.keys()] } }, select: { id: true, firstName: true, lastName: true, externalId: true } });
+  return [...byMember.values()]
+    .map((r) => { const m = members.find((x) => x.id === r.memberId); return { ...r, name: m ? `${m.firstName} ${m.lastName}` : '—', externalId: m ? m.externalId : null }; })
+    .sort((a, b) => b.total - a.total);
+}
+
+// Small CSV helpers — no shared lib/ convention exists yet for this (see
+// module header); copied near-verbatim from the original's
+// routes/finance.js:318-326 sendFinanceCsv/csvEscape pair.
+function csvEscape(v) {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function sendCsv(res, filename, header, rows) {
+  const lines = [header.map(csvEscape).join(',')].concat(rows.map((r) => r.map(csvEscape).join(',')));
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(lines.join('\r\n'));
+}
+
 function register(app) {
   app.get('/finance', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const tiles = [
       ['/finance/funds', '◎', 'Funds', 'Balances, restrictions, raised/spent.'],
       ['/finance/income', '↗', 'Generic Income', 'Record and reverse one-off income.'],
+      ['/finance/tithes', '✚', 'Tithes', 'Per-member tithe records.'],
+      ['/finance/special', '★', 'Special Offerings', 'Building fund, missions, thanksgiving, etc.'],
+      ['/finance/day-borns', '☀', 'Day-Born Collections', 'Standalone day-born group collections.'],
+      ['/finance/services', '✝', 'Services', 'Weekly service collections with day-born breakdowns.'],
+      ['/finance/harvests', '🌾', 'Harvests', 'Annual harvests and organizational fundraisers.'],
+      ['/finance/pledges', '🤝', 'Pledges', 'Member pledge commitments and payments.'],
+      ['/finance/receipts', '🧾', 'Receipts', 'Printable receipts and outstanding-pledge statements.'],
+      ['/finance/statements', '📄', 'Giving Statements', 'Per-member annual giving summaries.'],
       ['/finance/expenses', '↘', 'Expenses', 'Record expense payments.'],
+      ['/finance/vouchers', '📋', 'Payment Vouchers', 'Auto-issued for every expense.'],
+      ['/finance/projects', '🏗', 'Projects', 'Fund-raising projects with targets.'],
+      ['/finance/budgets', '📊', 'Budgets', 'Budget vs. actual, computed from the ledger.'],
     ];
     const body = `${pageHero('Finance', 'Funds, income, and expenses.')}
       <div class="report-tiles">${tiles.map(([href, ico, name, desc]) =>
@@ -263,6 +577,1369 @@ function register(app) {
     res.redirect('/finance/income');
   }));
 
+  // --- Standalone day-born collections ---
+  app.get('/finance/day-borns', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const rows = await db.dayBornCollection.findMany({
+      where: { deletedAt: null }, orderBy: [{ collectionDate: 'desc' }, { id: 'desc' }], take: 120,
+      include: { fund: { select: { name: true } } },
+    });
+    const byDay = {};
+    for (const d of DAY_BORN_VALUES) byDay[d] = { records: 0, heads: 0, total: 0 };
+    for (const r of rows) { byDay[r.dayBorn].records++; byDay[r.dayBorn].heads += r.headCount || 0; byDay[r.dayBorn].total += Number(r.amount || 0); }
+    const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+
+    const addForm = canWrite
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Record day-born collection</strong></summary>
+           <form class="form" method="post" action="/finance/day-borns" style="margin-top:0.75rem">
+             <label>Date<input type="date" name="collectionDate" required value="${todayISO()}"></label>
+             <label>Day-born<select name="dayBorn" required>${DAYS_OF_WEEK.map((d) => `<option value="${d.toUpperCase()}">${esc(d)}</option>`).join('')}</select></label>
+             <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required></label>
+             <label>Heads<input type="number" min="0" name="headCount" value="0"></label>
+             <label>Payment method<select name="paymentMethod">${paymentMethodOptions('Cash')}</select></label>
+             <label>Fund<select name="fundId">${await fundOptions(db, '', true)}</select></label>
+             <label>Reference<input name="referenceNumber"></label>
+             <label class="wide">Notes<input name="notes"></label>
+             <div class="actions"><button type="submit">Save and issue receipt</button></div>
+           </form>
+         </details>` : '';
+    const body = `
+      ${statsRow([
+        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent standalone collections' },
+        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+      ])}
+      ${addForm}
+      <p><a class="btn ghost" href="/finance/day-borns.csv">⬇ Export CSV</a></p>
+      <section class="card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Summary by day-born</h2><span class="meta">Standalone records only</span></div>
+        ${table(['Day-born', 'Records', 'Heads', 'Total'],
+          DAY_BORN_VALUES.map((d) => [esc(dayBornLabel(d)), byDay[d].records, byDay[d].heads, fmtMoney(byDay[d].total)]))}
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Recent day-born collections</h2><span class="meta">Receipted entries</span></div>
+        ${rows.length ? table(['Date', 'Day-born', 'Amount', 'Heads', 'Method', 'Fund', 'Receipt', ''],
+          rows.map((r) => [
+            esc(r.collectionDate.toISOString().slice(0, 10)), esc(dayBornLabel(r.dayBorn)), fmtMoney(r.amount), r.headCount || 0,
+            esc(r.paymentMethod || 'Cash'), esc((r.fund && r.fund.name) || 'General fund'), esc(r.receiptNumber || '—'),
+            canWrite ? `<form method="post" action="/finance/day-borns/${r.id}/delete" onsubmit="return confirm('Reverse and archive this collection?')"><button class="link" type="submit">Reverse</button></form>` : '',
+          ])) : '<p class="muted-text">No standalone day-born collections recorded yet.</p>'}
+      </section>`;
+    res.page({ title: 'Finance · Day-Borns', active: '/finance', noHeader: true, body: `${pageHero('Day-Born Collections', '')}${body}` });
+  }));
+
+  app.get('/finance/day-borns.csv', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const rows = await res.locals.db.dayBornCollection.findMany({
+      where: { deletedAt: null }, orderBy: [{ collectionDate: 'desc' }, { id: 'desc' }],
+      include: { fund: { select: { name: true } } },
+    });
+    sendCsv(res, 'day-born-collections.csv', ['Date', 'Day-born', 'Amount', 'Heads', 'Method', 'Fund', 'Receipt', 'Reference', 'Notes'],
+      rows.map((r) => [r.collectionDate.toISOString().slice(0, 10), dayBornLabel(r.dayBorn), r.amount, r.headCount || 0,
+        r.paymentMethod || 'Cash', (r.fund && r.fund.name) || 'General fund', r.receiptNumber || '', r.referenceNumber || '', r.notes || '']));
+  }));
+
+  app.post('/finance/day-borns', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const b = req.body || {};
+    if (!isValidDate(b.collectionDate)) { flash(req, 'Enter a valid collection date.'); return res.redirect('/finance/day-borns'); }
+    const dayBorn = String(b.dayBorn || '').toUpperCase();
+    if (!DAY_BORN_VALUES.includes(dayBorn)) { flash(req, 'Pick a valid day-born.'); return res.redirect('/finance/day-borns'); }
+    if (!isMoneyPositive(b.amount)) { flash(req, 'Amount must be greater than 0.'); return res.redirect('/finance/day-borns'); }
+
+    const fundId = b.fundId ? Number(b.fundId) : await defaultFundId(db);
+    const receiptNo = await nextReceiptNo(db, b.collectionDate);
+    const row = await db.dayBornCollection.create({
+      data: {
+        collectionDate: new Date(b.collectionDate), dayBorn, amount: Number(b.amount),
+        headCount: Number(b.headCount) || 0, paymentMethod: b.paymentMethod || 'Cash', fundId,
+        referenceNumber: b.referenceNumber || null, receiptNumber: receiptNo, notes: b.notes || null,
+        recordedBy: res.locals.user.id,
+      },
+    });
+    const entryId = await ledger.postCashIncome(db, churchId, {
+      date: b.collectionDate, amount: Number(b.amount), incomeAccount: ledger.ACC.DAYBORNS,
+      fundId, sourceType: 'DAY_BORN_COLLECTION', sourceId: row.id, createdBy: res.locals.user.id,
+      memo: `${dayBornLabel(dayBorn)} day-born collection`,
+    });
+    await Promise.all([
+      db.dayBornCollection.update({ where: { id: row.id }, data: { journalEntryId: entryId } }),
+      db.financeReceipt.create({
+        data: {
+          receiptNumber: receiptNo, sourceType: 'DAY_BORN_COLLECTION', sourceId: row.id, receiptDate: new Date(b.collectionDate),
+          receivedFrom: `${dayBornLabel(dayBorn)} day-born group`, amount: Number(b.amount),
+          description: `${dayBornLabel(dayBorn)} day-born collection`, createdBy: res.locals.user.id,
+        },
+      }),
+    ]);
+    await logActivity(db, 'income_recorded', `Day-born collection ${receiptNo} recorded`, '/finance/day-borns', res.locals.user.id);
+    flash(req, `Collection recorded — receipt ${receiptNo}.`, 'success');
+    res.redirect('/finance/day-borns');
+  }));
+
+  app.post('/finance/day-borns/:id/delete', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const id = Number(req.params.id);
+    const row = await db.dayBornCollection.findUnique({ where: { id } });
+    if (!row) return res.status(404).send('Not found');
+    if (row.journalEntryId) await ledger.reverseJournal(db, churchId, row.journalEntryId, 'Day-born collection archived', res.locals.user.id);
+    await db.dayBornCollection.update({ where: { id }, data: { deletedAt: new Date() } });
+    await db.financeReceipt.updateMany({ where: { sourceType: 'DAY_BORN_COLLECTION', sourceId: id }, data: { voidedAt: new Date(), voidReason: 'Day-born collection archived' } });
+    await logActivity(db, 'finance_reversal', `Day-born collection #${id} archived and journal reversed`, '/finance/day-borns', res.locals.user.id);
+    flash(req, 'Collection reversed and archived.', 'success');
+    res.redirect('/finance/day-borns');
+  }));
+
+  // --- Special offerings (no receipt, no delete route — matches the original) ---
+  app.get('/finance/special', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const rows = await db.specialOffering.findMany({
+      where: { deletedAt: null }, orderBy: [{ offeringDate: 'desc' }, { id: 'desc' }], take: 100,
+      include: { specialCategory: { select: { categoryName: true } }, donor: { select: { id: true, firstName: true, lastName: true } } },
+    });
+    const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
+
+    const addForm = canWrite
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Record special offering</strong></summary>
+           <form class="form" method="post" action="/finance/special" style="margin-top:0.75rem">
+             <label>Date<input type="date" name="offeringDate" required value="${todayISO()}"></label>
+             <label>Category<select name="specialCatId" required>${await specialCategoryOptions(db, '')}</select></label>
+             <label>Donor (member)<select name="donorId"><option value="">— not a member —</option>${await memberOptions(db)}</select></label>
+             <label>Donor name (if not a member)<input name="donorNameManual"></label>
+             <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required></label>
+             <label>Receipt #<input name="receiptNumber" placeholder="optional"></label>
+             <label>Purpose<input name="purpose"></label>
+             <label class="wide">Notes<input name="notes"></label>
+             <div class="actions"><button type="submit">Save</button></div>
+           </form>
+         </details>` : '';
+    const body = `
+      ${statsRow([
+        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent special offerings' },
+        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+      ])}
+      ${addForm}
+      <p><a class="btn ghost" href="/finance/special.csv">⬇ Export CSV</a></p>
+      <section class="card">
+        <div class="card-head"><h2>Recent special offerings</h2><span class="meta">Building fund, missions, thanksgiving, etc.</span></div>
+        ${rows.length ? table(['Date', 'Donor', 'Category', 'Amount', 'Receipt', 'Purpose'],
+          rows.map((r) => [
+            esc(r.offeringDate.toISOString().slice(0, 10)),
+            r.donorId ? `<a href="/members/${r.donor.id}">${esc(r.donor.firstName + ' ' + r.donor.lastName)}</a>` : esc(r.donorNameManual || '(anonymous)'),
+            esc(r.specialCategory.categoryName), fmtMoney(r.amount), esc(r.receiptNumber || '—'), esc(r.purpose || '—'),
+          ])) : '<p class="muted-text">No special offerings recorded yet.</p>'}
+      </section>`;
+    res.page({ title: 'Finance · Special Offerings', active: '/finance', noHeader: true, body: `${pageHero('Special Offerings', '')}${body}` });
+  }));
+
+  app.get('/finance/special.csv', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const rows = await res.locals.db.specialOffering.findMany({
+      where: { deletedAt: null }, orderBy: [{ offeringDate: 'desc' }, { id: 'desc' }],
+      include: { specialCategory: { select: { categoryName: true } }, donor: { select: { firstName: true, lastName: true } } },
+    });
+    sendCsv(res, 'special-offerings.csv', ['Date', 'Donor', 'Category', 'Amount', 'Receipt', 'Purpose', 'Notes'],
+      rows.map((r) => [r.offeringDate.toISOString().slice(0, 10),
+        r.donorId ? `${r.donor.firstName} ${r.donor.lastName}` : (r.donorNameManual || 'Anonymous'),
+        r.specialCategory.categoryName, r.amount, r.receiptNumber || '', r.purpose || '', r.notes || '']));
+  }));
+
+  app.post('/finance/special', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const b = req.body || {};
+    const specialCatId = Number(b.specialCatId);
+    if (!specialCatId) { flash(req, 'Pick a special offering category.'); return res.redirect('/finance/special'); }
+    if (!isValidDate(b.offeringDate)) { flash(req, 'Enter a valid offering date.'); return res.redirect('/finance/special'); }
+    if (!isMoneyPositive(b.amount)) { flash(req, 'Amount must be greater than 0.'); return res.redirect('/finance/special'); }
+
+    const cat = await db.specialCategory.findUnique({ where: { id: specialCatId } });
+    if (!cat) { flash(req, 'Special category not found.'); return res.redirect('/finance/special'); }
+    const donorId = b.donorId ? Number(b.donorId) : null;
+    const fundId = await defaultFundId(db);
+
+    const row = await db.specialOffering.create({
+      data: {
+        specialCatId, offeringDate: new Date(b.offeringDate), donorId, donorNameManual: b.donorNameManual || null,
+        amount: Number(b.amount), purpose: b.purpose || null, receiptNumber: b.receiptNumber || null,
+        notes: b.notes || null, recordedBy: res.locals.user.id,
+      },
+    });
+    const entryId = await ledger.postCashIncome(db, churchId, {
+      date: b.offeringDate, amount: Number(b.amount), incomeAccount: ledger.incomeAccountFor(cat.categoryName),
+      fundId, sourceType: 'SPECIAL_OFFERING', sourceId: row.id, createdBy: res.locals.user.id,
+      memo: b.purpose || cat.categoryName,
+    });
+    await db.specialOffering.update({ where: { id: row.id }, data: { journalEntryId: entryId } });
+    await logActivity(db, 'contribution_recorded', `Special offering of ${fmtMoney(b.amount)} recorded`, '/finance/special', res.locals.user.id);
+    flash(req, 'Special offering recorded.', 'success');
+    res.redirect('/finance/special');
+  }));
+
+  // --- Tithes (no receipt, no delete route — matches the original) ---
+  app.get('/finance/tithes', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const memberId = req.query.memberId ? Number(req.query.memberId) : null;
+    const rows = await db.tithe.findMany({
+      where: { deletedAt: null, ...(memberId ? { memberId } : {}) }, orderBy: [{ titheDate: 'desc' }, { id: 'desc' }], take: 200,
+      include: { member: { select: { id: true, firstName: true, lastName: true, externalId: true } } },
+    });
+    // Tithe.recordedBy is a plain scalar (no Prisma relation declared on
+    // this model), so recorder names are batch-fetched separately and
+    // mapped client-side — same pattern used for Announcement.postedBy /
+    // Broadcast.sentBy in routes-pg-html/communications.js.
+    const recorderIds = [...new Set(rows.map((r) => r.recordedBy).filter(Boolean))];
+    const recorders = recorderIds.length ? await db.user.findMany({ where: { id: { in: recorderIds } }, select: { id: true, displayName: true } }) : [];
+    const recorderName = (id) => (recorders.find((u) => u.id === id) || {}).displayName || '—';
+
+    const now = new Date();
+    const ytdStart = `${now.getFullYear()}-01-01`;
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const [ytdAgg, monthAgg, topTithers] = await Promise.all([
+      db.tithe.aggregate({ where: { deletedAt: null, titheDate: { gte: new Date(ytdStart) }, ...(memberId ? { memberId } : {}) }, _sum: { amount: true } }),
+      db.tithe.aggregate({ where: { deletedAt: null, titheDate: { gte: new Date(monthStart) }, ...(memberId ? { memberId } : {}) }, _sum: { amount: true } }),
+      memberId ? Promise.resolve([]) : db.tithe.groupBy({ by: ['memberId'], where: { deletedAt: null, titheDate: { gte: new Date(ytdStart) } }, _sum: { amount: true }, orderBy: { _sum: { amount: 'desc' } }, take: 10 }),
+    ]);
+    const topTitherMembers = topTithers.length
+      ? await db.member.findMany({ where: { id: { in: topTithers.map((t) => t.memberId) } }, select: { id: true, firstName: true, lastName: true } })
+      : [];
+    const topTitherRows = topTithers.map((t) => {
+      const m = topTitherMembers.find((x) => x.id === t.memberId);
+      return [m ? `<a href="/members/${m.id}">${esc(m.firstName + ' ' + m.lastName)}</a>` : '—', fmtMoney(t._sum.amount || 0)];
+    });
+
+    const addForm = canWrite
+      ? `<details class="form-toggle" style="margin-bottom:1rem" ${memberId ? 'open' : ''}>
+           <summary><strong>+ Record a tithe</strong></summary>
+           <form class="form" method="post" action="/finance/tithes" style="margin-top:0.75rem">
+             <label>Member<select name="memberId" required>${memberId ? '' : '<option value="">— pick a member —</option>'}${await requiredMemberOptions(db, memberId)}</select></label>
+             <label>Date<input type="date" name="titheDate" required value="${todayISO()}"></label>
+             <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required></label>
+             <label>Method<select name="method">${['cash', 'check', 'card', 'online', 'mobile_money', 'transfer', 'other'].map((m) => `<option value="${m}">${esc(m)}</option>`).join('')}</select></label>
+             <label>Reference<input name="reference"></label>
+             <label class="wide">Notes<input name="notes"></label>
+             <div class="actions"><button type="submit">Save</button></div>
+           </form>
+         </details>` : '';
+    const body = `
+      ${statsRow([
+        { cls: 'green', icon: '₵', value: fmtMoney(ytdAgg._sum.amount || 0), label: 'YTD tithes' },
+        { cls: 'blue', icon: '₵', value: fmtMoney(monthAgg._sum.amount || 0), label: 'This month' },
+        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+      ])}
+      ${memberId ? `<p><a href="/finance/tithes">← All members</a></p>` : ''}
+      ${addForm}
+      <p><a class="btn ghost" href="/finance/tithes.csv${memberId ? `?memberId=${memberId}` : ''}">⬇ Export CSV</a></p>
+      ${!memberId && topTitherRows.length ? `<section class="card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Top tithers (YTD)</h2></div>
+        ${table(['Member', 'YTD total'], topTitherRows)}
+      </section>` : ''}
+      <section class="card">
+        <div class="card-head"><h2>${memberId ? 'Tithes for this member' : 'Recent tithes'}</h2></div>
+        ${rows.length ? table(['Date', 'Member', 'External ID', 'Amount', 'Method', 'Reference', 'Recorded by'],
+          rows.map((r) => [
+            esc(r.titheDate.toISOString().slice(0, 10)), `<a href="/members/${r.member.id}">${esc(r.member.firstName + ' ' + r.member.lastName)}</a>`,
+            esc(r.member.externalId || '—'), fmtMoney(r.amount), esc(r.method || '—'), esc(r.reference || '—'), esc(recorderName(r.recordedBy)),
+          ])) : '<p class="muted-text">No tithes recorded yet.</p>'}
+      </section>`;
+    res.page({ title: 'Finance · Tithes', active: '/finance', noHeader: true, body: `${pageHero('Tithes', '')}${body}` });
+  }));
+
+  app.get('/finance/tithes.csv', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const memberId = req.query.memberId ? Number(req.query.memberId) : null;
+    const rows = await res.locals.db.tithe.findMany({
+      where: { deletedAt: null, ...(memberId ? { memberId } : {}) }, orderBy: [{ titheDate: 'desc' }, { id: 'desc' }],
+      include: { member: { select: { firstName: true, lastName: true, externalId: true } } },
+    });
+    sendCsv(res, 'tithes.csv', ['Date', 'Member', 'External ID', 'Amount', 'Method', 'Reference', 'Notes'],
+      rows.map((r) => [r.titheDate.toISOString().slice(0, 10), `${r.member.firstName} ${r.member.lastName}`,
+        r.member.externalId || '', r.amount, r.method || '', r.reference || '', r.notes || '']));
+  }));
+
+  app.post('/finance/tithes', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const b = req.body || {};
+    const memberId = Number(b.memberId);
+    // Matches the original exactly: looser validation than day-borns/special
+    // (no isValidDate/isMoneyPositive calls there either, silent redirect).
+    if (!memberId || !b.amount || !b.titheDate) return res.redirect('/finance/tithes');
+
+    const member = await db.member.findUnique({ where: { id: memberId } });
+    if (!member) return res.redirect('/finance/tithes');
+    const fundId = await defaultFundId(db);
+
+    const row = await db.tithe.create({
+      data: {
+        memberId, amount: Number(b.amount), titheDate: new Date(b.titheDate),
+        method: b.method || null, reference: b.reference || null, notes: b.notes || null, recordedBy: res.locals.user.id,
+      },
+    });
+    const entryId = await ledger.postCashIncome(db, churchId, {
+      date: b.titheDate, amount: Number(b.amount), incomeAccount: ledger.ACC.TITHES,
+      fundId, sourceType: 'TITHE', sourceId: row.id, createdBy: res.locals.user.id,
+      memo: `Tithe from ${member.firstName} ${member.lastName}`,
+    });
+    await db.tithe.update({ where: { id: row.id }, data: { journalEntryId: entryId } });
+    await logActivity(db, 'contribution_recorded', `Tithe of ${fmtMoney(b.amount)} from ${member.firstName} ${member.lastName}`, '/finance/tithes', res.locals.user.id);
+    flash(req, 'Tithe recorded.', 'success');
+    res.redirect(`/finance/tithes?memberId=${memberId}`);
+  }));
+
+  // --- Services (weekly/service collections, with optional day-born splits) ---
+  // No receipt, no payment-method/fund picker — matches the original exactly
+  // (services/harvests always post to defaultFundId(), unlike day-borns).
+  app.get('/finance/services', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const rows = await db.service.findMany({
+      where: { deletedAt: null }, orderBy: [{ serviceDate: 'desc' }, { id: 'desc' }], take: 50,
+      include: { serviceType: { select: { typeName: true } } },
+    });
+    const total = rows.reduce((s, r) => s + Number(r.totalAmount || 0), 0);
+
+    const addForm = canWrite
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Record a service</strong></summary>
+           <form class="form" method="post" action="/finance/services" style="margin-top:0.75rem">
+             <label>Date<input type="date" name="serviceDate" required value="${todayISO()}"></label>
+             <label>Service type<select name="serviceTypeId" required>${await serviceTypeOptions(db, '')}</select></label>
+             <label>Total amount (GH₵)<input type="number" step="0.01" min="0" name="totalAmount" value="0" required></label>
+             <label class="wide">Notes<input name="notes"></label>
+             <fieldset><legend>Day-born breakdown (optional)</legend>${dayBornSplitFormInputs({})}</fieldset>
+             <div class="actions"><button type="submit">Save</button></div>
+           </form>
+         </details>` : '';
+    const body = `
+      ${statsRow([
+        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent service collections' },
+        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+      ])}
+      ${addForm}
+      <section class="card">
+        <div class="card-head"><h2>Recent services</h2></div>
+        ${rows.length ? table(['Date', 'Type', 'Total', 'Notes', ''],
+          rows.map((r) => [
+            esc(r.serviceDate.toISOString().slice(0, 10)), esc(r.serviceType.typeName), fmtMoney(r.totalAmount), esc(r.notes || '—'),
+            `<a class="link" href="/finance/services/${r.id}">View / edit breakdown</a>`,
+          ])) : '<p class="muted-text">No services recorded yet.</p>'}
+      </section>`;
+    res.page({ title: 'Finance · Services', active: '/finance', noHeader: true, body: `${pageHero('Services', '')}${body}` });
+  }));
+
+  app.post('/finance/services', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const b = req.body || {};
+    const serviceTypeId = Number(b.serviceTypeId);
+    if (!serviceTypeId) { flash(req, 'Pick a service type.'); return res.redirect('/finance/services'); }
+    if (!isValidDate(b.serviceDate)) { flash(req, 'Enter a valid service date.'); return res.redirect('/finance/services'); }
+    if (!isMoneyNonNeg(b.totalAmount)) { flash(req, 'Total amount must be 0 or more.'); return res.redirect('/finance/services'); }
+
+    const service = await db.service.create({
+      data: { serviceTypeId, serviceDate: new Date(b.serviceDate), totalAmount: Number(b.totalAmount) || 0, notes: b.notes || null, recordedBy: res.locals.user.id },
+    });
+    const splits = parseDayBornSplitInputs(b);
+    if (splits.length) {
+      await db.dayBornSplit.createMany({ data: splits.map((s) => ({ serviceId: service.id, dayBorn: s.dayBorn, amount: s.amount, headCount: s.headCount })) });
+    }
+    if (Number(b.totalAmount) > 0) {
+      const fundId = await defaultFundId(db);
+      const entryId = await ledger.postCashIncome(db, churchId, {
+        date: b.serviceDate, amount: Number(b.totalAmount), incomeAccount: ledger.ACC.OFFERTORY,
+        fundId, sourceType: 'SERVICE', sourceId: service.id, createdBy: res.locals.user.id, memo: 'Service offering',
+      });
+      await db.service.update({ where: { id: service.id }, data: { journalEntryId: entryId } });
+    }
+    await logActivity(db, 'income_recorded', `Service recorded: ${fmtMoney(b.totalAmount)}`, `/finance/services/${service.id}`, res.locals.user.id);
+    flash(req, 'Service recorded.', 'success');
+    res.redirect(`/finance/services/${service.id}`);
+  }));
+
+  app.get('/finance/services/:id', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const id = Number(req.params.id);
+    const service = await db.service.findFirst({ where: { id, deletedAt: null }, include: { serviceType: { select: { typeName: true } } } });
+    if (!service) return res.status(404).send('Not found');
+    const splits = await db.dayBornSplit.findMany({ where: { serviceId: id } });
+    const splitsByDay = {};
+    for (const s of splits) splitsByDay[s.dayBorn] = s;
+    const splitTotal = splits.reduce((s, r) => s + Number(r.amount || 0), 0);
+    const headTotal = splits.reduce((s, r) => s + (r.headCount || 0), 0);
+
+    const body = `
+      <p><a href="/finance/services">← All services</a></p>
+      <dl class="stats">
+        <dt>Type</dt><dd>${esc(service.serviceType.typeName)}</dd>
+        <dt>Date</dt><dd>${esc(service.serviceDate.toISOString().slice(0, 10))}</dd>
+        <dt>Total</dt><dd>${fmtMoney(service.totalAmount)}</dd>
+        <dt>Notes</dt><dd>${esc(service.notes) || '—'}</dd>
+      </dl>
+      <section class="card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Day-born breakdown</h2><span class="meta">${fmtMoney(splitTotal)} across ${headTotal} heads</span></div>
+        ${table(['Day-born', 'Amount', 'Heads'], DAY_BORN_VALUES.map((d) => [esc(dayBornLabel(d)), fmtMoney((splitsByDay[d] && splitsByDay[d].amount) || 0), (splitsByDay[d] && splitsByDay[d].headCount) || 0]))}
+        ${canWrite ? `<form class="form" method="post" action="/finance/services/${id}/splits" style="margin-top:0.75rem">
+          ${dayBornSplitFormInputs(splitsByDay)}
+          <div class="actions"><button type="submit">Save breakdown</button></div>
+        </form>` : ''}
+      </section>
+      ${canWrite ? `<form method="post" action="/finance/services/${id}/delete" onsubmit="return confirm('Archive this service and reverse its journal entry?')">
+        <button class="danger" type="submit">Archive service</button>
+      </form>` : ''}`;
+    res.page({ title: `Service · ${service.serviceType.typeName}`, active: '/finance', noHeader: true, body: `${pageHero(`Service · ${esc(service.serviceType.typeName)}`, '')}${body}` });
+  }));
+
+  app.post('/finance/services/:id/splits', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const service = await db.service.findFirst({ where: { id, deletedAt: null } });
+    if (!service) return res.status(404).send('Not found');
+    const splits = parseDayBornSplitInputs(req.body || {});
+    await db.dayBornSplit.deleteMany({ where: { serviceId: id } });
+    if (splits.length) {
+      await db.dayBornSplit.createMany({ data: splits.map((s) => ({ serviceId: id, dayBorn: s.dayBorn, amount: s.amount, headCount: s.headCount })) });
+    }
+    flash(req, 'Breakdown saved.', 'success');
+    res.redirect(`/finance/services/${id}`);
+  }));
+
+  app.post('/finance/services/:id/delete', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const id = Number(req.params.id);
+    const service = await db.service.findUnique({ where: { id } });
+    if (!service) return res.status(404).send('Not found');
+    if (service.journalEntryId) await ledger.reverseJournal(db, churchId, service.journalEntryId, 'Service archived', res.locals.user.id);
+    await db.service.update({ where: { id }, data: { deletedAt: new Date() } });
+    await logActivity(db, 'finance_reversal', `Service #${id} archived and journal reversed`, '/finance/services', res.locals.user.id);
+    flash(req, 'Service archived.', 'success');
+    res.redirect('/finance/services');
+  }));
+
+  // --- Harvests (annual/organizational fundraisers, with day-born splits + read-only pledges) ---
+  app.get('/finance/harvests', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const rows = await db.harvest.findMany({
+      where: { deletedAt: null }, orderBy: [{ harvestYear: 'desc' }, { id: 'desc' }], take: 50,
+      include: { organization: { select: { name: true } } },
+    });
+    const total = rows.reduce((s, r) => s + Number(r.totalCollected || 0), 0);
+    const now = new Date();
+
+    const addForm = canWrite
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Record a harvest</strong></summary>
+           <form class="form" method="post" action="/finance/harvests" style="margin-top:0.75rem">
+             <label>Type<select name="harvestType" required>${harvestTypeOptions('END_OF_YEAR')}</select></label>
+             <label>Year<input type="number" name="harvestYear" required value="${now.getFullYear()}"></label>
+             <label class="wide">Name<input name="harvestName" required placeholder="e.g. End of Year Harvest 2026"></label>
+             <label>Date<input type="date" name="harvestDate" value="${todayISO()}"></label>
+             <label>Organization<select name="orgId">${await orgOptions(db, '')}</select></label>
+             <label>Theme<input name="theme"></label>
+             <label>Total collected (GH₵)<input type="number" step="0.01" min="0" name="totalCollected" value="0"></label>
+             <label class="wide">Notes<input name="notes"></label>
+             <div class="actions"><button type="submit">Save</button></div>
+           </form>
+         </details>` : '';
+    const body = `
+      ${statsRow([
+        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent harvest totals' },
+        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+      ])}
+      ${addForm}
+      <section class="card">
+        <div class="card-head"><h2>Recent harvests</h2></div>
+        ${rows.length ? table(['Year', 'Name', 'Type', 'Organization', 'Collected', ''],
+          rows.map((r) => [
+            r.harvestYear, esc(r.harvestName), esc(HARVEST_TYPE_LABELS[r.harvestType] || r.harvestType), esc((r.organization && r.organization.name) || 'Church-wide'),
+            fmtMoney(r.totalCollected), `<a class="link" href="/finance/harvests/${r.id}">View / edit</a>`,
+          ])) : '<p class="muted-text">No harvests recorded yet.</p>'}
+      </section>`;
+    res.page({ title: 'Finance · Harvests', active: '/finance', noHeader: true, body: `${pageHero('Harvests', '')}${body}` });
+  }));
+
+  app.post('/finance/harvests', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const b = req.body || {};
+    // The original had NO server-side validation on harvests at all (relied
+    // on now-absent-in-Postgres DB constraints) — deliberately NOT matching
+    // that gap: an invalid HarvestType enum value would otherwise throw an
+    // unhandled Prisma error instead of a friendly flash message.
+    const harvestType = HARVEST_TYPES.includes(b.harvestType) ? b.harvestType : null;
+    const harvestYear = Number(b.harvestYear);
+    if (!harvestType) { flash(req, 'Pick a valid harvest type.'); return res.redirect('/finance/harvests'); }
+    if (!Number.isInteger(harvestYear) || harvestYear < 1900) { flash(req, 'Enter a valid harvest year.'); return res.redirect('/finance/harvests'); }
+    if (!b.harvestName || !String(b.harvestName).trim()) { flash(req, 'Enter a harvest name.'); return res.redirect('/finance/harvests'); }
+    if (b.harvestDate && !isValidDate(b.harvestDate)) { flash(req, 'Enter a valid harvest date.'); return res.redirect('/finance/harvests'); }
+    if (!isMoneyNonNeg(b.totalCollected || 0)) { flash(req, 'Total collected must be 0 or more.'); return res.redirect('/finance/harvests'); }
+
+    const harvest = await db.harvest.create({
+      data: {
+        harvestType, harvestYear, harvestName: String(b.harvestName).trim(),
+        harvestDate: b.harvestDate ? new Date(b.harvestDate) : null,
+        orgId: b.orgId ? Number(b.orgId) : null, theme: b.theme || null,
+        totalCollected: Number(b.totalCollected) || 0, notes: b.notes || null, recordedBy: res.locals.user.id,
+      },
+    });
+    if (Number(b.totalCollected) > 0) {
+      const fundId = await defaultFundId(db);
+      const postDate = b.harvestDate || `${harvestYear}-01-01`;
+      const entryId = await ledger.postCashIncome(db, churchId, {
+        date: postDate, amount: Number(b.totalCollected), incomeAccount: ledger.ACC.HARVEST,
+        fundId, sourceType: 'HARVEST', sourceId: harvest.id, createdBy: res.locals.user.id, memo: harvest.harvestName,
+      });
+      await db.harvest.update({ where: { id: harvest.id }, data: { journalEntryId: entryId } });
+    }
+    await logActivity(db, 'income_recorded', `Harvest recorded: ${harvest.harvestName} (${fmtMoney(b.totalCollected)})`, `/finance/harvests/${harvest.id}`, res.locals.user.id);
+    flash(req, 'Harvest recorded.', 'success');
+    res.redirect(`/finance/harvests/${harvest.id}`);
+  }));
+
+  app.get('/finance/harvests/:id', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const id = Number(req.params.id);
+    const harvest = await db.harvest.findFirst({ where: { id, deletedAt: null }, include: { organization: { select: { name: true } } } });
+    if (!harvest) return res.status(404).send('Not found');
+    const [splits, pledges] = await Promise.all([
+      db.dayBornSplit.findMany({ where: { harvestId: id } }),
+      db.pledge.findMany({ where: { harvestId: id }, include: { member: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { pledgeDate: 'desc' } }),
+    ]);
+    const splitsByDay = {};
+    for (const s of splits) splitsByDay[s.dayBorn] = s;
+    const splitTotal = splits.reduce((s, r) => s + Number(r.amount || 0), 0);
+    const headTotal = splits.reduce((s, r) => s + (r.headCount || 0), 0);
+    const totalPledged = pledges.reduce((s, p) => s + Number(p.pledgedAmount || 0), 0);
+    const totalPaid = pledges.reduce((s, p) => s + Number(p.paidAmount || 0), 0);
+
+    // Pledges are Phase 9f — this section is deliberately read-only (no
+    // create/edit/pay UI here), same as the original's harvest detail page,
+    // which only ever displayed pledges and linked out to a separate route.
+    const pledgesSection = pledges.length
+      ? `<section class="card" style="margin-bottom:1rem">
+           <div class="card-head"><h2>Pledges</h2><span class="meta">${fmtMoney(totalPledged)} pledged · ${fmtMoney(totalPaid)} paid</span></div>
+           ${table(['Date', 'Member', 'Pledged', 'Paid', 'Status'],
+             pledges.map((p) => [esc(p.pledgeDate.toISOString().slice(0, 10)), `<a href="/members/${p.member.id}">${esc(p.member.firstName + ' ' + p.member.lastName)}</a>`,
+               fmtMoney(p.pledgedAmount), fmtMoney(p.paidAmount), esc(p.status)]))}
+           <p class="muted-text" style="margin-top:0.5rem"><a href="/finance/pledges">Manage pledges →</a></p>
+         </section>`
+      : `<section class="card" style="margin-bottom:1rem">
+           <div class="card-head"><h2>Pledges</h2></div>
+           <p class="muted-text">No pledges yet. <a href="/finance/pledges">Add them from the Pledges page</a>.</p>
+         </section>`;
+
+    const body = `
+      <p><a href="/finance/harvests">← All harvests</a></p>
+      <dl class="stats">
+        <dt>Name</dt><dd>${esc(harvest.harvestName)}</dd>
+        <dt>Type</dt><dd>${esc(HARVEST_TYPE_LABELS[harvest.harvestType] || harvest.harvestType)}</dd>
+        <dt>Year</dt><dd>${harvest.harvestYear}</dd>
+        <dt>Date</dt><dd>${harvest.harvestDate ? esc(harvest.harvestDate.toISOString().slice(0, 10)) : '—'}</dd>
+        <dt>Organization</dt><dd>${esc((harvest.organization && harvest.organization.name) || 'Church-wide')}</dd>
+        <dt>Theme</dt><dd>${esc(harvest.theme) || '—'}</dd>
+        <dt>Total collected</dt><dd>${fmtMoney(harvest.totalCollected)}</dd>
+        <dt>Notes</dt><dd>${esc(harvest.notes) || '—'}</dd>
+      </dl>
+      <section class="card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Day-born breakdown</h2><span class="meta">${fmtMoney(splitTotal)} across ${headTotal} heads</span></div>
+        ${table(['Day-born', 'Amount', 'Heads'], DAY_BORN_VALUES.map((d) => [esc(dayBornLabel(d)), fmtMoney((splitsByDay[d] && splitsByDay[d].amount) || 0), (splitsByDay[d] && splitsByDay[d].headCount) || 0]))}
+        ${canWrite ? `<form class="form" method="post" action="/finance/harvests/${id}/splits" style="margin-top:0.75rem">
+          ${dayBornSplitFormInputs(splitsByDay)}
+          <div class="actions"><button type="submit">Save breakdown</button></div>
+        </form>` : ''}
+      </section>
+      ${pledgesSection}
+      ${canWrite ? `<form method="post" action="/finance/harvests/${id}/delete" onsubmit="return confirm('Archive this harvest and reverse its journal entry?')">
+        <button class="danger" type="submit">Archive harvest</button>
+      </form>` : ''}`;
+    res.page({ title: `Harvest · ${harvest.harvestName}`, active: '/finance', noHeader: true, body: `${pageHero(`Harvest · ${esc(harvest.harvestName)}`, '')}${body}` });
+  }));
+
+  app.post('/finance/harvests/:id/splits', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const harvest = await db.harvest.findFirst({ where: { id, deletedAt: null } });
+    if (!harvest) return res.status(404).send('Not found');
+    const splits = parseDayBornSplitInputs(req.body || {});
+    await db.dayBornSplit.deleteMany({ where: { harvestId: id } });
+    if (splits.length) {
+      await db.dayBornSplit.createMany({ data: splits.map((s) => ({ harvestId: id, dayBorn: s.dayBorn, amount: s.amount, headCount: s.headCount })) });
+    }
+    flash(req, 'Breakdown saved.', 'success');
+    res.redirect(`/finance/harvests/${id}`);
+  }));
+
+  app.post('/finance/harvests/:id/delete', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const id = Number(req.params.id);
+    const harvest = await db.harvest.findUnique({ where: { id } });
+    if (!harvest) return res.status(404).send('Not found');
+    if (harvest.journalEntryId) await ledger.reverseJournal(db, churchId, harvest.journalEntryId, 'Harvest archived', res.locals.user.id);
+    await db.harvest.update({ where: { id }, data: { deletedAt: new Date() } });
+    await logActivity(db, 'finance_reversal', `Harvest #${id} archived and journal reversed`, '/finance/harvests', res.locals.user.id);
+    flash(req, 'Harvest archived.', 'success');
+    res.redirect('/finance/harvests');
+  }));
+
+  // --- Pledges (creation/edit never touch the ledger — only payments do, matching the original) ---
+  app.get('/finance/pledges', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const harvestCount = await db.harvest.count({ where: { deletedAt: null } });
+    const rows = await db.pledge.findMany({
+      where: { member: { deletedAt: null } }, orderBy: [{ pledgeDate: 'desc' }, { id: 'desc' }], take: 100,
+      include: { member: { select: { id: true, firstName: true, lastName: true } }, harvest: { select: { harvestName: true } } },
+    });
+
+    const addForm = canWrite && harvestCount
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Record a pledge</strong></summary>
+           <form class="form" method="post" action="/finance/pledges" style="margin-top:0.75rem">
+             <label>Member<select name="memberId" required>${await requiredMemberOptions(db, '')}</select></label>
+             <label>Harvest<select name="harvestId" required>${await harvestSelectOptions(db, '')}</select></label>
+             <label>Pledged amount<input type="number" step="0.01" min="0.01" name="pledgedAmount" required></label>
+             <label>Paid amount<input type="number" step="0.01" min="0" name="paidAmount" value="0"></label>
+             <label>Pledge date<input type="date" name="pledgeDate" required value="${todayISO()}"></label>
+             <label class="wide">Notes<input name="notes"></label>
+             <div class="actions"><button type="submit">Save</button></div>
+           </form>
+         </details>`
+      : (canWrite ? '<p class="muted-text">Add a harvest first on the Harvests page.</p>' : '');
+    const tbl = rows.length
+      ? table(['Date', 'Member', 'Harvest', 'Pledged', 'Paid', 'Outstanding', 'Status', ''],
+          rows.map((p) => [
+            esc(p.pledgeDate.toISOString().slice(0, 10)), `<a href="/members/${p.member.id}">${esc(p.member.firstName + ' ' + p.member.lastName)}</a>`,
+            esc(p.harvest.harvestName), fmtMoney(p.pledgedAmount), fmtMoney(p.paidAmount), fmtOutstanding(p.pledgedAmount - p.paidAmount),
+            `<span class="pill pill-${esc(p.status.toLowerCase())}">${esc(p.status)}</span>`,
+            canWrite
+              ? `<form method="post" action="/finance/pledges/${p.id}/pay" class="inline">
+                   <input type="number" step="0.01" min="0" name="add" placeholder="add">
+                   <button type="submit">Record</button>
+                 </form>
+                 <a class="btn-link" href="/finance/pledges/${p.id}/edit" style="margin-left:0.5rem">Edit</a>` : '',
+          ])) : '<p class="muted-text">No pledges recorded yet.</p>';
+    const body = `${addForm}${tbl}`;
+    res.page({ title: 'Finance · Pledges', active: '/finance', noHeader: true, body: `${pageHero('Pledges', '')}${body}` });
+  }));
+
+  app.post('/finance/pledges', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const b = req.body || {};
+    const memberId = Number(b.memberId);
+    const harvestId = Number(b.harvestId);
+    const pledged = Number(b.pledgedAmount);
+    const paid = Number(b.paidAmount || 0);
+    if (!memberId || !harvestId || !isMoneyPositive(pledged) || !isValidDate(b.pledgeDate)) {
+      flash(req, 'Pick a member, harvest, a valid pledge date, and a pledged amount greater than 0.');
+      return res.redirect('/finance/pledges');
+    }
+    await db.pledge.create({
+      data: { memberId, harvestId, pledgedAmount: pledged, paidAmount: paid, pledgeDate: new Date(b.pledgeDate), status: pledgeStatusFor(pledged, paid), notes: b.notes || null },
+    });
+    flash(req, 'Pledge recorded.', 'success');
+    res.redirect('/finance/pledges');
+  }));
+
+  app.post('/finance/pledges/:id/pay', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const id = Number(req.params.id);
+    const add = Number(req.body.add || 0);
+    if (add <= 0) return res.redirect('/finance/pledges');
+    const receipt = await recordPledgePayment(db, churchId, id, add, todayISO(), res.locals.user.id);
+    if (!receipt) return res.redirect('/finance/pledges');
+    await logActivity(db, 'pledge_payment', `Recorded ${fmtMoney(add)} pledge payment · receipt ${receipt.receiptNumber}`, `/finance/pledges/payments/${receipt.paymentId}/receipt`, res.locals.user.id);
+    res.redirect(`/finance/pledges/payments/${receipt.paymentId}/receipt?new=1`);
+  }));
+
+  app.get('/finance/pledges/:id/edit', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const p = await db.pledge.findUnique({ where: { id } });
+    if (!p) return res.redirect('/finance/pledges');
+    const body = `
+      <p><a href="/finance/pledges">← Back to pledges</a></p>
+      <form class="form" method="post" action="/finance/pledges/${id}/edit">
+        <label>Member<select name="memberId" required>${await requiredMemberOptions(db, p.memberId)}</select></label>
+        <label>Harvest<select name="harvestId" required>${await harvestSelectOptions(db, p.harvestId)}</select></label>
+        <label>Pledged amount<input type="number" step="0.01" min="0.01" name="pledgedAmount" required value="${p.pledgedAmount}"></label>
+        <label>Paid amount<input type="number" step="0.01" min="0" name="paidAmount" value="${p.paidAmount}"></label>
+        <label>Pledge date<input type="date" name="pledgeDate" required value="${p.pledgeDate.toISOString().slice(0, 10)}"></label>
+        <label class="wide">Notes<input name="notes" value="${esc(p.notes || '')}"></label>
+        <div class="actions"><button type="submit">Save changes</button></div>
+      </form>`;
+    res.page({ title: 'Edit pledge', active: '/finance', noHeader: true, body: `${pageHero('Edit pledge', '')}${body}` });
+  }));
+
+  app.post('/finance/pledges/:id/edit', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const b = req.body || {};
+    const pledged = Number(b.pledgedAmount);
+    const paid = Number(b.paidAmount || 0);
+    try {
+      await db.pledge.update({
+        where: { id },
+        data: { memberId: Number(b.memberId), harvestId: Number(b.harvestId), pledgedAmount: pledged, paidAmount: paid, pledgeDate: new Date(b.pledgeDate), status: pledgeStatusFor(pledged, paid), notes: b.notes || null },
+      });
+    } catch (e) {
+      if (e.code !== 'P2025') throw e;
+      return res.status(404).send('Not found');
+    }
+    await logActivity(db, 'pledge_edited', `Pledge #${id} edited`, '/finance/pledges', res.locals.user.id);
+    flash(req, 'Pledge updated.', 'success');
+    res.redirect('/finance/pledges');
+  }));
+
+  // --- Pledge payment receipts + outstanding-balance statements ---
+  app.get('/finance/pledges/payments/:id/receipt', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const r = await loadPaymentReceipt(db, Number(req.params.id));
+    if (!r) return res.status(404).send('Receipt not found');
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const member = r.pledge.member;
+    const memberName = `${member.firstName} ${member.lastName}`.trim();
+    const outstanding = Number(r.pledge.pledgedAmount) - Number(r.paidToDate);
+    const sendForm = canWrite
+      ? `<form method="post" action="/finance/pledges/payments/${r.id}/send" onsubmit="return confirm('Send this receipt to ${esc(memberName)} via their preferred channel?')">
+           <button type="submit">📤 Send receipt to ${esc(member.firstName)}</button>
+         </form>` : '';
+    const body = `
+      <div class="screen-only receipt-actions">
+        <a class="btn" href="javascript:window.print()">🖨 Print / save as PDF</a>
+        ${sendForm}
+        <a class="btn-link" href="/finance/receipts">← Back to receipts</a>
+      </div>
+      <div class="print-doc receipt-doc">
+        <div class="rc-head">
+          <div><div class="rc-church">⛪ ${esc(church.name)}</div><div class="muted-text">Pledge Payment Receipt</div></div>
+          <div class="rc-no"><strong>${esc(r.receiptNumber)}</strong><br><span class="muted-text">${esc(r.paidOn.toISOString().slice(0, 10))}</span></div>
+        </div>
+        <div class="rc-line"><span>Received from</span><strong>${esc(memberName)}</strong></div>
+        <div class="rc-line"><span>For</span><span>${esc(r.pledge.harvest.harvestName)}${r.pledge.harvest.harvestYear ? ' ' + esc(String(r.pledge.harvest.harvestYear)) : ''} pledge</span></div>
+        <div class="rc-line"><span>Amount received</span><strong>${fmtMoney(r.amount)}</strong></div>
+        <div class="rc-line"><span>Total pledged</span><span>${fmtMoney(r.pledge.pledgedAmount)}</span></div>
+        <div class="rc-line"><span>Paid to date</span><span>${fmtMoney(r.paidToDate)}</span></div>
+        <div class="rc-line rc-total"><span>Outstanding balance</span><span>${fmtMoney(outstanding)}</span></div>
+        <div class="rc-line"><span>Recorded by</span><span>${esc(r.recordedByName)}</span></div>
+        ${r.sentAt ? `<p class="muted-text" style="margin-top:1rem">Sent to member on ${esc(r.sentAt.toISOString().slice(0, 16).replace('T', ' '))}${r.sentChannel ? ` via ${esc(r.sentChannel)}` : ''}.</p>` : ''}
+        <p class="rc-foot">${outstanding > 0.005 ? `Thank you. A balance of <strong>${fmtMoney(outstanding)}</strong> remains on this pledge.` : 'This pledge is now fully paid. Thank you!'}</p>
+      </div>`;
+    res.page({ title: `Receipt ${r.receiptNumber}`, active: '/finance', noHeader: true, flash: RECEIPT_FLASH[req.query.sent] || RECEIPT_FLASH[req.query.new ? 'new' : ''], body });
+  }));
+
+  app.post('/finance/pledges/payments/:id/send', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const r = await loadPaymentReceipt(db, Number(req.params.id));
+    if (!r) return res.redirect('/finance/receipts');
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const member = r.pledge.member;
+    const memberName = `${member.firstName} ${member.lastName}`.trim();
+    const outstanding = Number(r.pledge.pledgedAmount) - Number(r.paidToDate);
+    const balanceLine = outstanding > 0.005 ? `Outstanding balance: ${fmtMoney(outstanding)}.` : 'This pledge is now fully paid.';
+    const when = r.paidOn.toISOString().slice(0, 10);
+    const sms = `Receipt ${r.receiptNumber}: Dear ${member.firstName}, we received ${fmtMoney(r.amount)} toward your ${r.pledge.harvest.harvestName} pledge on ${when}. ${balanceLine} Thank you. — ${church.name}`;
+    const emailBody = `Dear ${memberName},\n\nThank you for your payment. This is your official receipt.\n\n` +
+      `Receipt no:   ${r.receiptNumber}\nDate:         ${when}\nPledge:       ${r.pledge.harvest.harvestName}${r.pledge.harvest.harvestYear ? ' ' + r.pledge.harvest.harvestYear : ''}\n` +
+      `Amount paid:  ${fmtMoney(r.amount)}\nTotal pledged:${fmtMoney(r.pledge.pledgedAmount)}\nPaid to date: ${fmtMoney(r.paidToDate)}\n${balanceLine}\n\nGod bless you.\n${church.name}`;
+    const result = await sendMemberMessage(db, member, church.name, sms, `Payment receipt ${r.receiptNumber} — ${church.name}`, emailBody);
+    if (!result.ok) return res.redirect(`/finance/pledges/payments/${r.id}/receipt?sent=${result.reason === 'do_not_contact' ? 'donotcontact' : 'nocontact'}`);
+    await db.pledgePayment.update({ where: { id: r.id }, data: { sentAt: new Date(), sentChannel: result.channels } });
+    await logActivity(db, 'receipt_sent', `Sent receipt ${r.receiptNumber} to ${memberName}`, `/finance/pledges/payments/${r.id}/receipt`, res.locals.user.id);
+    res.redirect(`/finance/pledges/payments/${r.id}/receipt?sent=${result.dryRun ? 'dry' : 'sent'}`);
+  }));
+
+  app.get('/finance/pledges/statement/:memberId', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const data = await memberOutstandingDetail(db, Number(req.params.memberId));
+    if (!data) return res.status(404).send('Member not found');
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const { member, pledges } = data;
+    const memberName = `${member.firstName} ${member.lastName}`.trim();
+    const totalOutstanding = pledges.reduce((a, p) => a + (Number(p.pledgedAmount) - Number(p.paidAmount)), 0);
+    const sendForm = canWrite && pledges.length
+      ? `<form method="post" action="/finance/pledges/statement/${member.id}/send" onsubmit="return confirm('Send this outstanding-balance statement to ${esc(memberName)}?')">
+           <button type="submit">📤 Send statement to ${esc(member.firstName)}</button>
+         </form>` : '';
+    const rowsHtml = pledges.length
+      ? table(['Date', 'Harvest', 'Pledged', 'Paid', 'Outstanding'],
+          pledges.map((p) => [esc(p.pledgeDate.toISOString().slice(0, 10)), esc(p.harvest.harvestName), fmtMoney(p.pledgedAmount), fmtMoney(p.paidAmount), fmtOutstanding(p.pledgedAmount - p.paidAmount)]))
+      : '<p class="muted-text">This member has no outstanding pledges. 🎉</p>';
+    const body = `
+      <div class="screen-only receipt-actions">
+        <a class="btn" href="javascript:window.print()">🖨 Print / save as PDF</a>
+        ${sendForm}
+        <a class="btn-link" href="/finance/receipts">← Back to receipts</a>
+      </div>
+      <div class="print-doc receipt-doc">
+        <div class="rc-head">
+          <div><div class="rc-church">⛪ ${esc(church.name)}</div><div class="muted-text">Outstanding Pledge Statement</div></div>
+          <div class="rc-no"><strong>${esc(memberName)}</strong><br><span class="muted-text">As of ${todayISO()}</span></div>
+        </div>
+        ${rowsHtml}
+        ${pledges.length ? `<div class="rc-line rc-total" style="margin-top:0.75rem"><span>Total outstanding</span><span>${fmtMoney(totalOutstanding)}</span></div>
+          <p class="rc-foot">Kindly redeem your outstanding pledge${pledges.length > 1 ? 's' : ''} at your earliest convenience. Thank you.</p>` : ''}
+      </div>`;
+    res.page({ title: `Statement — ${memberName}`, active: '/finance', noHeader: true, flash: RECEIPT_FLASH[req.query.sent], body });
+  }));
+
+  app.post('/finance/pledges/statement/:memberId/send', requireFinanceWrite, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const data = await memberOutstandingDetail(db, Number(req.params.memberId));
+    if (!data) return res.redirect('/finance/receipts');
+    const { member, pledges } = data;
+    if (!pledges.length) return res.redirect(`/finance/pledges/statement/${member.id}`);
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const memberName = `${member.firstName} ${member.lastName}`.trim();
+    const total = pledges.reduce((a, p) => a + (Number(p.pledgedAmount) - Number(p.paidAmount)), 0);
+    const lines = pledges.map((p) => `  • ${p.harvest.harvestName}: ${fmtMoney(p.pledgedAmount - p.paidAmount)} outstanding`).join('\n');
+    const sms = `Dear ${member.firstName}, our records show a total outstanding pledge balance of ${fmtMoney(total)} across ${pledges.length} pledge(s). Kindly redeem it when you can. Thank you. — ${church.name}`;
+    const emailBody = `Dear ${memberName},\n\nThis is a friendly statement of your outstanding pledge balance.\n\n${lines}\n\nTotal outstanding: ${fmtMoney(total)}\n\nKindly redeem your pledge(s) at your earliest convenience.\n\nGod bless you.\n${church.name}`;
+    const result = await sendMemberMessage(db, member, church.name, sms, `Your pledge statement — ${church.name}`, emailBody);
+    if (!result.ok) return res.redirect(`/finance/pledges/statement/${member.id}?sent=${result.reason === 'do_not_contact' ? 'donotcontact' : 'nocontact'}`);
+    await logActivity(db, 'statement_sent', `Sent outstanding-pledge statement to ${memberName}`, `/finance/pledges/statement/${member.id}`, res.locals.user.id);
+    res.redirect(`/finance/pledges/statement/${member.id}?sent=${result.dryRun ? 'dry' : 'sent'}`);
+  }));
+
+  // --- Unified receipts index + printable income receipts ---
+  app.get('/finance/receipts', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const [outstanding, unified, recent] = await Promise.all([
+      membersWithOutstanding(db),
+      db.financeReceipt.findMany({ orderBy: [{ receiptDate: 'desc' }, { id: 'desc' }], take: 80 }),
+      db.pledgePayment.findMany({
+        where: { pledge: { member: { deletedAt: null } } }, orderBy: { id: 'desc' }, take: 50,
+        include: { pledge: { include: { member: { select: { id: true, firstName: true, lastName: true } }, harvest: { select: { harvestName: true } } } } },
+      }),
+    ]);
+    const totalOutstanding = outstanding.reduce((a, r) => a + r.outstanding, 0);
+    const outstandingTbl = outstanding.length
+      ? table(['Member', 'Pledges', 'Pledged', 'Paid', 'Outstanding', ''],
+          outstanding.map((r) => [`<a href="/members/${r.memberId}">${esc(r.name)}</a>`, r.pledgeCount, fmtMoney(r.pledged), fmtMoney(r.paid), fmtOutstanding(r.outstanding),
+            `<a class="btn-link" href="/finance/pledges/statement/${r.memberId}">Statement</a>`]))
+      : '<p class="muted-text">No members have outstanding pledges. 🎉</p>';
+    const unifiedTbl = unified.length
+      ? table(['Receipt', 'Date', 'Received from', 'Type', 'Amount', 'Status', ''],
+          unified.map((r) => [esc(r.receiptNumber), esc(r.receiptDate.toISOString().slice(0, 10)), esc(r.receivedFrom || '—'), esc(String(r.sourceType || '').replace(/_/g, ' ')),
+            fmtMoney(r.amount), r.voidedAt ? '<span class="pill pill-cancelled">Voided</span>' : '<span class="pill pill-fulfilled">Issued</span>',
+            `<a class="btn-link" href="/finance/receipts/${encodeURIComponent(r.receiptNumber)}/print">Print</a>`]))
+      : '<p class="muted-text">No all-purpose receipts yet. Record generic income or a day-born collection to issue one.</p>';
+    const recentTbl = recent.length
+      ? table(['Receipt', 'Date', 'Member', 'Harvest', 'Amount', 'Delivered', ''],
+          recent.map((r) => [esc(r.receiptNumber), esc(r.paidOn.toISOString().slice(0, 10)), `<a href="/members/${r.pledge.member.id}">${esc(r.pledge.member.firstName + ' ' + r.pledge.member.lastName)}</a>`,
+            esc(r.pledge.harvest.harvestName), fmtMoney(r.amount), r.sentAt ? `<span class="pill pill-fulfilled">${esc(r.sentChannel || 'sent')}</span>` : '<span class="muted-text">not sent</span>',
+            `<a class="btn-link" href="/finance/pledges/payments/${r.id}/receipt">View</a>`]))
+      : '<p class="muted-text">No payment receipts yet. Record a payment on the Pledges page to issue one.</p>';
+    const body = `
+      <section class="card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Members with outstanding pledges</h2><span class="meta">Total outstanding: <strong>${fmtMoney(totalOutstanding)}</strong></span></div>
+        ${outstandingTbl}
+      </section>
+      <section class="card" style="margin-bottom:1rem"><h2>Printable income receipts</h2>${unifiedTbl}</section>
+      <section class="card"><h2>Recent pledge payment receipts</h2>${recentTbl}</section>`;
+    res.page({ title: 'Finance · Receipts', active: '/finance', noHeader: true, body: `${pageHero('Receipts', '')}${body}` });
+  }));
+
+  app.get('/finance/receipts/:receiptNo/print', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const receiptNo = decodeURIComponent(req.params.receiptNo);
+    const r = await db.financeReceipt.findFirst({ where: { receiptNumber: receiptNo } });
+    if (!r) return res.status(404).send('Receipt not found');
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const creator = r.createdBy ? await db.user.findFirst({ where: { id: r.createdBy }, select: { displayName: true } }) : null;
+    const createdByName = (creator && creator.displayName) || '—';
+    const body = `
+      <div class="screen-only receipt-actions">
+        <a class="btn" href="javascript:window.print()">🖨 Print / save as PDF</a>
+        <a class="btn-link" href="/finance/receipts">← Back to receipts</a>
+      </div>
+      <div class="print-doc receipt-doc">
+        <div class="rc-head">
+          <div><div class="rc-church">⛪ ${esc(church.name)}</div><div class="muted-text">Official Income Receipt</div></div>
+          <div class="rc-no"><strong>${esc(r.receiptNumber)}</strong><br><span class="muted-text">${esc(r.receiptDate.toISOString().slice(0, 10))}</span></div>
+        </div>
+        ${r.voidedAt ? `<p class="pill pill-cancelled">Voided ${esc(r.voidedAt.toISOString().slice(0, 16).replace('T', ' '))}${r.voidReason ? ': ' + esc(r.voidReason) : ''}</p>` : ''}
+        <div class="rc-line"><span>Received from</span><strong>${esc(r.receivedFrom || '—')}</strong></div>
+        <div class="rc-line"><span>For</span><span>${esc(r.description || String(r.sourceType || '').replace(/_/g, ' '))}</span></div>
+        <div class="rc-line"><span>Receipt type</span><span>${esc(String(r.sourceType || '').replace(/_/g, ' '))}</span></div>
+        <div class="rc-line rc-total"><span>Amount received</span><strong>${fmtMoney(r.amount)}</strong></div>
+        <div class="rc-line"><span>Recorded by</span><span>${esc(createdByName)}</span></div>
+        <p class="rc-foot">Thank you for your support of ${esc(church.name)}.</p>
+      </div>`;
+    res.page({ title: `Receipt ${r.receiptNumber}`, active: '/finance', noHeader: true, flash: req.query.new ? 'Receipt issued. Print it or save it as PDF.' : null, body });
+  }));
+
+  // --- Annual giving statements ---
+  app.get('/finance/statements', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const year = safeYear(req.query.year);
+    const rows = await givingByMember(db, year);
+    const totalGiving = rows.reduce((s, r) => s + r.total, 0);
+    const yearSel = `<form method="get" class="filter-bar" style="margin:0">
+        <label class="muted-text" style="display:flex;align-items:center;gap:0.4rem">Year
+          <select name="year" onchange="this.form.submit()">${givingYears().map((y) => `<option ${String(y) === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
+      </form>`;
+    const inner = rows.length
+      ? table(['Member', 'Gifts', `Total ${year}`, 'Statement'],
+          rows.map((r) => [`<a href="/members/${r.memberId}">${esc(r.name)}</a>${r.externalId ? `<div class="muted-text">${esc(r.externalId)}</div>` : ''}`, r.gifts, fmtMoney(r.total),
+            `<a class="btn ghost" href="/members/${r.memberId}/statement?year=${year}">View →</a>`]))
+      : `<div class="empty-state"><div class="empty-ico" aria-hidden="true">🧾</div><h3>No giving recorded for ${esc(year)}</h3><p>Once contributions are linked to members, you'll see them here. Try a different year.</p></div>`;
+    const body = `${pageHero('Giving Statements', 'Per-member annual contribution summaries for year-end records.')}
+      ${statsRow([
+        { cls: 'gold', icon: '🧾', value: rows.length.toLocaleString(), label: `Givers in ${year}` },
+        { cls: 'green', icon: '₵', value: fmtMoney(totalGiving), label: `Attributed Giving ${year}` },
+      ], yearSel)}
+      ${listCard({ title: `Members with giving in ${year}`, count: rows.length, countLabel: 'members', inner })}`;
+    res.page({ title: 'Finance · Statements', active: '/finance', noHeader: true, body });
+  }));
+
+  app.get('/members/:id/statement', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const m = await db.member.findFirst({ where: { id, deletedAt: null } });
+    if (!m) return res.status(404).send('Member not found');
+    const year = safeYear(req.query.year);
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const { lines, byGroup, total } = await memberGivingForYear(db, id, year);
+    const name = `${m.firstName} ${m.lastName}`.trim();
+    const yearSel = `<form method="get" class="screen-only" style="display:inline">
+        <label>Year <select name="year" onchange="this.form.submit()">${givingYears().map((y) => `<option ${String(y) === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label></form>`;
+    const rowsHtml = lines.length
+      ? table(['Date', 'Category', 'Details', 'Amount'], lines.map((l) => [esc(l.dt), esc(l.category), esc(l.detail) || '—', fmtMoney(l.amount)]))
+      : `<p class="muted-text">No giving was recorded for ${esc(name)} in ${year}.</p>`;
+    const subtotals = Object.entries(byGroup).map(([g, a]) => `<div class="rc-line"><span>${esc(g)}</span><span>${fmtMoney(a)}</span></div>`).join('');
+    const body = `
+      <div class="screen-only receipt-actions">
+        <a class="btn" href="javascript:window.print()">🖨 Print / save as PDF</a>
+        ${yearSel}
+        <a class="btn-link" href="/finance/statements?year=${year}">← Back to statements</a>
+      </div>
+      <div class="print-doc receipt-doc">
+        <div class="rc-head">
+          <div><div class="rc-church">⛪ ${esc(church.name)}</div><div class="muted-text">Annual Giving Statement · ${year}</div></div>
+          <div class="rc-no"><strong>${esc(name)}</strong><br><span class="muted-text">${esc(m.externalId || '')}</span></div>
+        </div>
+        ${rowsHtml}
+        ${lines.length ? `<div style="margin-top:0.75rem">${subtotals}<div class="rc-line rc-total"><span>Total giving ${year}</span><span>${fmtMoney(total)}</span></div></div>
+          <p class="rc-foot">Thank you for your faithful giving. This statement summarises contributions recorded for the ${year} calendar year and is provided for your records. Please retain it for your reference.</p>` : ''}
+      </div>`;
+    res.page({ title: `Giving Statement — ${name}`, active: '/finance', noHeader: true, body });
+  }));
+
+  // --- Payment vouchers (list + print — never independently created) ---
+  app.get('/finance/vouchers', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const rows = await db.paymentVoucher.findMany({
+      orderBy: [{ voucherDate: 'desc' }, { id: 'desc' }], take: 100,
+      include: { expense: { select: { category: true, amount: true, description: true } } },
+    });
+    const body = `
+      <p><a class="btn ghost" href="/finance/vouchers.csv">⬇ Export CSV</a></p>
+      <section class="card">
+        <div class="card-head"><h2>Payment vouchers</h2><span class="meta">Auto-issued for every expense</span></div>
+        ${rows.length ? table(['Voucher #', 'Date', 'Category', 'Description', 'Amount', ''],
+          rows.map((v) => [esc(v.voucherNo), esc(v.voucherDate.toISOString().slice(0, 10)), esc(v.expense.category), esc(v.expense.description || '—'),
+            fmtMoney(v.expense.amount), `<a class="btn-link" href="/finance/vouchers/${v.id}/print">Print</a>`]))
+          : '<p class="muted-text">No vouchers yet. Record an expense to issue one.</p>'}
+      </section>`;
+    res.page({ title: 'Finance · Vouchers', active: '/finance', noHeader: true, body: `${pageHero('Payment Vouchers', '')}${body}` });
+  }));
+
+  app.get('/finance/vouchers.csv', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const rows = await res.locals.db.paymentVoucher.findMany({
+      orderBy: [{ voucherDate: 'desc' }, { id: 'desc' }],
+      include: { expense: { select: { category: true, amount: true, description: true, paidTo: true } } },
+    });
+    sendCsv(res, 'payment-vouchers.csv', ['Voucher #', 'Date', 'Category', 'Description', 'Paid to', 'Amount'],
+      rows.map((v) => [v.voucherNo, v.voucherDate.toISOString().slice(0, 10), v.expense.category, v.expense.description || '', v.expense.paidTo || '', v.expense.amount]));
+  }));
+
+  app.get('/finance/vouchers/:id/print', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const v = await db.paymentVoucher.findFirst({ where: { id: Number(req.params.id) }, include: { expense: true } });
+    if (!v) return res.status(404).send('Voucher not found');
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const [preparer, approver, payer] = await Promise.all([
+      v.preparedBy ? db.user.findFirst({ where: { id: v.preparedBy }, select: { displayName: true } }) : null,
+      v.approvedBy ? db.user.findFirst({ where: { id: v.approvedBy }, select: { displayName: true } }) : null,
+      v.paidBy ? db.user.findFirst({ where: { id: v.paidBy }, select: { displayName: true } }) : null,
+    ]);
+    const body = `
+      <div class="screen-only receipt-actions">
+        <a class="btn" href="javascript:window.print()">🖨 Print / save as PDF</a>
+        <a class="btn-link" href="/finance/vouchers">← Back to vouchers</a>
+      </div>
+      <div class="print-doc receipt-doc">
+        <div class="rc-head">
+          <div><div class="rc-church">⛪ ${esc(church.name)}</div><div class="muted-text">Payment Voucher</div></div>
+          <div class="rc-no"><strong>${esc(v.voucherNo)}</strong><br><span class="muted-text">${esc(v.voucherDate.toISOString().slice(0, 10))}</span></div>
+        </div>
+        <div class="rc-line"><span>Paid to</span><strong>${esc(v.expense.paidTo || v.receivedBy || '—')}</strong></div>
+        <div class="rc-line"><span>For</span><span>${esc(v.expense.description || v.expense.category)}</span></div>
+        <div class="rc-line"><span>Category</span><span>${esc(v.expense.category)}</span></div>
+        <div class="rc-line rc-total"><span>Amount</span><strong>${fmtMoney(v.expense.amount)}</strong></div>
+        <div class="rc-line"><span>Amount in words</span><span>${esc(v.amountInWords)}</span></div>
+        ${v.supportingDocRef ? `<div class="rc-line"><span>Supporting doc ref</span><span>${esc(v.supportingDocRef)}</span></div>` : ''}
+        <div class="rc-line"><span>Prepared by</span><span>${esc((preparer && preparer.displayName) || '—')}</span></div>
+        <div class="rc-line"><span>Checked by</span><span>${esc(v.checkedBy || '—')}</span></div>
+        <div class="rc-line"><span>Approved by</span><span>${esc((approver && approver.displayName) || '—')}</span></div>
+        <div class="rc-line"><span>Paid by</span><span>${esc((payer && payer.displayName) || '—')}</span></div>
+        <div class="rc-line"><span>Received by</span><span>${esc(v.receivedBy || '—')}</span></div>
+        <p class="rc-foot">This voucher was automatically issued when the underlying expense was recorded.</p>
+      </div>`;
+    res.page({ title: `Voucher ${v.voucherNo}`, active: '/finance', noHeader: true, body });
+  }));
+
+  // --- Finance projects ---
+  app.get('/finance/projects', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const canManage = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(res.locals.user.financeRole);
+    const projects = await db.financeProject.findMany({ orderBy: { name: 'asc' }, include: { fund: { select: { name: true } } } });
+    const enriched = await Promise.all(projects.map(async (p) => ({ ...p, ...(await projectFinanceRow(db, churchId, p)) })));
+
+    const addForm = canManage
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Add a project</strong></summary>
+           <form class="form" method="post" action="/finance/projects" style="margin-top:0.75rem">
+             <label class="wide">Name<input name="name" required></label>
+             <label class="wide">Description<input name="description"></label>
+             <label>Linked fund<select name="fundId">${await fundOptions(db, '', true)}</select></label>
+             <label>Target amount (GH₵)<input type="number" step="0.01" min="0" name="targetAmount" value="0"></label>
+             <label>Responsible officer<input name="responsibleOfficer"></label>
+             <label>Start date<input type="date" name="startDate"></label>
+             <label>End date<input type="date" name="endDate"></label>
+             <label>Status<select name="status">${projectStatusOptions('ACTIVE')}</select></label>
+             <div class="actions"><button type="submit">Save project</button></div>
+           </form>
+         </details>` : '';
+    const rows = enriched.map((p) => [
+      `<a href="/finance/projects/${p.id}">${esc(p.name)}</a>`, esc((p.fund && p.fund.name) || '—'),
+      `<span class="pill pill-${esc(p.status.toLowerCase())}">${esc(PROJECT_STATUS_LABELS[p.status])}</span>`,
+      fmtMoney(p.targetAmount), fmtMoney(p.raised), fmtMoney(p.spent), `${p.pct}%`,
+    ]);
+    const body = `${addForm}
+      <p><a class="btn ghost" href="/finance/projects.csv">⬇ Export CSV</a></p>
+      <section class="card">
+        <div class="card-head"><h2>Projects</h2></div>
+        ${rows.length ? table(['Name', 'Fund', 'Status', 'Target', 'Raised', 'Spent', '% of target'], rows) : '<p class="muted-text">No projects yet.</p>'}
+      </section>`;
+    res.page({ title: 'Finance · Projects', active: '/finance', noHeader: true, body: `${pageHero('Finance Projects', '')}${body}` });
+  }));
+
+  app.get('/finance/projects.csv', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const projects = await db.financeProject.findMany({ orderBy: { name: 'asc' }, include: { fund: { select: { name: true } } } });
+    const enriched = await Promise.all(projects.map(async (p) => ({ ...p, ...(await projectFinanceRow(db, churchId, p)) })));
+    sendCsv(res, 'finance-projects.csv', ['Name', 'Fund', 'Status', 'Target', 'Raised', 'Spent', 'Balance'],
+      enriched.map((p) => [p.name, (p.fund && p.fund.name) || '', p.status, p.targetAmount, p.raised, p.spent, p.balance]));
+  }));
+
+  app.post('/finance/projects', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const b = req.body || {};
+    const name = String(b.name || '').trim();
+    if (!name) { flash(req, 'Enter a project name.'); return res.redirect('/finance/projects'); }
+    if (!isMoneyNonNeg(b.targetAmount || 0)) { flash(req, 'Target amount must be 0 or more.'); return res.redirect('/finance/projects'); }
+    try {
+      await db.financeProject.create({
+        data: {
+          name, description: b.description || null, fundId: b.fundId ? Number(b.fundId) : null,
+          targetAmount: Number(b.targetAmount) || 0, responsibleOfficer: b.responsibleOfficer || null,
+          startDate: b.startDate ? new Date(b.startDate) : null, endDate: b.endDate ? new Date(b.endDate) : null,
+          status: PROJECT_STATUSES.includes(b.status) ? b.status : 'ACTIVE',
+        },
+      });
+      await logActivity(db, 'project_created', `Created finance project ${name}`, '/finance/projects', res.locals.user.id);
+      flash(req, 'Project created.', 'success');
+    } catch (e) {
+      if (e.code !== 'P2002') throw e;
+      flash(req, 'A project with that name already exists.');
+    }
+    res.redirect('/finance/projects');
+  }));
+
+  app.get('/finance/projects/:id', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const canManage = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(res.locals.user.financeRole);
+    const id = Number(req.params.id);
+    const project = await db.financeProject.findUnique({ where: { id }, include: { fund: { select: { name: true } } } });
+    if (!project) return res.status(404).send('Not found');
+    const { raised, spent, balance, pct } = await projectFinanceRow(db, churchId, project);
+    const expenses = await db.expense.findMany({ where: { projectId: id }, orderBy: { spentOn: 'desc' }, take: 50 });
+    const body = `
+      <p><a href="/finance/projects">← All projects</a></p>
+      <dl class="stats">
+        <dt>Name</dt><dd>${esc(project.name)}</dd>
+        <dt>Status</dt><dd><span class="pill pill-${esc(project.status.toLowerCase())}">${esc(PROJECT_STATUS_LABELS[project.status])}</span></dd>
+        <dt>Fund</dt><dd>${esc((project.fund && project.fund.name) || '—')}</dd>
+        <dt>Responsible officer</dt><dd>${esc(project.responsibleOfficer) || '—'}</dd>
+        <dt>Target</dt><dd>${fmtMoney(project.targetAmount)}</dd>
+        <dt>Raised</dt><dd>${fmtMoney(raised)}</dd>
+        <dt>Spent</dt><dd>${fmtMoney(spent)}</dd>
+        <dt>Balance</dt><dd>${fmtMoney(balance)}</dd>
+        <dt>Progress</dt><dd>${pct}%</dd>
+        <dt>Description</dt><dd>${esc(project.description) || '—'}</dd>
+      </dl>
+      ${canManage ? `<p><a class="btn ghost" href="/finance/projects/${id}/edit">Edit project</a></p>` : ''}
+      <section class="card">
+        <div class="card-head"><h2>Expenses tagged to this project</h2></div>
+        ${expenses.length ? table(['Date', 'Category', 'Description', 'Amount'], expenses.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)), esc(e.category), esc(e.description || '—'), fmtMoney(e.amount)]))
+          : '<p class="muted-text">No expenses tagged to this project yet.</p>'}
+      </section>`;
+    res.page({ title: `Project · ${project.name}`, active: '/finance', noHeader: true, body: `${pageHero(`Project · ${esc(project.name)}`, '')}${body}` });
+  }));
+
+  app.get('/finance/projects/:id/edit', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const p = await db.financeProject.findUnique({ where: { id } });
+    if (!p) return res.status(404).send('Not found');
+    const body = `
+      <p><a href="/finance/projects/${id}">← Back to project</a></p>
+      <form class="form" method="post" action="/finance/projects/${id}/edit">
+        <label class="wide">Name<input name="name" required value="${esc(p.name)}"></label>
+        <label class="wide">Description<input name="description" value="${esc(p.description || '')}"></label>
+        <label>Linked fund<select name="fundId">${await fundOptions(db, p.fundId, true)}</select></label>
+        <label>Target amount (GH₵)<input type="number" step="0.01" min="0" name="targetAmount" value="${p.targetAmount}"></label>
+        <label>Responsible officer<input name="responsibleOfficer" value="${esc(p.responsibleOfficer || '')}"></label>
+        <label>Start date<input type="date" name="startDate" value="${p.startDate ? p.startDate.toISOString().slice(0, 10) : ''}"></label>
+        <label>End date<input type="date" name="endDate" value="${p.endDate ? p.endDate.toISOString().slice(0, 10) : ''}"></label>
+        <label>Status<select name="status">${projectStatusOptions(p.status)}</select></label>
+        <div class="actions"><button type="submit">Save changes</button></div>
+      </form>`;
+    res.page({ title: 'Edit project', active: '/finance', noHeader: true, body: `${pageHero('Edit project', '')}${body}` });
+  }));
+
+  app.post('/finance/projects/:id/edit', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const b = req.body || {};
+    const name = String(b.name || '').trim();
+    if (!name) { flash(req, 'Enter a project name.'); return res.redirect(`/finance/projects/${id}/edit`); }
+    if (!isMoneyNonNeg(b.targetAmount || 0)) { flash(req, 'Target amount must be 0 or more.'); return res.redirect(`/finance/projects/${id}/edit`); }
+    try {
+      await db.financeProject.update({
+        where: { id },
+        data: {
+          name, description: b.description || null, fundId: b.fundId ? Number(b.fundId) : null,
+          targetAmount: Number(b.targetAmount) || 0, responsibleOfficer: b.responsibleOfficer || null,
+          startDate: b.startDate ? new Date(b.startDate) : null, endDate: b.endDate ? new Date(b.endDate) : null,
+          status: PROJECT_STATUSES.includes(b.status) ? b.status : 'ACTIVE',
+        },
+      });
+    } catch (e) {
+      if (e.code === 'P2025') return res.status(404).send('Not found');
+      if (e.code !== 'P2002') throw e;
+      flash(req, 'A project with that name already exists.');
+      return res.redirect(`/finance/projects/${id}/edit`);
+    }
+    await logActivity(db, 'project_edited', `Project #${id} edited`, `/finance/projects/${id}`, res.locals.user.id);
+    flash(req, 'Project updated.', 'success');
+    res.redirect(`/finance/projects/${id}`);
+  }));
+
+  // --- Finance budgets ---
+  app.get('/finance/budgets', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const canManage = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(res.locals.user.financeRole);
+    const budgets = await db.financeBudget.findMany({ orderBy: [{ year: 'desc' }, { id: 'desc' }] });
+    const now = new Date();
+    const addForm = canManage
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Create a budget</strong></summary>
+           <form class="form" method="post" action="/finance/budgets" style="margin-top:0.75rem">
+             <label class="wide">Name<input name="name" required placeholder="e.g. ${now.getFullYear()} Annual Budget"></label>
+             <label>Year<input type="number" name="year" required value="${now.getFullYear()}"></label>
+             <label>Scope<select name="scope" onchange="this.form.month.disabled = this.value !== 'MONTHLY'">
+               <option value="ANNUAL">Annual</option><option value="MONTHLY">Monthly</option></select></label>
+             <label>Month (if monthly)<input type="number" name="month" min="1" max="12" disabled></label>
+             <label class="wide">Notes<input name="notes"></label>
+             <div class="actions"><button type="submit">Create</button></div>
+           </form>
+         </details>` : '';
+    const body = `${addForm}
+      <section class="card">
+        <div class="card-head"><h2>Budgets</h2></div>
+        ${budgets.length ? table(['Name', 'Year', 'Scope', 'Status', ''],
+          budgets.map((b) => [`<a href="/finance/budgets/${b.id}">${esc(b.name)}</a>`, b.year, b.scope === 'MONTHLY' ? `Monthly (${b.month})` : 'Annual',
+            `<span class="pill pill-${esc(b.status.toLowerCase())}">${esc(b.status)}</span>`, '']))
+          : '<p class="muted-text">No budgets yet.</p>'}
+      </section>`;
+    res.page({ title: 'Finance · Budgets', active: '/finance', noHeader: true, body: `${pageHero('Finance Budgets', '')}${body}` });
+  }));
+
+  app.post('/finance/budgets', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const b = req.body || {};
+    const year = Number(b.year);
+    const name = String(b.name || '').trim();
+    if (!name) { flash(req, 'Enter a budget name.'); return res.redirect('/finance/budgets'); }
+    if (!Number.isInteger(year)) { flash(req, 'Enter a valid year.'); return res.redirect('/finance/budgets'); }
+    const scope = b.scope === 'MONTHLY' ? 'MONTHLY' : 'ANNUAL';
+    const month = scope === 'MONTHLY' ? Number(b.month) : null;
+    if (scope === 'MONTHLY' && !(month >= 1 && month <= 12)) { flash(req, 'Pick a month (1-12) for a monthly budget.'); return res.redirect('/finance/budgets'); }
+    const budget = await db.financeBudget.create({ data: { name, year, month, scope, notes: b.notes || null } });
+    flash(req, 'Budget created.', 'success');
+    res.redirect(`/finance/budgets/${budget.id}`);
+  }));
+
+  app.get('/finance/budgets/:id', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const canManage = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(res.locals.user.financeRole);
+    const id = Number(req.params.id);
+    const budget = await db.financeBudget.findUnique({ where: { id }, include: { lines: { include: { fund: { select: { name: true } } } } } });
+    if (!budget) return res.status(404).send('Not found');
+    const win = ledger.budgetWindow(budget);
+    const accountIds = [...new Set(budget.lines.map((l) => l.accountId).filter(Boolean))];
+    const accounts = accountIds.length ? await db.account.findMany({ where: { id: { in: accountIds } }, select: { id: true, name: true, code: true } }) : [];
+    const lines = await Promise.all(budget.lines.map(async (l) => {
+      const actual = await ledger.budgetActual(db, churchId, { lineType: l.lineType, accountId: l.accountId, fundId: l.fundId, from: win.from, to: win.to });
+      return { ...l, accountLabel: (() => { const a = accounts.find((x) => x.id === l.accountId); return a ? `${a.code} · ${a.name}` : 'All accounts'; })(), actual, variance: Number(l.amount) - actual };
+    }));
+    const totalBudgeted = lines.reduce((s, l) => s + Number(l.amount), 0);
+    const totalActual = lines.reduce((s, l) => s + l.actual, 0);
+    const canEditLines = canManage && budget.status !== 'CLOSED';
+
+    const addLineForm = canEditLines
+      ? `<details class="form-toggle" style="margin-bottom:1rem">
+           <summary><strong>+ Add a budget line</strong></summary>
+           <form class="form" method="post" action="/finance/budgets/${id}/lines" style="margin-top:0.75rem">
+             <label>Type<select name="lineType"><option value="INCOME">Income</option><option value="EXPENSE">Expense</option></select></label>
+             <label class="wide">Category label<input name="category" required placeholder="e.g. Tithes, Utilities"></label>
+             <label>Account (optional)<select name="accountId">${await accountOptionsForBudget(db, 'INCOME', '')}</select></label>
+             <label>Fund (optional)<select name="fundId">${await fundOptions(db, '', true)}</select></label>
+             <label>Budgeted amount (GH₵)<input type="number" step="0.01" min="0" name="amount" required></label>
+             <label class="wide">Notes<input name="notes"></label>
+             <div class="actions"><button type="submit">Add line</button></div>
+           </form>
+         </details>` : '';
+    const statusForm = canManage
+      ? `<form method="post" action="/finance/budgets/${id}/status" class="filter-bar" style="margin-bottom:1rem">
+           <select name="status">${['DRAFT', 'APPROVED', 'CLOSED'].map((s) => `<option value="${s}" ${s === budget.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+           <button type="submit">Update status</button>
+         </form>` : '';
+    const body = `
+      <p><a href="/finance/budgets">← All budgets</a></p>
+      <dl class="stats">
+        <dt>Name</dt><dd>${esc(budget.name)}</dd>
+        <dt>Period</dt><dd>${budget.scope === 'MONTHLY' ? `Monthly — ${win.from} to ${win.to}` : `Annual — ${budget.year}`}</dd>
+        <dt>Status</dt><dd><span class="pill pill-${esc(budget.status.toLowerCase())}">${esc(budget.status)}</span></dd>
+        <dt>Notes</dt><dd>${esc(budget.notes) || '—'}</dd>
+      </dl>
+      ${statusForm}
+      <p><a class="btn ghost" href="/finance/budgets/${id}.csv">⬇ Export CSV</a></p>
+      <section class="card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Budget vs. actual</h2><span class="meta">Budgeted ${fmtMoney(totalBudgeted)} · Actual ${fmtMoney(totalActual)}</span></div>
+        ${lines.length ? table(['Type', 'Category', 'Account', 'Fund', 'Budgeted', 'Actual', 'Variance', canEditLines ? '' : null].filter(Boolean),
+          lines.map((l) => [l.lineType, esc(l.category), esc(l.accountLabel), esc((l.fund && l.fund.name) || 'All funds'), fmtMoney(l.amount), fmtMoney(l.actual),
+            fmtOutstanding(-l.variance),
+            ...(canEditLines ? [`<form method="post" action="/finance/budgets/${id}/lines/${l.id}/delete" onsubmit="return confirm('Remove this budget line?')"><button class="link" type="submit">Remove</button></form>`] : [])]))
+          : '<p class="muted-text">No budget lines yet.</p>'}
+      </section>
+      ${addLineForm}`;
+    res.page({ title: `Budget · ${budget.name}`, active: '/finance', noHeader: true, body: `${pageHero(`Budget · ${esc(budget.name)}`, '')}${body}` });
+  }));
+
+  app.get('/finance/budgets/:id.csv', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const id = Number(req.params.id);
+    const budget = await db.financeBudget.findUnique({ where: { id }, include: { lines: { include: { fund: { select: { name: true } } } } } });
+    if (!budget) return res.status(404).send('Not found');
+    const win = ledger.budgetWindow(budget);
+    const lines = await Promise.all(budget.lines.map(async (l) => ({ ...l, actual: await ledger.budgetActual(db, churchId, { lineType: l.lineType, accountId: l.accountId, fundId: l.fundId, from: win.from, to: win.to }) })));
+    sendCsv(res, `budget-${id}.csv`, ['Type', 'Category', 'Fund', 'Budgeted', 'Actual', 'Variance'],
+      lines.map((l) => [l.lineType, l.category, (l.fund && l.fund.name) || 'All funds', l.amount, l.actual, Number(l.amount) - l.actual]));
+  }));
+
+  app.post('/finance/budgets/:id/lines', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const b = req.body || {};
+    const budget = await db.financeBudget.findUnique({ where: { id } });
+    if (!budget) return res.status(404).send('Not found');
+    if (budget.status === 'CLOSED') { flash(req, 'This budget is closed; lines are immutable.'); return res.redirect(`/finance/budgets/${id}`); }
+    if (!BUDGET_LINE_TYPES.includes(b.lineType) || !b.category || !String(b.category).trim() || !isMoneyNonNeg(b.amount)) {
+      flash(req, 'Pick a type, enter a category label, and a budgeted amount of 0 or more.');
+      return res.redirect(`/finance/budgets/${id}`);
+    }
+    await db.financeBudgetLine.create({
+      data: { budgetId: id, lineType: b.lineType, category: String(b.category).trim(), accountId: b.accountId ? Number(b.accountId) : null, fundId: b.fundId ? Number(b.fundId) : null, amount: Number(b.amount), notes: b.notes || null },
+    });
+    flash(req, 'Budget line added.', 'success');
+    res.redirect(`/finance/budgets/${id}`);
+  }));
+
+  app.post('/finance/budgets/:id/lines/:lineId/delete', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const budget = await db.financeBudget.findUnique({ where: { id } });
+    if (!budget) return res.status(404).send('Not found');
+    if (budget.status === 'CLOSED') { flash(req, 'This budget is closed; lines are immutable.'); return res.redirect(`/finance/budgets/${id}`); }
+    try {
+      await db.financeBudgetLine.delete({ where: { id: Number(req.params.lineId) } });
+      flash(req, 'Budget line removed.', 'success');
+    } catch (e) {
+      if (e.code !== 'P2025') throw e;
+    }
+    res.redirect(`/finance/budgets/${id}`);
+  }));
+
+  app.post('/finance/budgets/:id/status', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const status = req.body && req.body.status;
+    if (!['DRAFT', 'APPROVED', 'CLOSED'].includes(status)) { flash(req, 'Pick a valid status.'); return res.redirect(`/finance/budgets/${id}`); }
+    try {
+      await db.financeBudget.update({ where: { id }, data: { status } });
+      flash(req, `Budget status set to ${status}.`, 'success');
+    } catch (e) {
+      if (e.code !== 'P2025') throw e;
+      return res.status(404).send('Not found');
+    }
+    res.redirect(`/finance/budgets/${id}`);
+  }));
+
   // --- Expenses (simplified to always-PAID; approval workflow deferred) ---
   app.get('/finance/expenses', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
@@ -270,7 +1947,7 @@ function register(app) {
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
     const [cats, rows] = await Promise.all([
       db.expenseCategory.findMany({ where: { isActive: true }, orderBy: { categoryName: 'asc' } }),
-      db.expense.findMany({ where: {}, orderBy: [{ spentOn: 'desc' }, { id: 'desc' }], take: 100, include: { expenseCategory: { select: { categoryName: true } }, fund: { select: { name: true } } } }),
+      db.expense.findMany({ where: {}, orderBy: [{ spentOn: 'desc' }, { id: 'desc' }], take: 100, include: { expenseCategory: { select: { categoryName: true } }, fund: { select: { name: true } }, project: { select: { name: true } }, paymentVoucher: { select: { id: true, voucherNo: true } } } }),
     ]);
     const catOpts = cats.map((c) => `<option value="${c.id}">${esc(c.categoryName)}</option>`).join('');
     const addForm = canWrite
@@ -282,6 +1959,7 @@ function register(app) {
              <label>Amount (GH₵)<input type="number" step="0.01" min="0.01" name="amount" required></label>
              <label>Payment method<select name="paymentMethod">${['Cash', 'Bank Transfer', 'Cheque', 'Mobile Money', 'Other'].map((m) => `<option>${m}</option>`).join('')}</select></label>
              <label>Fund<select name="fundId">${await fundOptions(db, await defaultFundId(db), false)}</select></label>
+             <label>Project<select name="projectId">${await projectOptions(db, '')}</select></label>
              <label class="wide">Description<input name="description" required></label>
              <label>Paid to<input name="paidTo"></label>
              <label>Reference #<input name="referenceNumber"></label>
@@ -289,10 +1967,11 @@ function register(app) {
            </form>
          </details>` : '';
     const body = `${addForm}
-      ${rows.length ? table(['Date', 'Category', 'Description', 'Fund', 'Paid to', 'Method', 'Amount', 'Status'],
+      ${rows.length ? table(['Date', 'Category', 'Description', 'Fund', 'Project', 'Paid to', 'Method', 'Amount', 'Status', 'Voucher'],
         rows.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)), esc((e.expenseCategory && e.expenseCategory.categoryName) || e.category),
-          esc(e.description), esc((e.fund && e.fund.name) || '—'), esc(e.paidTo) || '—', esc(e.paymentMethod) || '—',
-          fmtMoney(e.amount), `<span class="pill pill-${esc(e.approvalStatus.toLowerCase())}">${esc(e.approvalStatus)}</span>`]))
+          esc(e.description), esc((e.fund && e.fund.name) || '—'), esc((e.project && e.project.name) || '—'), esc(e.paidTo) || '—', esc(e.paymentMethod) || '—',
+          fmtMoney(e.amount), `<span class="pill pill-${esc(e.approvalStatus.toLowerCase())}">${esc(e.approvalStatus)}</span>`,
+          e.paymentVoucher ? `<a class="btn-link" href="/finance/vouchers/${e.paymentVoucher.id}/print">${esc(e.paymentVoucher.voucherNo)}</a>` : '—']))
         : '<p class="muted-text">No expenses recorded yet.</p>'}`;
     res.page({ title: 'Finance · Expenses', active: '/finance', noHeader: true, body: `${pageHero('Expenses', '')}${body}` });
   }));
@@ -311,16 +1990,18 @@ function register(app) {
       data: {
         expenseCatId: cat ? cat.id : null, category: categoryName, amount: Number(b.amount), spentOn: new Date(b.spentOn),
         description: b.description || null, paidTo: b.paidTo || null, paymentMethod: b.paymentMethod || null,
-        referenceNumber: b.referenceNumber || null, fundId, approvalStatus: 'PAID', paidAt: new Date(),
+        referenceNumber: b.referenceNumber || null, fundId, projectId: b.projectId ? Number(b.projectId) : null,
+        approvalStatus: 'PAID', paidAt: new Date(),
       },
     });
     const entryId = await ledger.postExpensePayment(db, churchId, {
       date: b.spentOn, amount: Number(b.amount), expenseAccount: ledger.expenseAccountFor(categoryName),
       category: categoryName, fundId, sourceId: expense.id, createdBy: res.locals.user.id, memo: b.description || categoryName,
     });
-    await db.expense.update({ where: { id: expense.id }, data: { journalEntryId: entryId } });
+    const updated = await db.expense.update({ where: { id: expense.id }, data: { journalEntryId: entryId } });
+    await syncExpenseVoucher(db, updated, res.locals.user.id);
     await logActivity(db, 'expense_recorded', `Expense recorded: ${categoryName} (${fmtMoney(b.amount)})`, '/finance/expenses', res.locals.user.id);
-    flash(req, 'Expense recorded.', 'success');
+    flash(req, 'Expense recorded — a payment voucher was issued.', 'success');
     res.redirect('/finance/expenses');
   }));
 

@@ -11,11 +11,13 @@
 // and is deferred to the real per-route cutover. This module proves the
 // CRUD + validation + tenant-isolation + audit-logging logic is correct.
 //
-// The original's `/preaching/:id/remind` (SMS/email reminder) is NOT ported
-// here — it depends on the communications module's send infra, which is a
-// later phase. Flagged as deferred, not forgotten.
+// Phase 9a: `/preaching/:id/remind` (SMS/email reminder, deferred above)
+// is now wired in via lib/delivery.js.
 
 const asyncHandler = require('../lib/async-handler');
+const { sendSmsBatch, sendEmailEach, normalizePhoneGH } = require('../lib/delivery');
+const { fmtPreachDate } = require('../lib/format');
+const { logActivity } = require('../lib/tenant-activity');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -25,6 +27,55 @@ function requireAdmin(req, res, next) {
 function requireAuth(req, res, next) {
   if (!res.locals.user) return res.status(401).json({ error: 'not logged in' });
   next();
+}
+
+// Prisma DateTime -> the plain date string fmtPreachDate() expects.
+function iso(d) {
+  if (!d) return '';
+  return d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+}
+
+function preacherContact(plan) {
+  if (plan.memberId && plan.member) {
+    return {
+      name: `${plan.member.firstName} ${plan.member.lastName}`.trim(),
+      first: plan.member.firstName || '',
+      phone: plan.member.mobilePhone, email: plan.member.email, token: plan.member.unsubscribeToken,
+    };
+  }
+  const name = (plan.preacherName || '').trim();
+  return { name, first: name.split(/\s+/)[0] || name, phone: plan.preacherPhone, email: plan.preacherEmail, token: null };
+}
+
+// Send a "you're preaching on X" reminder via SMS (if a phone is on file)
+// and/or email (if an address is on file). `db` must be tenant-scoped.
+async function sendPreachingReminder(db, plan, userId, churchName) {
+  const c = preacherContact(plan);
+  if (!c.name && !c.phone && !c.email) return { ok: false, reason: 'no_contact' };
+  const when = fmtPreachDate(iso(plan.preachDate));
+  const where = plan.serviceLabel ? ` (${plan.serviceLabel})` : '';
+  const topic = plan.topic ? ` Topic: ${plan.topic}.` : '';
+  const msg = `Hello ${c.first || 'Preacher'}, a reminder that you are scheduled to preach on ${when}${where}.${topic} — ${churchName}`;
+
+  const phone = normalizePhoneGH(c.phone);
+  let sms = null, email = null;
+  if (phone) {
+    try { sms = await sendSmsBatch([phone], msg); }
+    catch (e) { sms = { ok: false, error: e.message }; }
+  }
+  if (c.email) {
+    try { email = await sendEmailEach(db, [{ addr: c.email, token: c.token }], `Preaching reminder — ${when}`, msg, { withFooter: false, churchName }); }
+    catch (e) { email = { ok: false, error: e.message }; }
+  }
+  await db.preachingPlan.update({ where: { id: plan.id }, data: { reminderSentAt: new Date() } });
+  await logActivity(db, 'preaching_reminder', `Sent preaching reminder to ${c.name || 'preacher'} for ${when}`, '/preaching', userId);
+  const dryRun = (sms && sms.dryRun) || (email && email.dryRun);
+  return {
+    ok: true, name: c.name, hadPhone: !!phone, hadEmail: !!c.email,
+    smsOk: sms ? (sms.ok || sms.dryRun) : null,
+    emailOk: email ? (email.ok || email.dryRun) : null,
+    dryRun,
+  };
 }
 
 function parsePlanBody(b) {
@@ -96,6 +147,19 @@ function register(app) {
     }
   }));
 
+  app.post('/api/preaching/:id/remind', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const plan = await db.preachingPlan.findFirst({
+      where: { id: Number(req.params.id), deletedAt: null },
+      include: { member: { select: { firstName: true, lastName: true, mobilePhone: true, email: true, unsubscribeToken: true } } },
+    });
+    if (!plan) return res.status(404).json({ error: 'Appointment not found' });
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const result = await sendPreachingReminder(db, plan, res.locals.user.id, church.name);
+    if (!result.ok) return res.status(400).json({ error: 'No phone or email on file for this preacher' });
+    res.json(result);
+  }));
+
   app.delete('/api/preaching/:id', requireAdmin, asyncHandler(async (req, res) => {
     try {
       await res.locals.db.preachingPlan.update({
@@ -110,4 +174,4 @@ function register(app) {
   }));
 }
 
-module.exports = { register };
+module.exports = { register, sendPreachingReminder, preacherContact };

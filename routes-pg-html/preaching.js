@@ -10,14 +10,14 @@
 // isAdmin (admin-or-editor) distinction. See the Phase 8 plan's "Recommended
 // architecture" section for why.
 //
-// The original's /preaching/:id/remind (SMS/email reminder) is NOT ported —
-// routes-pg/preaching.js's own header comment defers it pending the
-// communications module's send infra. Same deferral here.
+// Phase 9a: /preaching/:id/remind (SMS/email reminder) is now wired in via
+// lib/delivery.js (see routes-pg/preaching.js's sendPreachingReminder).
 
 const asyncHandler = require('../lib/async-handler');
 const { esc, fmtDate, fmtPreachDate } = require('../lib/format');
 const { pageHero, statsRow } = require('../lib/views');
 const { logActivity } = require('../lib/tenant-activity');
+const { sendPreachingReminder } = require('../routes-pg/preaching');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -87,6 +87,10 @@ function register(app) {
     if (p.preacherName) return `${esc(p.preacherName)} <span class="muted-text">(guest)</span>`;
     return '<span class="muted-text">— unassigned —</span>';
   }
+  function preachingHasContact(p) {
+    if (p.memberId) return !!(p.member && (p.member.mobilePhone || p.member.email));
+    return !!(p.preacherPhone || p.preacherEmail);
+  }
 
   app.get('/preaching', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
@@ -109,13 +113,27 @@ function register(app) {
 
     const next = upcoming[0];
     const assigned = upcoming.filter((p) => !!(p.memberId || p.preacherName)).length;
-    const contactReady = upcoming.filter((p) => (p.memberId ? !!(p.member.mobilePhone || p.member.email) : !!(p.preacherPhone || p.preacherEmail))).length;
+    const contactReady = upcoming.filter(preachingHasContact).length;
+
+    const reminderFlash = {
+      ok: 'Preaching reminder sent.',
+      dry: 'Reminder logged as a dry run — SMS/email are not configured, so nothing was actually delivered.',
+      nocontact: 'Could not send: that preacher has no phone or email on file.',
+      fail: 'The reminder could not be sent. Check the SMS / email settings.',
+    }[req.query.reminder];
+
     const nextCard = next
       ? `<section class="card" style="margin-bottom:1rem;border-left:4px solid var(--accent)">
            <div class="card-head"><h2>Next up</h2><span class="meta">${esc(fmtPreachDate(iso(next.preachDate)))}</span></div>
            <p style="font-size:1.05rem"><strong>${preacherLabel(next)}</strong>
              ${next.serviceLabel ? ` · ${esc(next.serviceLabel)}` : ''}</p>
            ${next.topic ? `<p>Topic: ${esc(next.topic)}${next.scripture ? ` · ${esc(next.scripture)}` : ''}</p>` : ''}
+           ${next.reminderSentAt ? `<p class="muted-text">Reminder last sent ${esc(iso(next.reminderSentAt).replace('T', ' '))}.</p>` : ''}
+           ${isAdmin ? (preachingHasContact(next)
+             ? `<form method="post" action="/preaching/${next.id}/remind" onsubmit="return confirm('Send an SMS / email reminder to this preacher?')">
+                  <button class="btn primary" type="submit">＋ Send reminder</button>
+                </form>`
+             : '<p class="muted-text">Add a phone or email for this preacher to enable reminders.</p>') : ''}
          </section>`
       : `<div class="empty-state">
           <div class="empty-ico" aria-hidden="true">📣</div>
@@ -138,6 +156,11 @@ function register(app) {
         <td>${p.topic ? esc(p.topic) : '—'}</td>
         ${isAdmin ? `<td style="white-space:nowrap">
           <a href="/preaching/${p.id}/edit" class="link">Edit</a>
+          ${preachingHasContact(p)
+            ? `<form method="post" action="/preaching/${p.id}/remind" class="inline"
+                    onsubmit="return confirm('Send an SMS / email reminder to this preacher?')">
+                 <button type="submit" class="link">Remind</button>
+               </form>` : ''}
           <form method="post" action="/preaching/${p.id}/delete" class="inline"
                 onsubmit="return confirm('Archive this appointment? It will be hidden but not permanently deleted.')">
             <button type="submit" class="link">Archive</button>
@@ -158,6 +181,7 @@ function register(app) {
       subtitle: 'Schedule of preaching appointments.',
       active: '/preaching',
       noHeader: true,
+      flash: reminderFlash,
       body: `${pageHero('Preaching Plan', 'Upcoming preaching assignments, guest contacts and reminder readiness.')}
         ${statsRow([
           { cls: 'gold', icon: '🎤', value: upcoming.length.toLocaleString(), label: 'Upcoming' },
@@ -166,6 +190,23 @@ function register(app) {
         ])}
         ${nextCard}${newForm}${upcomingTable}${pastTable}`,
     });
+  }));
+
+  app.post('/preaching/:id/remind', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const plan = await db.preachingPlan.findFirst({
+      where: { id, deletedAt: null },
+      include: { member: { select: { firstName: true, lastName: true, mobilePhone: true, email: true, unsubscribeToken: true } } },
+    });
+    if (!plan) return res.redirect('/preaching');
+    const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
+    const r = await sendPreachingReminder(db, plan, res.locals.user.id, church.name);
+    if (!r.ok) return res.redirect('/preaching?reminder=nocontact');
+    if (!r.hadPhone && !r.hadEmail) return res.redirect('/preaching?reminder=nocontact');
+    if (r.dryRun) return res.redirect('/preaching?reminder=dry');
+    const delivered = (r.smsOk === true) || (r.emailOk === true);
+    return res.redirect('/preaching?reminder=' + (delivered ? 'ok' : 'fail'));
   }));
 
   app.post('/preaching', requireAdmin, asyncHandler(async (req, res) => {

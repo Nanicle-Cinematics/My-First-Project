@@ -6,23 +6,43 @@
 // SCOPE matches routes-pg/members.js exactly: core member CRUD + directly-
 // owned relations (organization memberships, active ministry memberships,
 // sacraments, recent attendance). DEFERRED, same as the JSON layer:
-// CSV export/import, bulk actions, absent-members report, photo upload
-// (blocked on the file-storage vendor decision), and the detail page's
-// giving/pledges/activity timeline (needs Finance models + a not-yet-built
-// audit-log write path — Phase 8e).
+// CSV export/import, bulk actions, absent-members report, and the detail
+// page's giving/pledges/activity timeline (needs Finance models + a
+// not-yet-built audit-log write path — Phase 8e).
 //
-// Schema note: the old SQLite `date_of_birth` stored day+month only
-// (sentinel year 1900, via lib/format.js's parseDob/dobMonth/dobDay). The
-// Postgres `Member.dateOfBirth` is a plain full date — routes-pg/members.js
-// already parses it as `new Date(b.dateOfBirth)`, so this HTML port uses a
-// single <input type="date"> instead of the original's separate month/day
-// dropdowns.
+// Phase 9c added photo upload — local Fly volume (PHOTO_DIR), ported
+// near-verbatim from the original (memoryStorage multer -> fs.writeFileSync
+// keyed by Member.id + extension). Member.id is a single global Postgres
+// sequence (not per-church), so `${id}.${ext}` filenames stay
+// collision-free across tenants exactly as they were single-tenant.
+// GET /photos/:filename (below) has a real cross-tenant concern the
+// original never had (single-tenant = no other church's photos existed to
+// leak): it verifies the requesting user's OWN church actually owns a
+// member with that photoFilename via the tenant-scoped `db` before serving
+// the file, so a curious/malicious user from church B can't view church
+// A's member photos by guessing `{id}.{ext}` filenames from a shared
+// directory.
 
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const asyncHandler = require('../lib/async-handler');
-const { esc, initials, fmtDate, DAYS_OF_WEEK } = require('../lib/format');
+const { esc, initials, fmtDate, DAYS_OF_WEEK, looksLikeImage } = require('../lib/format');
 const { pageHero, statsRow, filterCard, listCard, table, pager, ICON_EYE, ICON_PENCIL, ICON_TRASH, memberAvatar } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
+
+const PHOTO_DIR = process.env.PHOTO_DIR || path.join(__dirname, '..', 'photos');
+try { fs.mkdirSync(PHOTO_DIR, { recursive: true }); } catch (_) { /* already exists */ }
+const photoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB
+  fileFilter: (req, file, cb) => {
+    const ok = /^image\/(jpe?g|png|webp|gif)$/i.test(file.mimetype);
+    cb(ok ? null : new Error('Only JPG / PNG / WebP / GIF images are allowed'), ok);
+  },
+});
+const EXT_FROM_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -291,7 +311,20 @@ function register(app) {
     const memberOrgIds = memberOrgsNamed.map((o) => o.orgId);
 
     const avatar = memberAvatar({ photo_filename: m.photoFilename, first_name: m.firstName, last_name: m.lastName });
-    const photoBlock = `<div class="member-photo">${avatar}</div>`;
+    const photoBlock = isAdmin
+      ? `<div class="member-photo">
+           ${avatar}
+           <form method="post" action="/members/${id}/photo" enctype="multipart/form-data" class="photo-form">
+             <input type="file" name="photo" accept="image/jpeg,image/png,image/webp,image/gif" required>
+             <button type="submit">${m.photoFilename ? 'Replace photo' : 'Upload photo'}</button>
+           </form>
+           ${m.photoFilename ? `
+             <form method="post" action="/members/${id}/photo/delete" style="display:inline"
+                   onsubmit="return confirm('Remove this photo?')">
+               <button class="link" type="submit">Remove photo</button>
+             </form>` : ''}
+         </div>`
+      : `<div class="member-photo">${avatar}</div>`;
     const editPanel = isAdmin
       ? `${photoBlock}
          <h2>Edit</h2>
@@ -362,6 +395,58 @@ function register(app) {
       if (e.code !== 'P2025') throw e;
     }
     res.redirect('/members');
+  }));
+
+  app.post('/members/:id/photo', requireAdmin, photoUpload.single('photo'), asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    if (!req.file) return res.redirect(`/members/${id}`);
+    if (!looksLikeImage(req.file.buffer)) {
+      return res.status(400).send(`<p>That file does not look like a valid image. Upload a JPG, PNG, WebP or GIF.</p><p><a href="/members/${id}">Back</a></p>`);
+    }
+    const ext = EXT_FROM_MIME[req.file.mimetype.toLowerCase()] || 'jpg';
+    const filename = `${id}.${ext}`;
+    fs.writeFileSync(path.join(PHOTO_DIR, filename), req.file.buffer);
+    // Remove any stale photos with other extensions for this member.
+    for (const otherExt of Object.values(EXT_FROM_MIME)) {
+      if (otherExt !== ext) {
+        try { fs.unlinkSync(path.join(PHOTO_DIR, `${id}.${otherExt}`)); } catch (_) { /* didn't exist */ }
+      }
+    }
+    try {
+      await db.member.update({ where: { id }, data: { photoFilename: filename } });
+    } catch (e) {
+      if (e.code !== 'P2025') throw e;
+      return res.status(404).send('Not found');
+    }
+    await logActivity(db, 'member_photo_updated', `Member photo updated for #${id}`, `/members/${id}`, res.locals.user.id);
+    res.redirect(`/members/${id}`);
+  }));
+
+  app.post('/members/:id/photo/delete', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const m = await db.member.findFirst({ where: { id }, select: { photoFilename: true } });
+    if (m && m.photoFilename) {
+      try { fs.unlinkSync(path.join(PHOTO_DIR, m.photoFilename)); } catch (_) { /* already gone */ }
+      await db.member.update({ where: { id }, data: { photoFilename: null } });
+      await logActivity(db, 'member_photo_deleted', `Member photo removed for #${id}`, `/members/${id}`, res.locals.user.id);
+    }
+    res.redirect(`/members/${id}`);
+  }));
+
+  // Serve member photos. Cross-tenant check: only served if the requesting
+  // user's own church actually has a member with this photoFilename — see
+  // the module header for why this is necessary here but wasn't in the
+  // single-tenant original.
+  app.get('/photos/:filename', asyncHandler(async (req, res) => {
+    if (!res.locals.user) return res.redirect('/login');
+    const safe = req.params.filename.replace(/[^a-zA-Z0-9._-]/g, '');
+    const owner = await res.locals.db.member.findFirst({ where: { photoFilename: safe }, select: { id: true } });
+    if (!owner) return res.status(404).send('Not found');
+    const full = path.join(PHOTO_DIR, safe);
+    if (!fs.existsSync(full)) return res.status(404).send('Not found');
+    res.sendFile(full);
   }));
 }
 

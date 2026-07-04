@@ -34,6 +34,9 @@ test.after(async () => {
     await db.preachingPlan.deleteMany({ where });
     await db.account.deleteMany({ where });
     await db.user.deleteMany({ where });
+    await db.specialCategory.deleteMany({ where });
+    await db.serviceType.deleteMany({ where });
+    await db.expenseCategory.deleteMany({ where });
     await db.church.deleteMany({ where: { id: { in: createdChurchIds } } });
   }
   // The `session` table is shared across all test files/the real app —
