@@ -39,7 +39,9 @@ function register(app) {
     const rows = churches.map((c) => [
       esc(c.name), esc(c.slug),
       isPro(c) ? '<span class="pill pill-fulfilled">Pro</span>' : '<span class="pill pill-pending">Free</span>',
-      c.suspendedAt
+      c.deletedAt
+        ? `<span class="pill pill-overdue">Deleted</span><br><small>${esc(c.deletionReason || '')}</small>`
+        : c.suspendedAt
         ? `<span class="pill pill-overdue">Suspended</span><br><small>${esc(c.suspensionReason || '')}</small>`
         : '<span class="pill pill-fulfilled">Active</span>',
       c.proUntil ? esc(c.proUntil.toISOString().slice(0, 10)) : '—',
@@ -50,7 +52,12 @@ function register(app) {
          <input type="number" name="months" placeholder="months" min="1" style="width:80px">
          <button type="submit">${c.plan === 'pro' ? 'Update / downgrade' : 'Upgrade'}</button>
        </form>
-       ${c.suspendedAt
+       ${c.deletedAt
+         ? `<form method="post" action="/platform/churches/${c.id}/access" class="inline">
+              <input type="hidden" name="action" value="restore">
+              <button type="submit">Restore church</button>
+            </form>`
+         : c.suspendedAt
          ? `<form method="post" action="/platform/churches/${c.id}/access" class="inline">
               <input type="hidden" name="action" value="reactivate">
               <button type="submit">Reactivate</button>
@@ -60,6 +67,13 @@ function register(app) {
               <input type="hidden" name="action" value="suspend">
               <input name="reason" required maxlength="500" placeholder="Reason for suspension">
               <button type="submit" class="danger">Suspend</button>
+            </form>
+            <form method="post" action="/platform/churches/${c.id}/access" class="inline"
+              onsubmit="return confirm('Delete this church? Access will be blocked immediately, but the platform owner can restore it.')">
+              <input type="hidden" name="action" value="delete">
+              <input name="confirmSlug" required placeholder="Type ${esc(c.slug)} to confirm">
+              <input name="reason" required maxlength="500" placeholder="Reason for deletion">
+              <button type="submit" class="danger">Delete church</button>
             </form>`}`,
     ]);
 
@@ -108,28 +122,50 @@ function register(app) {
   app.post('/platform/churches/:id/access', requirePlatformAdmin, asyncHandler(async (req, res) => {
     const action = String(req.body?.action || '');
     const reason = String(req.body?.reason || '').trim().slice(0, 500);
-    if (!['suspend', 'reactivate'].includes(action)) {
+    if (!['suspend', 'reactivate', 'delete', 'restore'].includes(action)) {
       flash(req, 'Invalid access action.');
       return res.redirect('/platform');
     }
-    if (action === 'suspend' && !reason) {
-      flash(req, 'A suspension reason is required.');
+    if (['suspend', 'delete'].includes(action) && !reason) {
+      flash(req, 'A reason is required.');
       return res.redirect('/platform');
     }
     try {
+      const existing = await rawDb.church.findUnique({ where: { id: req.params.id } });
+      if (!existing) {
+        flash(req, 'Church not found.');
+        return res.redirect('/platform');
+      }
+      if (action === 'delete' && String(req.body?.confirmSlug || '') !== existing.slug) {
+        flash(req, `Type ${existing.slug} exactly to confirm deletion.`);
+        return res.redirect('/platform');
+      }
+      const data = action === 'suspend'
+        ? { suspendedAt: new Date(), suspensionReason: reason }
+        : action === 'reactivate'
+          ? { suspendedAt: null, suspensionReason: null }
+          : action === 'delete'
+            ? { deletedAt: new Date(), deletionReason: reason }
+            : { deletedAt: null, deletionReason: null };
       const church = await rawDb.church.update({
         where: { id: req.params.id },
-        data: action === 'suspend'
-          ? { suspendedAt: new Date(), suspensionReason: reason }
-          : { suspendedAt: null, suspensionReason: null },
+        data,
       });
+      const events = {
+        suspend: 'platform.church_suspended', reactivate: 'platform.church_reactivated',
+        delete: 'platform.church_deleted', restore: 'platform.church_restored',
+      };
       await rawDb.securityAuditLog.create({ data: {
         churchId: church.id, actorId: res.locals.user.id,
-        event: action === 'suspend' ? 'platform.church_suspended' : 'platform.church_reactivated',
-        subject: action === 'suspend' ? reason : `${church.name} reactivated`,
+        event: events[action],
+        subject: ['suspend', 'delete'].includes(action) ? reason : `${church.name} ${action}d`,
         ip: requestIp(req), userAgent: requestUserAgent(req),
       } });
-      flash(req, action === 'suspend' ? 'Church access suspended.' : 'Church access reactivated.', 'success');
+      const messages = {
+        suspend: 'Church access suspended.', reactivate: 'Church access reactivated.',
+        delete: 'Church deleted. Its data remains recoverable.', restore: 'Church restored.',
+      };
+      flash(req, messages[action], 'success');
     } catch (e) {
       if (e.code !== 'P2025') throw e;
       flash(req, 'Church not found.');

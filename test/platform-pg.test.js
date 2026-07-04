@@ -132,6 +132,28 @@ test('platform admin can suspend and reactivate a church, and suspension blocks 
   assert.strictEqual((await target.client.get('/api/settings')).status, 200);
 });
 
+test('platform admin can soft-delete and restore a church with exact slug confirmation', async () => {
+  const target = await newSignedInChurch('platform-delete-target');
+  const row = await db.church.findUnique({ where: { id: target.churchId } });
+
+  const wrongConfirmation = await platformAdminClient.post(`/api/platform/churches/${target.churchId}/access`, {
+    action: 'delete', reason: 'Duplicate test tenant', confirmSlug: 'wrong-slug',
+  });
+  assert.strictEqual(wrongConfirmation.status, 400);
+
+  const deleted = await platformAdminClient.post(`/api/platform/churches/${target.churchId}/access`, {
+    action: 'delete', reason: 'Duplicate test tenant', confirmSlug: row.slug,
+  });
+  assert.strictEqual(deleted.status, 200);
+  assert.ok(deleted.body.deletedAt);
+  assert.strictEqual((await target.client.get('/api/settings')).status, 403);
+
+  const restored = await platformAdminClient.post(`/api/platform/churches/${target.churchId}/access`, { action: 'restore' });
+  assert.strictEqual(restored.status, 200);
+  assert.strictEqual(restored.body.deletedAt, null);
+  assert.strictEqual((await target.client.get('/api/settings')).status, 200);
+});
+
 test('summary counts reflect churches actually created in this run', async () => {
   const before = await platformAdminClient.get('/api/platform/summary');
   await newSignedInChurch('platform-summary-extra');

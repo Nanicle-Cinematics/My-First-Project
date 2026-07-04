@@ -1,3 +1,5 @@
 ALTER TABLE churches
   ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS suspension_reason TEXT;
+  ADD COLUMN IF NOT EXISTS suspension_reason TEXT,
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS deletion_reason TEXT;

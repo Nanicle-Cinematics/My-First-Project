@@ -305,6 +305,8 @@ model Church {
   proUntil  DateTime? @map("pro_until") // null = no expiry once set; manual activation for now
   suspendedAt     DateTime? @map("suspended_at")
   suspensionReason String?  @map("suspension_reason")
+  deletedAt       DateTime? @map("deleted_at")
+  deletionReason  String?   @map("deletion_reason")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 

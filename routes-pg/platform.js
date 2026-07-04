@@ -45,6 +45,7 @@ function register(app) {
     res.json(churches.map((c) => ({
       id: c.id, name: c.name, slug: c.slug, plan: c.plan, proUntil: c.proUntil,
       suspendedAt: c.suspendedAt, suspensionReason: c.suspensionReason,
+      deletedAt: c.deletedAt, deletionReason: c.deletionReason,
       isPro: isPro(c), createdAt: c.createdAt,
       userCount: c._count.users, memberCount: c._count.members,
     })));
@@ -91,33 +92,47 @@ function register(app) {
 
   app.post('/api/platform/churches/:id/access', requirePlatformAdmin, asyncHandler(async (req, res) => {
     const action = String(req.body?.action || '');
-    if (!['suspend', 'reactivate'].includes(action)) {
-      return res.status(400).json({ error: 'action must be "suspend" or "reactivate"' });
+    if (!['suspend', 'reactivate', 'delete', 'restore'].includes(action)) {
+      return res.status(400).json({ error: 'invalid access action' });
     }
     const reason = String(req.body?.reason || '').trim().slice(0, 500);
-    if (action === 'suspend' && !reason) {
-      return res.status(400).json({ error: 'a suspension reason is required' });
+    if (['suspend', 'delete'].includes(action) && !reason) {
+      return res.status(400).json({ error: 'a reason is required' });
     }
     try {
+      const existing = await rawDb.church.findUnique({ where: { id: req.params.id } });
+      if (!existing) return res.status(404).json({ error: 'Not found' });
+      if (action === 'delete' && String(req.body?.confirmSlug || '') !== existing.slug) {
+        return res.status(400).json({ error: 'confirmSlug must exactly match the church slug' });
+      }
+      const data = action === 'suspend'
+        ? { suspendedAt: new Date(), suspensionReason: reason }
+        : action === 'reactivate'
+          ? { suspendedAt: null, suspensionReason: null }
+          : action === 'delete'
+            ? { deletedAt: new Date(), deletionReason: reason }
+            : { deletedAt: null, deletionReason: null };
       const church = await rawDb.church.update({
         where: { id: req.params.id },
-        data: action === 'suspend'
-          ? { suspendedAt: new Date(), suspensionReason: reason }
-          : { suspendedAt: null, suspensionReason: null },
+        data,
       });
+      const events = {
+        suspend: 'platform.church_suspended', reactivate: 'platform.church_reactivated',
+        delete: 'platform.church_deleted', restore: 'platform.church_restored',
+      };
       await rawDb.securityAuditLog.create({
         data: {
           churchId: church.id,
           actorId: res.locals.user.id,
-          event: action === 'suspend' ? 'platform.church_suspended' : 'platform.church_reactivated',
-          subject: action === 'suspend' ? reason : `${church.name} reactivated`,
+          event: events[action],
+          subject: ['suspend', 'delete'].includes(action) ? reason : `${church.name} ${action}d`,
           ip: String(req.ip || '').slice(0, 128) || null,
           userAgent: String(req.get('user-agent') || '').slice(0, 512) || null,
         },
       });
       return res.json({
-        id: church.id, suspendedAt: church.suspendedAt,
-        suspensionReason: church.suspensionReason,
+        id: church.id, suspendedAt: church.suspendedAt, suspensionReason: church.suspensionReason,
+        deletedAt: church.deletedAt, deletionReason: church.deletionReason,
       });
     } catch (e) {
       if (e.code === 'P2025') return res.status(404).json({ error: 'Not found' });
