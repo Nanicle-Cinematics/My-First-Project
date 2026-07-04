@@ -12,6 +12,8 @@ const assert = require('node:assert');
 const { Pool } = require('pg');
 const { createTenantApp } = require('../lib/tenant-http');
 const { db } = require('../lib/tenant');
+const OTPAuth = require('otpauth');
+const { createTotpSecret, createRecoveryCodes } = require('../lib/mfa');
 
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret';
 
@@ -179,6 +181,35 @@ test('account locks after 5 failed attempts', async () => {
   // Even the CORRECT password is rejected while locked.
   const stillLocked = await attacker.post('/login', { email, password: 'correct-password' });
   assert.strictEqual(stillLocked.status, 423);
+});
+
+test('MFA-enabled users must complete TOTP challenge before receiving an authenticated session', async () => {
+  const email = uniqueEmail('mfa-login');
+  const setup = cookieClient();
+  const signup = await setup.post('/signup', { churchName: 'MFA Church', name: 'Owner', email, password: 'correct-password' });
+  createdChurchIds.push(signup.body.church.id);
+
+  const enrollment = createTotpSecret(email);
+  const recovery = createRecoveryCodes();
+  await db.user.update({
+    where: { id: signup.body.user.id },
+    data: { totpEnabled: true, totpSecret: enrollment.secret, totpRecoveryCodes: recovery.serialized },
+  });
+
+  const fresh = cookieClient();
+  const passwordStep = await fresh.post('/login', { email, password: 'correct-password' });
+  assert.strictEqual(passwordStep.status, 202);
+  assert.strictEqual(passwordStep.body.mfaRequired, true);
+  assert.strictEqual((await fresh.get('/whoami')).status, 401);
+
+  const totp = new OTPAuth.TOTP({
+    issuer: 'Church Manager',
+    label: email,
+    secret: OTPAuth.Secret.fromBase32(enrollment.secret),
+  });
+  const challenge = await fresh.post('/login/mfa', { code: totp.generate() });
+  assert.strictEqual(challenge.status, 200);
+  assert.strictEqual((await fresh.get('/whoami')).status, 200);
 });
 
 test('cross-tenant isolation: church B cannot see church A rows via a converted feature route', async () => {

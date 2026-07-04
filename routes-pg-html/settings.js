@@ -15,6 +15,11 @@ const { esc } = require('../lib/format');
 const { pageHero, statsRow } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { PLAN_LIMITS, isPro } = require('../routes-pg/settings');
+const QRCode = require('qrcode');
+const { createTotpSecret, verifyTotp, createRecoveryCodes, consumeRecoveryCode } = require('../lib/mfa');
+const { logSecurityEvent } = require('../lib/security-audit');
+const { db: rawDb } = require('../lib/tenant');
+const { exportTenantData } = require('../lib/tenant-export');
 
 function requireOwner(req, res, next) {
   if (!res.locals.user) return res.redirect('/login');
@@ -22,7 +27,43 @@ function requireOwner(req, res, next) {
   return res.status(403).send('Forbidden');
 }
 
+function requireAuth(req, res, next) {
+  if (!res.locals.user) return res.redirect('/login');
+  next();
+}
+
+function mfaControls(user) {
+  return user.totpEnabled ? `
+    <p>Your account requires an authenticator or one-time recovery code at sign-in.</p>
+    <form class="form" method="post" action="/settings/mfa/disable">
+      <label class="wide">Current authenticator or recovery code<input name="code" required autocomplete="one-time-code"></label>
+      <div class="actions"><button class="danger" type="submit">Disable two-factor authentication</button></div>
+    </form>` : `
+    <p>Protect your account with an authenticator app. You will also receive ten one-time recovery codes.</p>
+    <form method="post" action="/settings/mfa/start">
+      <button type="submit">Set up two-factor authentication</button>
+    </form>`;
+}
+
 function register(app) {
+  app.get('/profile', requireAuth, (req, res) => {
+    const user = res.locals.user;
+    const body = `
+      ${pageHero('My account', 'Identity and sign-in security.')}
+      <section class="card">
+        <dl class="stats">
+          <dt>Name</dt><dd>${esc(user.displayName || user.username)}</dd>
+          <dt>Email</dt><dd>${esc(user.email || '—')}</dd>
+          <dt>Role</dt><dd>${esc(user.role)}</dd>
+        </dl>
+      </section>
+      <section class="card" style="margin-top:1rem">
+        <div class="card-head"><h2>Two-factor authentication</h2><span class="meta">${user.totpEnabled ? 'Enabled' : 'Not enabled'}</span></div>
+        ${mfaControls(user)}
+      </section>`;
+    res.page({ title: 'My account', active: null, noHeader: true, body });
+  });
+
   app.get('/settings', requireOwner, asyncHandler(async (req, res) => {
     const db = res.locals.db;
     const church = await db.church.findUnique({ where: { id: res.locals.churchId } });
@@ -51,6 +92,15 @@ function register(app) {
           <dt>Reports</dt><dd>${plan.reports ? 'Included' : 'Not included'}</dd>
           <dt>Pro until</dt><dd>${church.proUntil ? esc(church.proUntil.toISOString().slice(0, 10)) : '—'}</dd>
         </dl>
+      </section>
+      <section class="card" style="margin-top:1rem">
+        <div class="card-head"><h2>Two-factor authentication</h2><span class="meta">${res.locals.user.totpEnabled ? 'Enabled' : 'Not enabled'}</span></div>
+        ${mfaControls(res.locals.user)}
+      </section>
+      <section class="card" style="margin-top:1rem">
+        <div class="card-head"><h2>Data portability</h2><span class="meta">Owner only</span></div>
+        <p>Download a complete tenant-scoped JSON export. Password hashes, MFA secrets, recovery codes, and reset tokens are excluded.</p>
+        <p><a class="btn ghost" href="/settings/export.json">Download church data</a></p>
       </section>`;
     res.page({ title: 'Settings', active: '/settings', noHeader: true, body });
   }));
@@ -61,6 +111,92 @@ function register(app) {
     await res.locals.db.church.update({ where: { id: res.locals.churchId }, data: { name } });
     flash(req, 'Settings saved.', 'success');
     res.redirect('/settings');
+  }));
+
+  app.post('/settings/mfa/start', requireAuth, asyncHandler(async (req, res) => {
+    const enrollment = createTotpSecret(res.locals.user.email);
+    req.session.mfaSetupSecret = enrollment.secret;
+    req.session.mfaSetupUri = enrollment.uri;
+    res.redirect('/settings/mfa/setup');
+  }));
+
+  app.get('/settings/mfa/setup', requireAuth, asyncHandler(async (req, res) => {
+    if (!req.session.mfaSetupSecret || !req.session.mfaSetupUri) return res.redirect('/settings');
+    const qr = await QRCode.toDataURL(req.session.mfaSetupUri, { width: 220, margin: 1 });
+    const body = `
+      ${pageHero('Set up two-factor authentication', 'Scan the code, then verify one six-digit code.')}
+      <section class="card">
+        <p><img src="${esc(qr)}" alt="Authenticator setup QR code" width="220" height="220"></p>
+        <details><summary>Enter setup key manually</summary><code>${esc(req.session.mfaSetupSecret)}</code></details>
+        <form class="form" method="post" action="/settings/mfa/confirm">
+          <label class="wide">Six-digit code<input name="code" required inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}"></label>
+          <div class="actions"><button type="submit">Enable two-factor authentication</button></div>
+        </form>
+      </section>`;
+    res.page({ title: 'Set up MFA', active: '/settings', noHeader: true, body });
+  }));
+
+  app.post('/settings/mfa/confirm', requireAuth, asyncHandler(async (req, res) => {
+    const secret = req.session.mfaSetupSecret;
+    if (!secret || !verifyTotp(secret, req.body?.code)) {
+      flash(req, 'That verification code is invalid.');
+      return res.redirect('/settings/mfa/setup');
+    }
+    const recovery = createRecoveryCodes();
+    await res.locals.db.user.update({
+      where: { id: res.locals.user.id },
+      data: { totpEnabled: true, totpSecret: secret, totpRecoveryCodes: recovery.serialized },
+    });
+    delete req.session.mfaSetupSecret;
+    delete req.session.mfaSetupUri;
+    await logSecurityEvent(res.locals.db, req, {
+      event: 'auth.mfa_enabled',
+      subject: res.locals.user.email,
+      actorId: res.locals.user.id,
+    });
+    const body = `
+      ${pageHero('Save your recovery codes', 'Each code works once. Store them somewhere secure before leaving this page.')}
+      <section class="card">
+        <pre>${recovery.codes.map(esc).join('\n')}</pre>
+        <p><strong>These codes will not be shown again.</strong></p>
+        <p><a class="btn" href="/settings">I saved them</a></p>
+      </section>`;
+    res.page({ title: 'MFA recovery codes', active: '/settings', noHeader: true, body });
+  }));
+
+  app.post('/settings/mfa/disable', requireAuth, asyncHandler(async (req, res) => {
+    const user = res.locals.user;
+    const code = String(req.body?.code || '').trim();
+    const validTotp = verifyTotp(user.totpSecret, code);
+    const remaining = validTotp ? null : consumeRecoveryCode(user.totpRecoveryCodes, code);
+    if (!validTotp && remaining === null) {
+      flash(req, 'That verification code is invalid.');
+      return res.redirect('/settings');
+    }
+    await res.locals.db.user.update({
+      where: { id: user.id },
+      data: { totpEnabled: false, totpSecret: null, totpRecoveryCodes: null },
+    });
+    await logSecurityEvent(res.locals.db, req, {
+      event: 'auth.mfa_disabled',
+      subject: user.email,
+      actorId: user.id,
+    });
+    flash(req, 'Two-factor authentication disabled.', 'success');
+    res.redirect('/settings');
+  }));
+
+  app.get('/settings/export.json', requireOwner, asyncHandler(async (req, res) => {
+    const payload = await exportTenantData(rawDb, res.locals.churchId);
+    await logSecurityEvent(res.locals.db, req, {
+      event: 'tenant.export_downloaded',
+      subject: payload.church.name,
+      actorId: res.locals.user.id,
+    });
+    const filename = `${payload.church.slug || 'church'}-export-${new Date().toISOString().slice(0, 10)}.json`;
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="${filename.replace(/[^a-zA-Z0-9._-]/g, '-')}"`);
+    res.send(JSON.stringify(payload, null, 2));
   }));
 }
 
