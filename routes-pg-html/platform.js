@@ -40,7 +40,7 @@ function register(app) {
       esc(c.name), esc(c.slug),
       isPro(c) ? '<span class="pill pill-fulfilled">Pro</span>' : '<span class="pill pill-pending">Free</span>',
       c.deletedAt
-        ? `<span class="pill pill-overdue">Deleted</span><br><small>${esc(c.deletionReason || '')}</small>`
+        ? `<span class="pill pill-overdue">Deleted</span><br><small>${esc(c.deletionReason || '')}</small><br><small>Eligible for purge: ${c.deletionPurgeAfter ? esc(c.deletionPurgeAfter.toISOString().slice(0, 10)) : '—'}</small>`
         : c.suspendedAt
         ? `<span class="pill pill-overdue">Suspended</span><br><small>${esc(c.suspensionReason || '')}</small>`
         : '<span class="pill pill-fulfilled">Active</span>',
@@ -145,8 +145,11 @@ function register(app) {
         : action === 'reactivate'
           ? { suspendedAt: null, suspensionReason: null }
           : action === 'delete'
-            ? { deletedAt: new Date(), deletionReason: reason }
-            : { deletedAt: null, deletionReason: null };
+            ? {
+              deletedAt: new Date(), deletionReason: reason,
+              deletionPurgeAfter: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            }
+            : { deletedAt: null, deletionReason: null, deletionPurgeAfter: null };
       const church = await rawDb.church.update({
         where: { id: req.params.id },
         data,

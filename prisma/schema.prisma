@@ -307,6 +307,7 @@ model Church {
   suspensionReason String?  @map("suspension_reason")
   deletedAt       DateTime? @map("deleted_at")
   deletionReason  String?   @map("deletion_reason")
+  deletionPurgeAfter DateTime? @map("deletion_purge_after")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
@@ -329,6 +330,7 @@ model Church {
   emailLogs           EmailLog[]
   users               User[]
   passwordResetTokens PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
   preachingPlans      PreachingPlan[]
   inventoryItems      InventoryItem[]
   inventoryCategories InventoryCategory[]
@@ -831,6 +833,7 @@ model User {
   church            Church      @relation(fields: [churchId], references: [id])
   username          String
   email             String?     @unique
+  emailVerifiedAt   DateTime?   @map("email_verified_at")
   passwordHash      String      @map("password_hash")
   displayName       String?     @map("display_name")
   role              UserRole    @default(ADMIN)
@@ -844,6 +847,7 @@ model User {
   deletedAt         DateTime?   @map("deleted_at")
 
   passwordResetTokens PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
 
   @@unique([churchId, username])
   @@index([churchId])
@@ -863,6 +867,22 @@ model PasswordResetToken {
 
   @@index([churchId])
   @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        Int       @id @default(autoincrement()) @map("token_id")
+  churchId  String    @map("church_id")
+  church    Church    @relation(fields: [churchId], references: [id], onDelete: Cascade)
+  userId    Int       @map("user_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([churchId])
+  @@index([userId])
+  @@map("email_verification_tokens")
 }
 
 // Managed by connect-pg-simple at runtime. Keeping it in Prisma's data model

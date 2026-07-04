@@ -1,0 +1,50 @@
+name: Production PostgreSQL backup
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  backup-and-restore-verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: drill-only
+          POSTGRES_DB: restore_drill
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require backup secrets
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+        run: test -n "$DATABASE_URL" && test -n "$PASSPHRASE"
+      - name: Create and verify backup
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          BACKUP_DIR: /tmp/church-backup
+        run: bash scripts/pg-backup.sh
+      - name: Full restore drill
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          RESTORE_DRILL_DATABASE_URL: postgresql://postgres:drill-only@localhost:5432/restore_drill
+          ALLOW_RESTORE_DRILL: "1"
+        run: bash scripts/pg-restore-drill.sh /tmp/church-backup/*.dump
+      - name: Encrypt backup
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+        run: gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" --output /tmp/church-backup.dump.gpg /tmp/church-backup/*.dump
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-postgres-backup-${{ github.run_id }}
+          path: /tmp/church-backup.dump.gpg
+          retention-days: 30
+          if-no-files-found: error

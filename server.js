@@ -25,6 +25,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const { createTenantApp } = require('./lib/tenant-http');
+const { startOperationsScheduler } = require('./lib/operations-scheduler');
 
 const PORT = process.env.PORT || 3000;
 const app = createTenantApp();
@@ -32,6 +33,7 @@ const app = createTenantApp();
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Church Manager running at http://localhost:${PORT}`);
+    startOperationsScheduler();
   });
 }
 

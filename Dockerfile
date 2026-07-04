@@ -3,7 +3,7 @@ FROM node:22-slim
 
 # Tools needed to compile better-sqlite3 native bindings.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 build-essential ca-certificates \
+    python3 build-essential ca-certificates postgresql-client curl \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

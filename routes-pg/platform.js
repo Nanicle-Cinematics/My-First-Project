@@ -46,6 +46,7 @@ function register(app) {
       id: c.id, name: c.name, slug: c.slug, plan: c.plan, proUntil: c.proUntil,
       suspendedAt: c.suspendedAt, suspensionReason: c.suspensionReason,
       deletedAt: c.deletedAt, deletionReason: c.deletionReason,
+      deletionPurgeAfter: c.deletionPurgeAfter,
       isPro: isPro(c), createdAt: c.createdAt,
       userCount: c._count.users, memberCount: c._count.members,
     })));
@@ -110,8 +111,11 @@ function register(app) {
         : action === 'reactivate'
           ? { suspendedAt: null, suspensionReason: null }
           : action === 'delete'
-            ? { deletedAt: new Date(), deletionReason: reason }
-            : { deletedAt: null, deletionReason: null };
+            ? {
+              deletedAt: new Date(), deletionReason: reason,
+              deletionPurgeAfter: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            }
+            : { deletedAt: null, deletionReason: null, deletionPurgeAfter: null };
       const church = await rawDb.church.update({
         where: { id: req.params.id },
         data,
@@ -133,6 +137,7 @@ function register(app) {
       return res.json({
         id: church.id, suspendedAt: church.suspendedAt, suspensionReason: church.suspensionReason,
         deletedAt: church.deletedAt, deletionReason: church.deletionReason,
+        deletionPurgeAfter: church.deletionPurgeAfter,
       });
     } catch (e) {
       if (e.code === 'P2025') return res.status(404).json({ error: 'Not found' });

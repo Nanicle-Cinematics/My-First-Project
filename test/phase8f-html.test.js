@@ -25,6 +25,8 @@ test.after(async () => {
     const where = { churchId: { in: createdChurchIds } };
     await db.activityLog.deleteMany({ where });
     await db.passwordResetToken.deleteMany({ where });
+    await db.emailVerificationToken.deleteMany({ where });
+    await db.emailLog.deleteMany({ where });
     await db.financeReceipt.deleteMany({ where });
     await db.journalLine.deleteMany({ where });
     await db.journalEntry.deleteMany({ where });
@@ -121,9 +123,11 @@ test('forgot-password: real link works end to end, non-matching email shows no l
   assert.doesNotMatch(nonMatchText, /reset-password\//, 'non-matching email must not reveal a reset link');
 
   const matchText = await forgotClient.postFormText('/forgot', { email, _csrf: csrf });
-  const linkMatch = matchText.match(/href="([^"]*reset-password\/[a-f0-9]+)"/);
-  assert.ok(linkMatch, 'matching email must show a reset link');
-  const resetPath = linkMatch[1].replace(/^https?:\/\/[^/]+/, '');
+  assert.doesNotMatch(matchText, /reset-password\//, 'reset links must never be exposed in the response');
+  const user = await db.user.findUnique({ where: { email } });
+  const resetToken = await db.passwordResetToken.findFirst({ where: { userId: user.id, usedAt: null }, orderBy: { createdAt: 'desc' } });
+  assert.ok(resetToken, 'matching email must create a reset token for email delivery');
+  const resetPath = `/reset-password/${resetToken.token}`;
 
   const resetPage = await forgotClient.getHtml(resetPath);
   assert.strictEqual(resetPage.status, 200);

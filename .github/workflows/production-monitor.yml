@@ -1,0 +1,28 @@
+name: Production availability monitor
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check health and database readiness
+        id: health
+        continue-on-error: true
+        run: |
+          curl --fail --silent --show-error --retry 2 --max-time 15 https://church-management-system.fly.dev/healthz
+          curl --fail --silent --show-error --retry 2 --max-time 15 https://church-management-system.fly.dev/readyz
+      - name: Send failure alert
+        if: steps.health.outcome == 'failure'
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          test -n "$ALERT_WEBHOOK_URL"
+          curl --fail --silent --show-error -X POST -H 'Content-Type: application/json' \
+            --data '{"text":"CRITICAL: Church Manager health/readiness check failed. Inspect Fly.io immediately."}' \
+            "$ALERT_WEBHOOK_URL"
+      - name: Fail workflow when unhealthy
+        if: steps.health.outcome == 'failure'
+        run: exit 1

@@ -16,6 +16,11 @@ primary_region = "lhr"
   NODE_ENV   = "production"
   PORT       = "3000"
   PHOTO_DIR  = "/data/photos"
+  BACKUP_DIR = "/data/backups/postgres"
+  BACKUP_KEEP_DAYS = "30"
+  BACKUP_HOUR_UTC = "2"
+  BACKUP_MINUTE_UTC = "17"
+  BACKUP_RUN_ON_START = "1"
 
 [mounts]
   source      = "church_data"
