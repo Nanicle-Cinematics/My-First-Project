@@ -6,6 +6,7 @@ on:
 
 jobs:
   backup-and-restore-verify:
+    if: vars.ENABLE_PRODUCTION_BACKUP == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
