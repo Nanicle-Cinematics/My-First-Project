@@ -14,7 +14,7 @@ DRILL_URL="$(RESTORE_DRILL_DATABASE_URL="$RESTORE_DRILL_DATABASE_URL" node -e '
 
 pg_restore --list "$file" >/dev/null
 psql "$DRILL_URL" -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
-pg_restore "$DRILL_URL" --no-owner --no-acl --exit-on-error "$file"
+pg_restore --dbname="$DRILL_URL" --no-owner --no-acl --exit-on-error "$file"
 tables="$(psql "$DRILL_URL" -Atc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")"
 [ "$tables" -gt 20 ] || { echo "Restore drill failed: only $tables tables"; exit 1; }
 psql "$DRILL_URL" -v ON_ERROR_STOP=1 -c 'SELECT count(*) AS churches FROM churches; SELECT count(*) AS users FROM users;'
