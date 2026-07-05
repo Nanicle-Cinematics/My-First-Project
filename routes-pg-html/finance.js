@@ -40,6 +40,11 @@ function requireFundManager(req, res, next) {
   if (u && (u.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(u.financeRole))) return next();
   return res.status(403).send('Forbidden');
 }
+function requireFinanceReportAccess(req, res, next) {
+  const u = res.locals.user;
+  if (u && (u.role === 'ADMIN' || (u.financeRole && u.financeRole !== 'NONE'))) return next();
+  return res.status(403).send('Finance access required');
+}
 
 const INCOME_CATEGORIES = [
   ['donation', 'Donation'], ['event', 'Event income'], ['rent', 'Facility rental'],
@@ -383,6 +388,60 @@ function sendCsv(res, filename, header, rows) {
   res.send(lines.join('\r\n'));
 }
 
+const FINANCE_REPORTS = [
+  ['overview', 'Financial Overview'],
+  ['income-expense', 'Income & Expenses'],
+  ['budget', 'Budget Performance'],
+  ['funds', 'Fund Report'],
+  ['giving', 'Giving by Category'],
+  ['pledges', 'Outstanding Pledges'],
+  ['expenses', 'Expense Analysis'],
+  ['cash-flow', 'Cash-Flow Summary'],
+  ['statements', 'Member Giving'],
+  ['treasurer', 'Treasurer’s Report'],
+  ['year-end', 'Year-End Summary'],
+];
+function financeReportName(type) {
+  return (FINANCE_REPORTS.find(([key]) => key === type) || FINANCE_REPORTS[0])[1];
+}
+function validReportDate(value, fallback) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : fallback;
+}
+function financeReportRange(req) {
+  const now = new Date();
+  const end = validReportDate(req.query.end, now.toISOString().slice(0, 10));
+  const start = validReportDate(req.query.start, `${now.getFullYear()}-01-01`);
+  return start <= end ? { start, end } : { start: end, end: start };
+}
+function reportQuery(params, overrides = {}) {
+  const q = new URLSearchParams({ ...params, ...overrides });
+  for (const [key, value] of [...q.entries()]) if (!value) q.delete(key);
+  return q.toString();
+}
+function financeReportTabs(active, query) {
+  return `<div class="finance-report-tabs">${FINANCE_REPORTS.map(([key, label]) =>
+    `<a class="${key === active ? 'active' : ''}" href="/finance/reports/${key}?${query}">${esc(label)}</a>`).join('')}</div>`;
+}
+function reportGroup(rows, key, amountKey = 'amount') {
+  const grouped = new Map();
+  for (const row of rows) {
+    const label = String(row[key] || 'Uncategorised');
+    grouped.set(label, (grouped.get(label) || 0) + Number(row[amountKey] || 0));
+  }
+  return [...grouped.entries()].map(([label, amount]) => ({ label, amount })).sort((a, b) => b.amount - a.amount);
+}
+function financeBars(rows, total) {
+  if (!rows.length) return '<p class="muted-text">No activity for this selection.</p>';
+  const max = Math.max(...rows.map((row) => Math.abs(row.amount)), 1);
+  return `<div class="finance-report-bars">${rows.slice(0, 12).map((row) => `<div class="finance-report-bar">
+    <span>${esc(row.label)}</span><div><i style="width:${Math.max(2, Math.abs(row.amount) / max * 100)}%"></i></div>
+    <strong>${fmtMoney(row.amount)}</strong><small>${total ? Math.round(row.amount / total * 100) : 0}%</small>
+  </div>`).join('')}</div>`;
+}
+function reportSection(title, content, meta = '') {
+  return `<section class="card finance-report-section"><div class="card-head"><h2>${esc(title)}</h2>${meta ? `<span class="meta">${esc(meta)}</span>` : ''}</div>${content}</section>`;
+}
+
 function register(app) {
   app.get('/finance', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
@@ -449,7 +508,8 @@ function register(app) {
         ['/finance/periods', '◷', 'Financial periods'],
       ]],
       ['Reports & records', [
-        ['/finance/receipts', '▤', 'Receipts'], ['/finance/statements', '▧', 'Giving statements'],
+        ['/finance/reports', '◫', 'Finance reports'], ['/finance/receipts', '▤', 'Receipts'],
+        ['/finance/statements', '▧', 'Giving statements'],
       ]],
     ];
     const recentRows = recentEntries.map((entry) => {
@@ -504,6 +564,208 @@ function register(app) {
         </section>
       </div>`;
     res.page({ title: 'Finance', active: '/finance', noHeader: true, body });
+  }));
+
+  app.get('/finance/reports', requireFinanceReportAccess, (req, res) => {
+    res.redirect(`/finance/reports/overview?${reportQuery(req.query)}`);
+  });
+
+  app.get('/finance/reports/:type([a-z-]+)', requireFinanceReportAccess, asyncHandler(async (req, res) => {
+    const type = FINANCE_REPORTS.some(([key]) => key === req.params.type) ? req.params.type : 'overview';
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const { start, end } = financeReportRange(req);
+    const fundId = Number(req.query.fundId) || null;
+    const accountId = Number(req.query.accountId) || null;
+    const projectId = Number(req.query.projectId) || null;
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    const days = Math.max(1, Math.round((endDate - startDate) / 86400000) + 1);
+    const priorEndDate = new Date(startDate.getTime() - 86400000);
+    const priorStartDate = new Date(priorEndDate.getTime() - (days - 1) * 86400000);
+    const priorStart = priorStartDate.toISOString().slice(0, 10);
+    const priorEnd = priorEndDate.toISOString().slice(0, 10);
+
+    const [funds, accounts, projects, lines, expenses, pledges, tithes, special, pledgePayments] = await Promise.all([
+      db.fund.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+      db.account.findMany({ where: { active: true, accountType: { in: ['INCOME', 'EXPENSE'] } }, orderBy: { code: 'asc' } }),
+      db.financeProject.findMany({ where: { status: { in: ['PLANNING', 'ACTIVE', 'ON_HOLD'] } }, orderBy: { name: 'asc' } }),
+      db.journalLine.findMany({
+        where: {
+          ...(fundId ? { fundId } : {}), ...(accountId ? { accountId } : {}),
+          account: { accountType: { in: ['INCOME', 'EXPENSE'] } },
+          entry: { entryDate: { gte: startDate, lte: endDate }, status: { in: ['POSTED', 'REVERSED'] } },
+        },
+        include: { account: true, fund: true, entry: true },
+        orderBy: { entry: { entryDate: 'asc' } },
+      }),
+      db.expense.findMany({
+        where: { spentOn: { gte: startDate, lte: endDate }, ...(fundId ? { fundId } : {}), ...(projectId ? { projectId } : {}) },
+        include: { fund: true, project: true, expenseCategory: true },
+        orderBy: { spentOn: 'desc' },
+      }),
+      db.pledge.findMany({
+        where: { status: { in: ['PENDING', 'PARTIAL'] } },
+        include: { member: true, harvest: true },
+        orderBy: { pledgeDate: 'desc' },
+      }),
+      db.tithe.findMany({ where: { deletedAt: null, titheDate: { gte: startDate, lte: endDate } }, include: { member: true } }),
+      db.specialOffering.findMany({ where: { deletedAt: null, offeringDate: { gte: startDate, lte: endDate } }, include: { donor: true, specialCategory: true } }),
+      db.pledgePayment.findMany({
+        where: { paidOn: { gte: startDate, lte: endDate } },
+        include: { pledge: { include: { member: true, harvest: true } } },
+      }),
+    ]);
+
+    let ledgerRows = lines.map((line) => {
+      const isIncome = line.account.accountType === 'INCOME';
+      return {
+        id: line.entryId, date: line.entry.entryDate.toISOString().slice(0, 10),
+        month: line.entry.entryDate.toLocaleString('en', { month: 'short', year: 'numeric', timeZone: 'UTC' }),
+        kind: isIncome ? 'Income' : 'Expense', category: line.account.name,
+        fund: line.fund ? line.fund.name : 'General', source: String(line.entry.sourceType || 'Other').replace(/_/g, ' '),
+        memo: line.memo || line.entry.memo || '', amount: isIncome ? Number(line.credit) - Number(line.debit) : Number(line.debit) - Number(line.credit),
+      };
+    });
+    if (projectId) {
+      const projectExpenseIds = new Set(expenses.map((row) => String(row.id)));
+      const projectIncomeIds = new Set((await db.incomeRecord.findMany({ where: { projectId, deletedAt: null }, select: { id: true } })).map((row) => String(row.id)));
+      ledgerRows = ledgerRows.filter((row) =>
+        (row.source.toUpperCase() === 'EXPENSE' && projectExpenseIds.has(String(lines.find((line) => line.entryId === row.id)?.entry.sourceId))) ||
+        (row.source.toUpperCase() === 'INCOME' && projectIncomeIds.has(String(lines.find((line) => line.entryId === row.id)?.entry.sourceId))));
+    }
+    const incomeRows = ledgerRows.filter((row) => row.kind === 'Income');
+    const expenseRows = ledgerRows.filter((row) => row.kind === 'Expense');
+    const income = incomeRows.reduce((sum, row) => sum + row.amount, 0);
+    const spent = expenseRows.reduce((sum, row) => sum + row.amount, 0);
+    const net = income - spent;
+    const [priorIncome, priorExpense] = await Promise.all([
+      ledger.budgetActual(db, churchId, { lineType: 'INCOME', fundId, accountId: accountId && accounts.find((a) => a.id === accountId && a.accountType === 'INCOME') ? accountId : null, from: priorStart, to: priorEnd }),
+      ledger.budgetActual(db, churchId, { lineType: 'EXPENSE', fundId, accountId: accountId && accounts.find((a) => a.id === accountId && a.accountType === 'EXPENSE') ? accountId : null, from: priorStart, to: priorEnd }),
+    ]);
+    const compare = (current, previous) => previous ? `${current >= previous ? '+' : ''}${Math.round((current - previous) / Math.abs(previous) * 100)}% vs prior period` : 'No prior-period activity';
+    const outstanding = pledges.reduce((sum, row) => sum + Math.max(0, Number(row.pledgedAmount) - Number(row.paidAmount)), 0);
+    const queryParams = { start, end, fundId: fundId || '', accountId: accountId || '', projectId: projectId || '' };
+    const query = reportQuery(queryParams);
+    const filters = `<form class="finance-report-filters" method="get">
+      <label>From<input type="date" name="start" value="${esc(start)}"></label>
+      <label>To<input type="date" name="end" value="${esc(end)}"></label>
+      <label>Fund<select name="fundId"><option value="">All funds</option>${funds.map((f) => `<option value="${f.id}" ${f.id === fundId ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
+      <label>Account<select name="accountId"><option value="">All accounts</option>${accounts.map((a) => `<option value="${a.id}" ${a.id === accountId ? 'selected' : ''}>${esc(a.code)} · ${esc(a.name)}</option>`).join('')}</select></label>
+      <label>Project<select name="projectId"><option value="">All projects</option>${projects.map((p) => `<option value="${p.id}" ${p.id === projectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <button type="submit">Apply filters</button>
+    </form>`;
+    const actions = `<div class="finance-report-actions">
+      <a class="btn ghost" href="/finance/reports/${type}.csv?${query}">Export CSV</a>
+      <button class="btn" type="button" onclick="window.print()">Print / save PDF</button>
+    </div>`;
+    const summary = statsRow([
+      { cls: 'green', icon: '↗', value: fmtMoney(income), label: `Income · ${compare(income, priorIncome)}` },
+      { cls: 'orange', icon: '↘', value: fmtMoney(spent), label: `Expenses · ${compare(spent, priorExpense)}` },
+      { cls: net >= 0 ? 'blue' : 'red', icon: '₵', value: fmtMoney(net), label: 'Net movement' },
+      { cls: 'purple', icon: '◇', value: fmtMoney(outstanding), label: 'Outstanding pledges' },
+    ]);
+
+    const monthlyIncome = reportGroup(incomeRows, 'month');
+    const monthlyExpense = reportGroup(expenseRows, 'month');
+    const incomeCats = reportGroup(incomeRows, 'category');
+    const expenseCats = reportGroup(expenseRows, 'category');
+    const fundRows = await Promise.all(funds.filter((f) => !fundId || f.id === fundId).map(async (fund) => {
+      const [balance, movement] = await Promise.all([ledger.fundBalance(db, churchId, fund.id), ledger.fundRaisedSpent(db, churchId, fund.id)]);
+      return [esc(fund.name), f.restricted ? 'Restricted' : 'Unrestricted', fmtMoney(movement.raised), fmtMoney(movement.spent), `<strong>${fmtMoney(balance)}</strong>`];
+    }));
+    const givingRows = [
+      ...tithes.map((r) => ({ member: `${r.member.firstName} ${r.member.lastName}`, category: 'Tithes', amount: r.amount })),
+      ...special.map((r) => ({ member: r.donor ? `${r.donor.firstName} ${r.donor.lastName}` : (r.donorNameManual || 'Anonymous'), category: r.specialCategory.categoryName, amount: r.amount })),
+      ...pledgePayments.map((r) => ({ member: `${r.pledge.member.firstName} ${r.pledge.member.lastName}`, category: `Pledge · ${r.pledge.harvest.harvestName}`, amount: r.amount })),
+    ];
+    const givingByCategory = reportGroup(givingRows, 'category');
+    const givingByMember = reportGroup(givingRows, 'member');
+    const expenseAnalysisRows = expenses.map((row) => [
+      row.spentOn.toISOString().slice(0, 10), esc(row.expenseCategory?.categoryName || row.category), esc(row.description || '—'),
+      esc(row.paidTo || '—'), esc(row.fund?.name || 'General'), esc(row.project?.name || '—'), fmtMoney(row.amount),
+    ]);
+
+    let content = '';
+    if (type === 'overview') {
+      content = summary + reportSection('Income by category', financeBars(incomeCats, income)) +
+        reportSection('Expenses by category', financeBars(expenseCats, spent)) +
+        reportSection('Recent ledger entries', table(['Date', 'Type', 'Account', 'Fund', 'Memo', 'Amount'], ledgerRows.slice().reverse().slice(0, 30).map((r) =>
+          [r.date, r.kind, esc(r.category), esc(r.fund), esc(r.memo || '—'), fmtMoney(r.amount)])));
+    } else if (type === 'income-expense') {
+      const months = [...new Set([...monthlyIncome.map((r) => r.label), ...monthlyExpense.map((r) => r.label)])];
+      content = summary + reportSection('Monthly performance', table(['Month', 'Income', 'Expenses', 'Net'], months.map((m) => {
+        const inc = monthlyIncome.find((r) => r.label === m)?.amount || 0; const exp = monthlyExpense.find((r) => r.label === m)?.amount || 0;
+        return [esc(m), fmtMoney(inc), fmtMoney(exp), `<strong>${fmtMoney(inc - exp)}</strong>`];
+      }))) + reportSection('Account detail', table(['Date', 'Type', 'Account', 'Fund', 'Source', 'Amount'], ledgerRows.map((r) => [r.date, r.kind, esc(r.category), esc(r.fund), esc(r.source), fmtMoney(r.amount)])));
+    } else if (type === 'funds') {
+      content = summary + reportSection('Fund balances and activity', table(['Fund', 'Restriction', 'Raised', 'Spent', 'Balance'], fundRows));
+    } else if (type === 'giving') {
+      content = summary + reportSection('Giving categories', financeBars(givingByCategory, givingRows.reduce((s, r) => s + Number(r.amount), 0))) +
+        reportSection('Top givers', table(['Member / donor', 'Amount'], givingByMember.slice(0, 50).map((r) => [esc(r.label), fmtMoney(r.amount)])));
+    } else if (type === 'pledges') {
+      content = summary + reportSection('Outstanding pledges', pledges.length ? table(['Member', 'Harvest', 'Pledged', 'Paid', 'Outstanding', 'Status'], pledges.map((p) =>
+        [esc(`${p.member.firstName} ${p.member.lastName}`), esc(p.harvest.harvestName), fmtMoney(p.pledgedAmount), fmtMoney(p.paidAmount), `<strong>${fmtMoney(p.pledgedAmount - p.paidAmount)}</strong>`, esc(p.status)])) : '<p class="muted-text">No outstanding pledges.</p>');
+    } else if (type === 'expenses') {
+      content = summary + reportSection('Expense categories', financeBars(reportGroup(expenses.map((r) => ({ category: r.expenseCategory?.categoryName || r.category, amount: r.amount })), 'category'), spent)) +
+        reportSection('Expense register', expenseAnalysisRows.length ? table(['Date', 'Category', 'Description', 'Payee', 'Fund', 'Project', 'Amount'], expenseAnalysisRows) : '<p class="muted-text">No expenses for this selection.</p>');
+    } else if (type === 'cash-flow') {
+      const months = [...new Set([...monthlyIncome.map((r) => r.label), ...monthlyExpense.map((r) => r.label)])];
+      content = summary + reportSection('Cash movement by month', table(['Month', 'Cash in', 'Cash out', 'Net cash movement'], months.map((m) => {
+        const cashIn = monthlyIncome.find((r) => r.label === m)?.amount || 0; const cashOut = monthlyExpense.find((r) => r.label === m)?.amount || 0;
+        return [esc(m), fmtMoney(cashIn), fmtMoney(cashOut), `<strong>${fmtMoney(cashIn - cashOut)}</strong>`];
+      })));
+    } else if (type === 'statements') {
+      content = summary + reportSection('Giving by member', givingByMember.length ? table(['Member / donor', 'Total giving', 'Statement'], givingByMember.map((r) =>
+        [esc(r.label), fmtMoney(r.amount), '<a href="/finance/statements">Open annual statements →</a>'])) : '<p class="muted-text">No member giving for this selection.</p>');
+    } else if (type === 'budget') {
+      const budgets = await db.financeBudget.findMany({ where: { year: startDate.getUTCFullYear(), status: { in: ['APPROVED', 'CLOSED'] } }, include: { lines: { include: { fund: true } } }, orderBy: { id: 'desc' } });
+      const budgetRows = [];
+      for (const budget of budgets) for (const line of budget.lines) {
+        const window = ledger.budgetWindow(budget);
+        const actual = await ledger.budgetActual(db, churchId, { ...line, ...window });
+        const variance = line.lineType === 'INCOME' ? actual - line.amount : line.amount - actual;
+        budgetRows.push([esc(budget.name), esc(line.lineType), esc(line.category), esc(line.fund?.name || 'All funds'), fmtMoney(line.amount), fmtMoney(actual), `<strong>${fmtMoney(variance)}</strong>`]);
+      }
+      content = summary + reportSection('Approved budget vs actual', budgetRows.length ? table(['Budget', 'Type', 'Category', 'Fund', 'Budget', 'Actual', 'Variance'], budgetRows) : '<p class="muted-text">No approved budget for this year.</p>');
+    } else {
+      const title = type === 'treasurer' ? 'Treasurer’s management report' : 'Year-end financial summary';
+      content = summary + reportSection(title, `<div class="finance-report-narrative">
+        <p>For <strong>${esc(start)} to ${esc(end)}</strong>, total income was <strong>${fmtMoney(income)}</strong> and total expenditure was <strong>${fmtMoney(spent)}</strong>, producing net movement of <strong>${fmtMoney(net)}</strong>.</p>
+        <p>The church has ${funds.length} active funds and ${pledges.length} open pledges with ${fmtMoney(outstanding)} outstanding.</p>
+      </div>`) + reportSection('Income composition', financeBars(incomeCats, income)) +
+        reportSection('Expense composition', financeBars(expenseCats, spent)) +
+        reportSection('Fund position', table(['Fund', 'Restriction', 'Raised', 'Spent', 'Balance'], fundRows));
+    }
+
+    const church = res.locals.user.church;
+    const body = `${pageHero(financeReportName(type), `Decision-ready finance reporting for ${esc(church?.name || 'your church')}.`)}
+      ${financeReportTabs(type, query)}${filters}${actions}
+      <div class="finance-report-document">
+        <header class="finance-print-header"><h1>${esc(church?.name || 'Church')}</h1><p>${esc(financeReportName(type))} · ${esc(start)} to ${esc(end)}</p></header>
+        ${content}
+        <footer class="finance-report-footer">Prepared ${new Date().toISOString().slice(0, 10)} · As of ${esc(end)} · ${esc(res.locals.user.displayName || res.locals.user.username || res.locals.user.email || '')}</footer>
+      </div>`;
+    res.page({ title: `Finance · ${financeReportName(type)}`, active: '/finance', noHeader: true, body });
+  }));
+
+  app.get('/finance/reports/:type.csv', requireFinanceReportAccess, asyncHandler(async (req, res) => {
+    const type = FINANCE_REPORTS.some(([key]) => key === req.params.type) ? req.params.type : 'overview';
+    const { start, end } = financeReportRange(req);
+    const fundId = Number(req.query.fundId) || null;
+    const accountId = Number(req.query.accountId) || null;
+    const lines = await res.locals.db.journalLine.findMany({
+      where: {
+        ...(fundId ? { fundId } : {}), ...(accountId ? { accountId } : {}),
+        account: { accountType: { in: ['INCOME', 'EXPENSE'] } },
+        entry: { entryDate: { gte: new Date(start), lte: new Date(end) }, status: { in: ['POSTED', 'REVERSED'] } },
+      },
+      include: { account: true, fund: true, entry: true },
+      orderBy: { entry: { entryDate: 'asc' } },
+    });
+    sendCsv(res, `${type}-${start}-${end}.csv`, ['Date', 'Type', 'Account', 'Fund', 'Source', 'Memo', 'Debit', 'Credit'],
+      lines.map((line) => [line.entry.entryDate.toISOString().slice(0, 10), line.account.accountType, line.account.name,
+        line.fund?.name || 'General', line.entry.sourceType, line.memo || line.entry.memo || '', line.debit, line.credit]));
   }));
 
   // --- Funds ---

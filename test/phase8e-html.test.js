@@ -136,6 +136,16 @@ test('finance: create a fund, record income, record an expense, verify balance',
   const afterExpense = await client.getHtml('/finance/expenses');
   assert.match(afterExpense.text, /Test supplies/);
   assert.match(afterExpense.text, /PAID/);
+
+  const report = await client.getHtml('/finance/reports/overview?start=2026-07-01&end=2026-07-31');
+  assert.strictEqual(report.status, 200);
+  assert.match(report.text, /Financial Overview/);
+  assert.match(report.text, /Income by category/);
+  assert.match(report.text, /GH₵ 100\.00/);
+
+  const csv = await client.getHtml('/finance/reports/income-expense.csv?start=2026-07-01&end=2026-07-31');
+  assert.strictEqual(csv.status, 200);
+  assert.match(csv.text, /Date,Type,Account,Fund,Source,Memo,Debit,Credit/);
 });
 
 test('users: create a teammate, change their role, reset their password', async () => {
