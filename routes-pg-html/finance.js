@@ -386,25 +386,123 @@ function sendCsv(res, filename, header, rows) {
 function register(app) {
   app.get('/finance', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
-    const tiles = [
-      ['/finance/funds', '◎', 'Funds', 'Balances, restrictions, raised/spent.'],
-      ['/finance/income', '↗', 'Generic Income', 'Record and reverse one-off income.'],
-      ['/finance/tithes', '✚', 'Tithes', 'Per-member tithe records.'],
-      ['/finance/special', '★', 'Special Offerings', 'Building fund, missions, thanksgiving, etc.'],
-      ['/finance/day-borns', '☀', 'Day-Born Collections', 'Standalone day-born group collections.'],
-      ['/finance/services', '✝', 'Services', 'Weekly service collections with day-born breakdowns.'],
-      ['/finance/harvests', '🌾', 'Harvests', 'Annual harvests and organizational fundraisers.'],
-      ['/finance/pledges', '🤝', 'Pledges', 'Member pledge commitments and payments.'],
-      ['/finance/receipts', '🧾', 'Receipts', 'Printable receipts and outstanding-pledge statements.'],
-      ['/finance/statements', '📄', 'Giving Statements', 'Per-member annual giving summaries.'],
-      ['/finance/expenses', '↘', 'Expenses', 'Record expense payments.'],
-      ['/finance/vouchers', '📋', 'Payment Vouchers', 'Auto-issued for every expense.'],
-      ['/finance/projects', '🏗', 'Projects', 'Fund-raising projects with targets.'],
-      ['/finance/budgets', '📊', 'Budgets', 'Budget vs. actual, computed from the ledger.'],
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const from = `${year}-${String(month).padStart(2, '0')}-01`;
+    const to = `${year}-${String(month).padStart(2, '0')}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`;
+
+    const [funds, monthIncome, monthExpenses, pledges, currentPeriod, budget, recentEntries] = await Promise.all([
+      db.fund.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+      ledger.budgetActual(db, churchId, { lineType: 'INCOME', from, to }),
+      ledger.budgetActual(db, churchId, { lineType: 'EXPENSE', from, to }),
+      db.pledge.aggregate({ where: { status: { in: ['PENDING', 'PARTIAL'] } }, _sum: { pledgedAmount: true, paidAmount: true }, _count: true }),
+      db.financialPeriod.findUnique({ where: { churchId_year_month: { churchId, year, month } } }),
+      db.financeBudget.findFirst({
+        where: { year, status: 'APPROVED', OR: [{ scope: 'ANNUAL' }, { scope: 'MONTHLY', month }] },
+        include: { lines: true },
+        orderBy: [{ scope: 'desc' }, { id: 'desc' }], // MONTHLY sorts after ANNUAL, so the more specific plan wins.
+      }),
+      db.journalEntry.findMany({
+        where: { status: { in: ['POSTED', 'REVERSED'] } },
+        orderBy: [{ entryDate: 'desc' }, { id: 'desc' }],
+        take: 6,
+        include: { lines: { select: { debit: true, credit: true } } },
+      }),
+    ]);
+
+    const fundBalances = await Promise.all(funds.map((fund) => ledger.fundBalance(db, churchId, fund.id)));
+    const cashPosition = fundBalances.reduce((sum, value) => sum + Number(value || 0), 0);
+    const outstandingPledges = Math.max(0, Number(pledges._sum.pledgedAmount || 0) - Number(pledges._sum.paidAmount || 0));
+    const budgetLines = budget ? budget.lines.map((line) => ({ ...line, budget })) : [];
+    const expenseBudgetLines = budgetLines.filter((line) => line.lineType === 'EXPENSE');
+    const expenseBudget = expenseBudgetLines.reduce((sum, line) => sum + Number(line.amount || 0), 0);
+    const expenseActuals = await Promise.all(expenseBudgetLines.map((line) => {
+      const window = ledger.budgetWindow(line.budget);
+      return ledger.budgetActual(db, churchId, { ...line, ...window });
+    }));
+    const budgetSpent = expenseActuals.reduce((sum, value) => sum + Number(value || 0), 0);
+    const budgetUsage = expenseBudget > 0 ? Math.round((budgetSpent / expenseBudget) * 100) : null;
+    const budgetTone = budgetUsage === null ? 'neutral' : budgetUsage > 100 ? 'danger' : budgetUsage >= 85 ? 'warning' : 'positive';
+    const monthNet = monthIncome - monthExpenses;
+
+    const alerts = [];
+    if (!funds.length) alerts.push(['warning', 'No funds configured', 'Create a fund before recording restricted or designated money.', '/finance/funds']);
+    if (!budget) alerts.push(['neutral', 'No approved budget for this period', 'Approve a budget to track spending against plan.', '/finance/budgets']);
+    if (budgetUsage !== null && budgetUsage > 100) alerts.push(['danger', 'Approved expense budget exceeded', `Actual spending is ${budgetUsage}% of budget.`, '/finance/budgets']);
+    else if (budgetUsage !== null && budgetUsage >= 85) alerts.push(['warning', 'Expense budget is nearing its limit', `Actual spending is ${budgetUsage}% of budget.`, '/finance/budgets']);
+    if (outstandingPledges > 0) alerts.push(['neutral', `${fmtMoney(outstandingPledges)} in outstanding pledges`, `${pledges._count} pledge${pledges._count === 1 ? '' : 's'} still require follow-up.`, '/finance/pledges']);
+    if (!currentPeriod || currentPeriod.status === 'OPEN') alerts.push(['neutral', 'Current financial period is open', 'Lock it after reconciliation and month-end review.', '/finance/periods']);
+
+    const groups = [
+      ['Money in', [
+        ['/finance/income', '↗', 'General income'], ['/finance/tithes', '✚', 'Tithes'],
+        ['/finance/special', '★', 'Special offerings'], ['/finance/day-borns', '☀', 'Day-born collections'],
+        ['/finance/services', '✝', 'Services'], ['/finance/harvests', '🌾', 'Harvests'], ['/finance/pledges', '◇', 'Pledges'],
+      ]],
+      ['Money out & controls', [
+        ['/finance/expenses', '↘', 'Expenses'], ['/finance/vouchers', '▣', 'Payment vouchers'],
+        ['/finance/funds', '◎', 'Funds'], ['/finance/projects', '◆', 'Projects'], ['/finance/budgets', '▥', 'Budgets'],
+        ['/finance/periods', '◷', 'Financial periods'],
+      ]],
+      ['Reports & records', [
+        ['/finance/receipts', '▤', 'Receipts'], ['/finance/statements', '▧', 'Giving statements'],
+      ]],
     ];
-    const body = `${pageHero('Finance', 'Funds, income, and expenses.')}
-      <div class="report-tiles">${tiles.map(([href, ico, name, desc]) =>
-        `<a class="report-tile" href="${href}"><div class="ico">${ico}</div><div><div class="name">${esc(name)}</div><div class="desc">${esc(desc)}</div></div></a>`).join('')}</div>`;
+    const recentRows = recentEntries.map((entry) => {
+      const amount = entry.lines.reduce((sum, line) => sum + Number(line.debit || 0), 0);
+      const source = String(entry.sourceType || 'OTHER').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+      return `<a class="finance-activity" href="/finance/journal/${entry.id}">
+        <span class="finance-activity-icon">${entry.status === 'REVERSED' ? '↶' : '✓'}</span>
+        <span><strong>${esc(entry.memo || source)}</strong><small>${esc(entry.entryDate.toISOString().slice(0, 10))} · ${esc(entry.entryNo)} · ${esc(source)}</small></span>
+        <strong class="finance-activity-amount">${fmtMoney(amount)}</strong>
+      </a>`;
+    }).join('');
+
+    const body = `${pageHero('Finance', 'A clear view of your church’s financial position and next actions.')}
+      <div class="finance-command">
+        <section class="finance-kpi-grid" aria-label="Financial overview">
+          <a class="finance-kpi" href="/finance/funds"><span>Fund balances</span><strong>${fmtMoney(cashPosition)}</strong><small>Across ${funds.length} active fund${funds.length === 1 ? '' : 's'}</small></a>
+          <a class="finance-kpi positive" href="/finance/income"><span>Income this month</span><strong>${fmtMoney(monthIncome)}</strong><small>${esc(from)} to ${esc(to)}</small></a>
+          <a class="finance-kpi ${monthNet < 0 ? 'danger' : 'positive'}" href="/finance/expenses"><span>Net movement</span><strong>${fmtMoney(monthNet)}</strong><small>${fmtMoney(monthExpenses)} spent this month</small></a>
+          <a class="finance-kpi ${budgetTone}" href="/finance/budgets"><span>Expense budget used</span><strong>${budgetUsage === null ? 'Not set' : `${budgetUsage}%`}</strong><small>${budgetUsage === null ? 'No approved budget' : `${fmtMoney(budgetSpent)} of ${fmtMoney(expenseBudget)}`}</small></a>
+          <a class="finance-kpi ${outstandingPledges > 0 ? 'warning' : 'positive'}" href="/finance/pledges"><span>Outstanding pledges</span><strong>${fmtMoney(outstandingPledges)}</strong><small>${pledges._count} open pledge${pledges._count === 1 ? '' : 's'}</small></a>
+        </section>
+
+        ${canWrite ? `<section class="finance-quick-actions" aria-label="Quick actions">
+          <div><p class="eyebrow">Quick actions</p><h2>Record today’s activity</h2></div>
+          <div class="finance-action-buttons">
+            <a class="btn" href="/finance/income">+ Record income</a>
+            <a class="btn secondary" href="/finance/expenses">+ Record expense</a>
+            <a class="btn ghost" href="/finance/pledges">Record pledge payment</a>
+          </div>
+        </section>` : ''}
+
+        <div class="finance-dashboard-grid">
+          <section class="card finance-attention">
+            <div class="card-head"><div><p class="eyebrow">Attention</p><h2>Financial checks</h2></div><span class="meta">${alerts.length} item${alerts.length === 1 ? '' : 's'}</span></div>
+            ${alerts.length ? `<div class="finance-alert-list">${alerts.map(([tone, title, detail, href]) =>
+              `<a class="finance-alert ${tone}" href="${href}"><span class="finance-alert-dot"></span><span><strong>${esc(title)}</strong><small>${esc(detail)}</small></span><span aria-hidden="true">→</span></a>`).join('')}</div>`
+              : '<div class="finance-all-clear"><span>✓</span><div><strong>Everything looks in order</strong><small>No immediate finance checks need attention.</small></div></div>'}
+          </section>
+          <section class="card finance-recent">
+            <div class="card-head"><div><p class="eyebrow">Ledger</p><h2>Recent activity</h2></div></div>
+            ${recentRows || '<div class="finance-empty"><strong>No ledger activity yet</strong><span>Recorded income and expenses will appear here.</span></div>'}
+          </section>
+        </div>
+
+        <section class="finance-module-directory">
+          <div class="finance-section-heading"><div><p class="eyebrow">Workspace</p><h2>Finance tools</h2></div><p>Open the detailed registers, controls, and reports.</p></div>
+          <div class="finance-module-groups">${groups.map(([label, items], index) => `<details ${index === 0 ? 'open' : ''}>
+            <summary><span>${esc(label)}</span><small>${items.length} tools</small></summary>
+            <div class="finance-module-links">${items.map(([href, icon, name]) =>
+              `<a href="${href}"><span class="finance-module-icon">${icon}</span><strong>${esc(name)}</strong><span aria-hidden="true">→</span></a>`).join('')}</div>
+          </details>`).join('')}</div>
+        </section>
+      </div>`;
     res.page({ title: 'Finance', active: '/finance', noHeader: true, body });
   }));
 
