@@ -42,6 +42,7 @@ function requireFundManager(req, res, next) {
 }
 function requireFinanceReportAccess(req, res, next) {
   const u = res.locals.user;
+  if (!u) return res.redirect('/login');
   if (u && (u.role === 'ADMIN' || (u.financeRole && u.financeRole !== 'NONE'))) return next();
   return res.status(403).send('Finance access required');
 }
