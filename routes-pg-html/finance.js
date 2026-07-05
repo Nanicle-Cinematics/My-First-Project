@@ -672,7 +672,7 @@ function register(app) {
     const expenseCats = reportGroup(expenseRows, 'category');
     const fundRows = await Promise.all(funds.filter((f) => !fundId || f.id === fundId).map(async (fund) => {
       const [balance, movement] = await Promise.all([ledger.fundBalance(db, churchId, fund.id), ledger.fundRaisedSpent(db, churchId, fund.id)]);
-      return [esc(fund.name), f.restricted ? 'Restricted' : 'Unrestricted', fmtMoney(movement.raised), fmtMoney(movement.spent), `<strong>${fmtMoney(balance)}</strong>`];
+      return [esc(fund.name), fund.restricted ? 'Restricted' : 'Unrestricted', fmtMoney(movement.raised), fmtMoney(movement.spent), `<strong>${fmtMoney(balance)}</strong>`];
     }));
     const givingRows = [
       ...tithes.map((r) => ({ member: `${r.member.firstName} ${r.member.lastName}`, category: 'Tithes', amount: r.amount })),
