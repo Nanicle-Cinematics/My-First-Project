@@ -171,6 +171,8 @@ test('users: create a teammate, change their role, reset their password', async 
 test('settings: update church name', async () => {
   const { client } = await signedInClient('html-settings-flow');
   const page = await client.getHtml('/settings');
+  assert.match(page.text, /Church logo/);
+  assert.match(page.text, /\/branding\/logo/);
   const csrf = extractCsrf(page.text);
   const updated = await client.postForm('/settings', { name: 'Renamed via Settings', _csrf: csrf });
   assert.strictEqual(updated.status, 302);

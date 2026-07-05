@@ -11,7 +11,7 @@
 // integration — see communications module's header).
 
 const asyncHandler = require('../lib/async-handler');
-const { esc } = require('../lib/format');
+const { esc, looksLikeImage } = require('../lib/format');
 const { pageHero, statsRow } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { PLAN_LIMITS, isPro } = require('../routes-pg/settings');
@@ -20,6 +20,36 @@ const { createTotpSecret, verifyTotp, createRecoveryCodes, consumeRecoveryCode }
 const { logSecurityEvent } = require('../lib/security-audit');
 const { db: rawDb } = require('../lib/tenant');
 const { exportTenantData } = require('../lib/tenant-export');
+const { csrfValid } = require('../lib/tenant-csrf');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+
+const LOGO_DIR = process.env.LOGO_DIR || path.join(process.env.PHOTO_DIR || path.join(__dirname, '..', 'photos'), 'church-logos');
+const DEFAULT_LOGO = path.join(__dirname, '..', 'public', 'logo.png');
+const LOGO_EXTENSIONS = ['png', 'jpg', 'webp', 'gif'];
+const LOGO_EXT_FROM_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+try { fs.mkdirSync(LOGO_DIR, { recursive: true }); } catch (_) { /* created by the mounted volume at runtime */ }
+const logoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = Object.hasOwn(LOGO_EXT_FROM_MIME, String(file.mimetype).toLowerCase());
+    cb(ok ? null : new Error('Only JPG, PNG, WebP or GIF images are allowed.'), ok);
+  },
+});
+function tenantLogoPath(churchId) {
+  for (const ext of LOGO_EXTENSIONS) {
+    const candidate = path.join(LOGO_DIR, `${churchId}.${ext}`);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+function deleteTenantLogo(churchId) {
+  for (const ext of LOGO_EXTENSIONS) {
+    try { fs.unlinkSync(path.join(LOGO_DIR, `${churchId}.${ext}`)); } catch (_) { /* no file with this extension */ }
+  }
+}
 
 function requireOwner(req, res, next) {
   if (!res.locals.user) return res.redirect('/login');
@@ -46,6 +76,12 @@ function mfaControls(user) {
 }
 
 function register(app) {
+  app.get('/branding/logo', (req, res) => {
+    const custom = res.locals.churchId ? tenantLogoPath(res.locals.churchId) : null;
+    res.set('Cache-Control', custom ? 'private, no-store' : 'public, max-age=86400');
+    res.sendFile(custom || DEFAULT_LOGO);
+  });
+
   app.get('/profile', requireAuth, (req, res) => {
     const user = res.locals.user;
     const body = `
@@ -84,6 +120,23 @@ function register(app) {
           <div class="actions"><button type="submit">Save changes</button></div>
         </form>
       </section>
+      <section class="card church-branding-card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Church logo</h2><span class="meta">${tenantLogoPath(church.id) ? 'Custom logo' : 'Default platform logo'}</span></div>
+        <div class="church-logo-settings">
+          <img src="/branding/logo?v=${church.updatedAt ? church.updatedAt.getTime() : Date.now()}" alt="${esc(church.name)} logo">
+          <div>
+            <p>Upload your church’s logo. It will replace the default logo throughout your workspace.</p>
+            <form method="post" action="/settings/logo" enctype="multipart/form-data" class="church-logo-form">
+              <input type="file" name="logo" accept="image/jpeg,image/png,image/webp,image/gif" required>
+              <button type="submit">${tenantLogoPath(church.id) ? 'Replace logo' : 'Upload logo'}</button>
+            </form>
+            ${tenantLogoPath(church.id) ? `<form method="post" action="/settings/logo/delete" onsubmit="return confirm('Remove your custom logo and restore the default?')">
+              <button class="link" type="submit">Restore default logo</button>
+            </form>` : ''}
+            <small class="muted-text">PNG, JPG, WebP or GIF · maximum 4 MB · square images work best.</small>
+          </div>
+        </div>
+      </section>
       <section class="card">
         <div class="card-head"><h2>Plan</h2><span class="meta">Contact us to change your plan</span></div>
         <dl class="stats">
@@ -110,6 +163,25 @@ function register(app) {
     if (!name) { flash(req, 'Church name is required.'); return res.redirect('/settings'); }
     await res.locals.db.church.update({ where: { id: res.locals.churchId }, data: { name } });
     flash(req, 'Settings saved.', 'success');
+    res.redirect('/settings');
+  }));
+
+  app.post('/settings/logo', requireOwner, logoUpload.single('logo'), asyncHandler(async (req, res) => {
+    if (!csrfValid(req)) return res.status(403).send('Security check failed. Refresh Settings and try again.');
+    if (!req.file || !looksLikeImage(req.file.buffer)) {
+      flash(req, 'That file does not look like a valid image.');
+      return res.redirect('/settings');
+    }
+    const ext = LOGO_EXT_FROM_MIME[String(req.file.mimetype).toLowerCase()] || 'png';
+    deleteTenantLogo(res.locals.churchId);
+    fs.writeFileSync(path.join(LOGO_DIR, `${res.locals.churchId}.${ext}`), req.file.buffer);
+    flash(req, 'Church logo updated.', 'success');
+    res.redirect('/settings');
+  }));
+
+  app.post('/settings/logo/delete', requireOwner, asyncHandler(async (req, res) => {
+    deleteTenantLogo(res.locals.churchId);
+    flash(req, 'Default church logo restored.', 'success');
     res.redirect('/settings');
   }));
 

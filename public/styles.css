@@ -8217,3 +8217,41 @@ code.break-all { word-break: break-all; }
   .finance-report-bars i { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .finance-report-footer { position: running(report-footer); }
 }
+
+/* Tenant branding controls */
+.church-logo-settings {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  align-items: center;
+  gap: 1.25rem;
+}
+.church-logo-settings > img {
+  width: 150px;
+  height: 150px;
+  object-fit: contain;
+  padding: .5rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.church-logo-settings p { margin-top: 0; }
+.church-logo-form {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  margin: .75rem 0;
+  flex-wrap: wrap;
+}
+.church-logo-form input[type="file"] {
+  max-width: 100%;
+  padding: .55rem;
+  background: var(--soft);
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+}
+.brand-logo-img, .brand-mini-logo, .auth-logo { object-fit: contain; }
+@media (max-width: 620px) {
+  .church-logo-settings { grid-template-columns: 1fr; }
+  .church-logo-settings > img { width: 120px; height: 120px; }
+}
