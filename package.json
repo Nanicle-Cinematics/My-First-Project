@@ -2,7 +2,7 @@
   "name": "church-management",
   "version": "1.4.0",
   "private": true,
-  "description": "Church management web UI backed by SQLite.",
+  "description": "Multi-tenant church management SaaS backed by PostgreSQL and Prisma.",
   "main": "server.js",
   "engines": {
     "node": ">=20"
