@@ -153,6 +153,13 @@ function register(app) {
 
   app.get('/reports/income', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
+    // Named per-donor amounts — same sensitivity as finance.js's
+    // /finance/reports/giving, which requires financeRole access. This older
+    // report predates that gate and must enforce the identical check.
+    const u = res.locals.user;
+    if (!(u.role === 'ADMIN' || (u.financeRole && u.financeRole !== 'NONE'))) {
+      return res.status(403).send('Finance access required');
+    }
     const churchId = res.locals.churchId;
     const { start, end } = defaultRange(req);
 

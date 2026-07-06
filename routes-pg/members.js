@@ -85,11 +85,23 @@ function parseMemberBody(b) {
   };
 }
 
+// createMany only stamps churchId onto each new row — it does not verify that
+// a client-supplied orgId belongs to this tenant, so callers must validate
+// orgIds through the scoped client (see validOrgIds below) before calling
+// this, or a cross-tenant orgId in the request body would silently link the
+// member into another church's organization roster.
 async function saveMemberOrgs(db, memberId, orgIds) {
   await db.organizationMembership.deleteMany({ where: { memberId } });
   if (orgIds.length) {
     await db.organizationMembership.createMany({ data: orgIds.map((orgId) => ({ orgId, memberId })) });
   }
+}
+
+/** Returns true only if every id in orgIds resolves to an organization in this tenant. */
+async function validOrgIds(db, orgIds) {
+  if (!orgIds.length) return true;
+  const found = await db.organization.count({ where: { id: { in: orgIds } } });
+  return found === new Set(orgIds).size;
 }
 
 function register(app) {
@@ -135,6 +147,8 @@ function register(app) {
     const b = req.body || {};
     const err = memberErrors(b);
     if (err) return res.status(400).json({ error: err });
+    const orgIds = Array.isArray(b.orgIds) ? b.orgIds.map(Number).filter(Boolean) : [];
+    if (!(await validOrgIds(db, orgIds))) return res.status(400).json({ error: 'One or more organizations were not found' });
     const externalId = await nextMemberId(db);
     const member = await db.member.create({
       data: {
@@ -143,7 +157,6 @@ function register(app) {
         unsubscribeToken: require('crypto').randomBytes(16).toString('hex'),
       },
     });
-    const orgIds = Array.isArray(b.orgIds) ? b.orgIds.map(Number).filter(Boolean) : [];
     if (orgIds.length) await saveMemberOrgs(db, member.id, orgIds);
     res.status(201).json(member);
   }));
@@ -184,9 +197,10 @@ function register(app) {
     const b = req.body || {};
     const err = memberErrors(b);
     if (err) return res.status(400).json({ error: err });
+    const orgIds = Array.isArray(b.orgIds) ? b.orgIds.map(Number).filter(Boolean) : [];
+    if (!(await validOrgIds(db, orgIds))) return res.status(400).json({ error: 'One or more organizations were not found' });
     try {
       const member = await db.member.update({ where: { id }, data: parseMemberBody(b) });
-      const orgIds = Array.isArray(b.orgIds) ? b.orgIds.map(Number).filter(Boolean) : [];
       await saveMemberOrgs(db, id, orgIds);
       res.json(member);
     } catch (e) {

@@ -64,6 +64,36 @@ async function defaultFundId(db) {
   return fund ? fund.id : null;
 }
 
+// tenantDb's Prisma extension only stamps churchId onto a create's own row —
+// it never validates a client-supplied foreign-key id (fundId, memberId,
+// harvestId, projectId, ...) embedded in that row's data. Every such id must
+// be checked explicitly through the scoped client first, or a cross-tenant
+// id in the request body would silently attach this church's records to
+// another church's fund/member/harvest/project.
+// Returns { ok:false } if bodyFundId was supplied but doesn't resolve to a
+// fund in this tenant; otherwise { ok:true, fundId } (null if none supplied).
+async function checkFundId(db, bodyFundId) {
+  if (!bodyFundId) return { ok: true, fundId: null };
+  const fund = await db.fund.findUnique({ where: { id: Number(bodyFundId) } });
+  return fund ? { ok: true, fundId: fund.id } : { ok: false, fundId: null };
+}
+
+/** Same tenant-validation as checkFundId, for the Expense.projectId reference. */
+async function checkProjectId(db, bodyProjectId) {
+  if (!bodyProjectId) return { ok: true, projectId: null };
+  const project = await db.financeProject.findUnique({ where: { id: Number(bodyProjectId) } });
+  return project ? { ok: true, projectId: project.id } : { ok: false, projectId: null };
+}
+
+/** Same tenant-validation as checkFundId, for Pledge.memberId/harvestId (both required, not optional). */
+async function checkPledgeRefs(db, bodyMemberId, bodyHarvestId) {
+  const [member, harvest] = await Promise.all([
+    db.member.findUnique({ where: { id: Number(bodyMemberId) } }),
+    db.harvest.findUnique({ where: { id: Number(bodyHarvestId) } }),
+  ]);
+  return { ok: Boolean(member && harvest) };
+}
+
 async function nextReceiptNo(db, dateStr) {
   // findFirst (not findUnique) — the scoped client injects churchId into the
   // where clause regardless, and FinanceSetting's only unique key IS
@@ -176,7 +206,9 @@ function register(app) {
     const member = b.memberId ? await db.member.findUnique({ where: { id: Number(b.memberId) } }) : null;
     const receivedFrom = (member && `${member.firstName} ${member.lastName}`) || String(b.receivedFrom || '').trim() || 'Anonymous';
     const category = b.category || 'Generic Income';
-    const fundId = b.fundId ? Number(b.fundId) : await defaultFundId(db);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) return res.status(400).json({ error: 'Fund not found' });
+    const fundId = fundCheck.fundId ?? await defaultFundId(db);
 
     const income = await db.incomeRecord.create({
       data: {
@@ -259,7 +291,9 @@ function register(app) {
     if (!isMoneyPositive(b.amount)) return res.status(400).json({ error: 'Amount must be greater than 0.' });
 
     const dayBorn = String(b.dayBorn).toUpperCase();
-    const fundId = b.fundId ? Number(b.fundId) : await defaultFundId(db);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) return res.status(400).json({ error: 'Fund not found' });
+    const fundId = fundCheck.fundId ?? await defaultFundId(db);
     const receiptNo = await nextReceiptNo(db, b.collectionDate);
 
     const row = await db.dayBornCollection.create({
@@ -549,6 +583,9 @@ function register(app) {
     if (!memberId || !harvestId || !isMoneyPositive(pledged) || !isValidDate(b.pledgeDate)) {
       return res.status(400).json({ error: 'memberId, harvestId, a valid pledgeDate, and pledgedAmount > 0 are required' });
     }
+    if (!(await checkPledgeRefs(db, memberId, harvestId)).ok) {
+      return res.status(400).json({ error: 'Member or harvest not found' });
+    }
     const pledge = await db.pledge.create({
       data: { memberId, harvestId, pledgedAmount: pledged, paidAmount: paid, pledgeDate: new Date(b.pledgeDate), status: pledgeStatusFor(pledged, paid), notes: b.notes || null },
     });
@@ -561,6 +598,9 @@ function register(app) {
     const b = req.body || {};
     const pledged = Number(b.pledgedAmount);
     const paid = Number(b.paidAmount || 0);
+    if (!(await checkPledgeRefs(db, b.memberId, b.harvestId)).ok) {
+      return res.status(400).json({ error: 'Member or harvest not found' });
+    }
     try {
       const pledge = await db.pledge.update({
         where: { id },
@@ -606,7 +646,11 @@ function register(app) {
     if (!isMoneyPositive(b.amount)) return res.status(400).json({ error: 'Amount must be greater than 0.' });
     const cat = b.expenseCatId ? await db.expenseCategory.findUnique({ where: { id: Number(b.expenseCatId) } }) : null;
     const categoryName = (cat && cat.categoryName) || b.category || 'Other';
-    const fundId = b.fundId ? Number(b.fundId) : await defaultFundId(db);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) return res.status(400).json({ error: 'Fund not found' });
+    const fundId = fundCheck.fundId ?? await defaultFundId(db);
+    const projectCheck = await checkProjectId(db, b.projectId);
+    if (!projectCheck.ok) return res.status(400).json({ error: 'Project not found' });
 
     const expense = await db.expense.create({
       data: {
@@ -619,7 +663,7 @@ function register(app) {
         paymentMethod: b.paymentMethod || null,
         referenceNumber: b.referenceNumber || null,
         fundId,
-        projectId: b.projectId ? Number(b.projectId) : null,
+        projectId: projectCheck.projectId,
         approvalStatus: 'PAID',
         paidAt: new Date(),
       },
@@ -670,10 +714,12 @@ function register(app) {
     const name = String(b.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
     if (!isMoneyNonNeg(b.targetAmount || 0)) return res.status(400).json({ error: 'targetAmount must be 0 or more' });
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) return res.status(400).json({ error: 'Fund not found' });
     try {
       const project = await db.financeProject.create({
         data: {
-          name, description: b.description || null, fundId: b.fundId ? Number(b.fundId) : null,
+          name, description: b.description || null, fundId: fundCheck.fundId,
           targetAmount: Number(b.targetAmount) || 0, responsibleOfficer: b.responsibleOfficer || null,
           startDate: b.startDate ? new Date(b.startDate) : null, endDate: b.endDate ? new Date(b.endDate) : null,
           status: PROJECT_STATUSES.includes(b.status) ? b.status : 'ACTIVE',
@@ -706,11 +752,13 @@ function register(app) {
     const id = Number(req.params.id);
     const b = req.body || {};
     if (!isMoneyNonNeg(b.targetAmount || 0)) return res.status(400).json({ error: 'targetAmount must be 0 or more' });
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) return res.status(400).json({ error: 'Fund not found' });
     try {
       const project = await db.financeProject.update({
         where: { id },
         data: {
-          name: String(b.name || '').trim(), description: b.description || null, fundId: b.fundId ? Number(b.fundId) : null,
+          name: String(b.name || '').trim(), description: b.description || null, fundId: fundCheck.fundId,
           targetAmount: Number(b.targetAmount) || 0, responsibleOfficer: b.responsibleOfficer || null,
           startDate: b.startDate ? new Date(b.startDate) : null, endDate: b.endDate ? new Date(b.endDate) : null,
           status: PROJECT_STATUSES.includes(b.status) ? b.status : 'ACTIVE',

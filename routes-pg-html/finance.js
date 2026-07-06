@@ -71,6 +71,35 @@ async function defaultFundId(db) {
   const fund = await db.fund.findFirst({ where: { active: true }, orderBy: { id: 'asc' } });
   return fund ? fund.id : null;
 }
+
+// tenantDb's Prisma extension only stamps churchId onto a create's own row —
+// it never validates a client-supplied foreign-key id (fundId, memberId,
+// harvestId, projectId, ...) embedded in that row's data. Every such id must
+// be checked explicitly through the scoped client first, or a cross-tenant
+// id in the request body would silently attach this church's records to
+// another church's fund/member/harvest/project.
+async function checkFundId(db, bodyFundId) {
+  if (!bodyFundId) return { ok: true, fundId: null };
+  const fund = await db.fund.findUnique({ where: { id: Number(bodyFundId) } });
+  return fund ? { ok: true, fundId: fund.id } : { ok: false, fundId: null };
+}
+
+/** Same tenant-validation as checkFundId, for the Expense.projectId reference. */
+async function checkProjectId(db, bodyProjectId) {
+  if (!bodyProjectId) return { ok: true, projectId: null };
+  const project = await db.financeProject.findUnique({ where: { id: Number(bodyProjectId) } });
+  return project ? { ok: true, projectId: project.id } : { ok: false, projectId: null };
+}
+
+/** Same tenant-validation as checkFundId, for Pledge.memberId/harvestId (both required, not optional). */
+async function checkPledgeRefs(db, bodyMemberId, bodyHarvestId) {
+  const [member, harvest] = await Promise.all([
+    db.member.findUnique({ where: { id: Number(bodyMemberId) } }),
+    db.harvest.findUnique({ where: { id: Number(bodyHarvestId) } }),
+  ]);
+  return { ok: Boolean(member && harvest) };
+}
+
 async function fundOptions(db, selected, includeBlank = true) {
   const funds = await db.fund.findMany({ where: { active: true }, orderBy: { name: 'asc' } });
   const options = includeBlank ? ['<option value="">General fund</option>'] : [];
@@ -894,7 +923,9 @@ function register(app) {
     const receivedFrom = (member && `${member.firstName} ${member.lastName}`) || String(b.receivedFrom || '').trim() || 'Anonymous';
     const category = b.category || 'other';
     const label = incomeCategoryLabel(category);
-    const fundId = b.fundId ? Number(b.fundId) : await defaultFundId(db);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) { flash(req, 'Fund not found.'); return res.redirect('/finance/income'); }
+    const fundId = fundCheck.fundId ?? await defaultFundId(db);
 
     const income = await db.incomeRecord.create({
       data: {
@@ -1011,7 +1042,9 @@ function register(app) {
     if (!DAY_BORN_VALUES.includes(dayBorn)) { flash(req, 'Pick a valid day-born.'); return res.redirect('/finance/day-borns'); }
     if (!isMoneyPositive(b.amount)) { flash(req, 'Amount must be greater than 0.'); return res.redirect('/finance/day-borns'); }
 
-    const fundId = b.fundId ? Number(b.fundId) : await defaultFundId(db);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) { flash(req, 'Fund not found.'); return res.redirect('/finance/day-borns'); }
+    const fundId = fundCheck.fundId ?? await defaultFundId(db);
     const receiptNo = await nextReceiptNo(db, b.collectionDate);
     const row = await db.dayBornCollection.create({
       data: {
@@ -1613,6 +1646,10 @@ function register(app) {
       flash(req, 'Pick a member, harvest, a valid pledge date, and a pledged amount greater than 0.');
       return res.redirect('/finance/pledges');
     }
+    if (!(await checkPledgeRefs(db, memberId, harvestId)).ok) {
+      flash(req, 'Member or harvest not found.');
+      return res.redirect('/finance/pledges');
+    }
     await db.pledge.create({
       data: { memberId, harvestId, pledgedAmount: pledged, paidAmount: paid, pledgeDate: new Date(b.pledgeDate), status: pledgeStatusFor(pledged, paid), notes: b.notes || null },
     });
@@ -1657,6 +1694,10 @@ function register(app) {
     const b = req.body || {};
     const pledged = Number(b.pledgedAmount);
     const paid = Number(b.paidAmount || 0);
+    if (!(await checkPledgeRefs(db, b.memberId, b.harvestId)).ok) {
+      flash(req, 'Member or harvest not found.');
+      return res.redirect('/finance/pledges');
+    }
     try {
       await db.pledge.update({
         where: { id },
@@ -2035,10 +2076,12 @@ function register(app) {
     const name = String(b.name || '').trim();
     if (!name) { flash(req, 'Enter a project name.'); return res.redirect('/finance/projects'); }
     if (!isMoneyNonNeg(b.targetAmount || 0)) { flash(req, 'Target amount must be 0 or more.'); return res.redirect('/finance/projects'); }
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) { flash(req, 'Fund not found.'); return res.redirect('/finance/projects'); }
     try {
       await db.financeProject.create({
         data: {
-          name, description: b.description || null, fundId: b.fundId ? Number(b.fundId) : null,
+          name, description: b.description || null, fundId: fundCheck.fundId,
           targetAmount: Number(b.targetAmount) || 0, responsibleOfficer: b.responsibleOfficer || null,
           startDate: b.startDate ? new Date(b.startDate) : null, endDate: b.endDate ? new Date(b.endDate) : null,
           status: PROJECT_STATUSES.includes(b.status) ? b.status : 'ACTIVE',
@@ -2114,11 +2157,13 @@ function register(app) {
     const name = String(b.name || '').trim();
     if (!name) { flash(req, 'Enter a project name.'); return res.redirect(`/finance/projects/${id}/edit`); }
     if (!isMoneyNonNeg(b.targetAmount || 0)) { flash(req, 'Target amount must be 0 or more.'); return res.redirect(`/finance/projects/${id}/edit`); }
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) { flash(req, 'Fund not found.'); return res.redirect(`/finance/projects/${id}/edit`); }
     try {
       await db.financeProject.update({
         where: { id },
         data: {
-          name, description: b.description || null, fundId: b.fundId ? Number(b.fundId) : null,
+          name, description: b.description || null, fundId: fundCheck.fundId,
           targetAmount: Number(b.targetAmount) || 0, responsibleOfficer: b.responsibleOfficer || null,
           startDate: b.startDate ? new Date(b.startDate) : null, endDate: b.endDate ? new Date(b.endDate) : null,
           status: PROJECT_STATUSES.includes(b.status) ? b.status : 'ACTIVE',
@@ -2345,13 +2390,17 @@ function register(app) {
     if (!isMoneyPositive(b.amount)) { flash(req, 'Amount must be greater than 0.'); return res.redirect('/finance/expenses'); }
     const cat = b.expenseCatId ? await db.expenseCategory.findUnique({ where: { id: Number(b.expenseCatId) } }) : null;
     const categoryName = (cat && cat.categoryName) || b.category || 'Other';
-    const fundId = b.fundId ? Number(b.fundId) : await defaultFundId(db);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!fundCheck.ok) { flash(req, 'Fund not found.'); return res.redirect('/finance/expenses'); }
+    const fundId = fundCheck.fundId ?? await defaultFundId(db);
+    const projectCheck = await checkProjectId(db, b.projectId);
+    if (!projectCheck.ok) { flash(req, 'Project not found.'); return res.redirect('/finance/expenses'); }
 
     const expense = await db.expense.create({
       data: {
         expenseCatId: cat ? cat.id : null, category: categoryName, amount: Number(b.amount), spentOn: new Date(b.spentOn),
         description: b.description || null, paidTo: b.paidTo || null, paymentMethod: b.paymentMethod || null,
-        referenceNumber: b.referenceNumber || null, fundId, projectId: b.projectId ? Number(b.projectId) : null,
+        referenceNumber: b.referenceNumber || null, fundId, projectId: projectCheck.projectId,
         approvalStatus: 'PAID', paidAt: new Date(),
       },
     });
