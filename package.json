@@ -13,12 +13,13 @@
     "check:raw-sql-tenant-scoping": "node scripts/check-raw-sql-tenant-scoping.js",
     "build-db": "bash build.sh",
     "migrate-live-db": "node scripts/migrate-live-db.js",
-    "deploy:dry-run": "node scripts/deploy-dry-run.js"
-    ,"test:load": "node scripts/load-smoke.js"
-    ,"test:security-smoke": "node scripts/security-smoke.js"
+    "deploy:dry-run": "node scripts/deploy-dry-run.js",
+    "test:load": "node scripts/load-smoke.js",
+    "test:security-smoke": "node scripts/security-smoke.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@sentry/node": "^10.63.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.3.0",
     "better-sqlite3-session-store": "^0.1.0",

@@ -17,6 +17,8 @@
 // (fly.toml, Dockerfile) already point at this file, so no deploy-config
 // changes were needed for this cutover.
 
+require('./lib/instrument');
+
 if (!process.env.SESSION_SECRET) {
   console.warn('SESSION_SECRET not set — generating an ephemeral one (logins will be lost on restart).');
 }
