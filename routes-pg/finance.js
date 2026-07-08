@@ -6,9 +6,10 @@
 // engine's correctness first.
 //
 // SCOPE: chart of accounts (seeded at signup, Phase 1), funds CRUD, generic
-// income recording + reversal-on-delete, expense recording (simplified to
-// always-PAID — the DRAFT/SUBMITTED/APPROVED workflow is deferred), journal
-// entry detail + manual reversal, fund balance/raised/spent, financial
+// income recording + reversal-on-delete, expense recording (SUBMITTED on
+// creation, posted to the ledger and marked PAID only once a fund manager
+// other than the recorder approves it — see /finance/expenses/:id/approve),
+// journal entry detail + manual reversal, fund balance/raised/spent, financial
 // period locking, (Phase 9d) tithes/special-offerings/standalone day-born
 // collections, (Phase 9e) services/harvests with the shared DayBornSplit
 // table, (Phase 9f) pledges/pledge-payments, and (Phase 9g — the LAST
@@ -27,6 +28,7 @@
 const asyncHandler = require('../lib/async-handler');
 const ledger = require('../lib/ledger-pg');
 const { amountInWords } = require('../lib/money');
+const { logActivity } = require('../lib/tenant-activity');
 
 function requireFinanceWrite(req, res, next) {
   const u = res.locals.user;
@@ -45,6 +47,16 @@ function requireFinanceReportAccess(req, res, next) {
   if (!u) return res.status(401).json({ error: 'not logged in' });
   if (u.role === 'ADMIN' || (u.financeRole && u.financeRole !== 'NONE')) return next();
   return res.status(403).json({ error: 'Finance access required' });
+}
+
+// Reopening a closed accounting period is more sensitive than closing one —
+// it allows backdated postings into a period that was already reviewed and
+// signed off. Deliberately narrower than requireFundManager (which TREASURER
+// also passes): only the church owner should be able to do this.
+function requirePeriodReopenAccess(req, res, next) {
+  const u = res.locals.user;
+  if (u && u.role === 'ADMIN') return next();
+  return res.status(403).json({ error: 'Only an admin can reopen a closed period' });
 }
 
 function requireAuth(req, res, next) {
@@ -676,10 +688,10 @@ function register(app) {
     res.status(201).json(updated);
   }));
 
-  // --- Expenses (simplified to always-PAID; approval workflow deferred) ---
+  // --- Expenses: SUBMITTED on creation, posted to the ledger only once a
+  // fund manager other than the recorder approves (maker-checker). ---
   app.post('/api/finance/expenses', requireFinanceWrite, asyncHandler(async (req, res) => {
     const db = res.locals.db;
-    const churchId = res.locals.churchId;
     const b = req.body || {};
     if (!isValidDate(b.spentOn)) return res.status(400).json({ error: 'Enter a valid date.' });
     if (!isMoneyPositive(b.amount)) return res.status(400).json({ error: 'Amount must be greater than 0.' });
@@ -703,24 +715,53 @@ function register(app) {
         referenceNumber: b.referenceNumber || null,
         fundId,
         projectId: projectCheck.projectId,
-        approvalStatus: 'PAID',
-        paidAt: new Date(),
+        approvalStatus: 'SUBMITTED',
+        submittedAt: new Date(),
+        recordedBy: res.locals.user.id,
       },
     });
+    res.status(201).json(expense);
+  }));
+
+  app.post('/api/finance/expenses/:id/approve', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const id = Number(req.params.id);
+    const expense = await db.expense.findUnique({ where: { id } });
+    if (!expense) return res.status(404).json({ error: 'Not found' });
+    if (expense.approvalStatus !== 'SUBMITTED') return res.status(409).json({ error: 'This expense is not awaiting approval' });
+    if (expense.recordedBy === res.locals.user.id) return res.status(403).json({ error: 'You cannot approve an expense you recorded yourself' });
 
     const entryId = await ledger.postExpensePayment(db, churchId, {
-      date: b.spentOn,
-      amount: Number(b.amount),
-      expenseAccount: ledger.expenseAccountFor(categoryName),
-      category: categoryName,
-      fundId,
+      date: expense.spentOn.toISOString().slice(0, 10),
+      amount: Number(expense.amount),
+      expenseAccount: ledger.expenseAccountFor(expense.category),
+      category: expense.category,
+      fundId: expense.fundId,
       sourceId: expense.id,
       createdBy: res.locals.user.id,
-      memo: b.description || categoryName,
+      memo: expense.description || expense.category,
     });
-    let updated = await db.expense.update({ where: { id: expense.id }, data: { journalEntryId: entryId } });
+    let updated = await db.expense.update({
+      where: { id },
+      data: { approvalStatus: 'PAID', approvedBy: res.locals.user.id, approvedAt: new Date(), paidAt: new Date(), journalEntryId: entryId },
+    });
     updated = await syncExpenseVoucher(db, updated, res.locals.user.id);
-    res.status(201).json(updated);
+    res.json(updated);
+  }));
+
+  app.post('/api/finance/expenses/:id/reject', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const expense = await db.expense.findUnique({ where: { id } });
+    if (!expense) return res.status(404).json({ error: 'Not found' });
+    if (expense.approvalStatus !== 'SUBMITTED') return res.status(409).json({ error: 'This expense is not awaiting approval' });
+
+    const updated = await db.expense.update({
+      where: { id },
+      data: { approvalStatus: 'REJECTED', rejectedAt: new Date(), approvalNote: req.body.note || null },
+    });
+    res.json(updated);
   }));
 
   // --- Payment vouchers (read-only API — vouchers are never independently created) ---
@@ -779,7 +820,7 @@ function register(app) {
     if (!project) return res.status(404).json({ error: 'Not found' });
     const [raisedSpent, expenseTotal] = await Promise.all([
       project.fundId ? ledger.fundRaisedSpent(db, churchId, project.fundId) : Promise.resolve({ raised: 0, spent: 0 }),
-      project.fundId ? Promise.resolve(0) : db.expense.aggregate({ where: { projectId: id }, _sum: { amount: true } }).then((r) => r._sum.amount || 0),
+      project.fundId ? Promise.resolve(0) : db.expense.aggregate({ where: { projectId: id, approvalStatus: 'PAID' }, _sum: { amount: true } }).then((r) => r._sum.amount || 0),
     ]);
     const spent = project.fundId ? raisedSpent.spent : expenseTotal;
     const raised = project.fundId ? raisedSpent.raised : 0;
@@ -944,21 +985,31 @@ function register(app) {
   app.post('/api/finance/periods/lock', requireFundManager, asyncHandler(async (req, res) => {
     const { year, month } = req.body || {};
     if (!Number.isInteger(year) || !Number.isInteger(month)) return res.status(400).json({ error: 'year and month are required integers' });
-    const period = await res.locals.db.financialPeriod.upsert({
+    const db = res.locals.db;
+    const period = await db.financialPeriod.upsert({
       where: { churchId_year_month: { churchId: res.locals.churchId, year, month } },
       update: { status: 'LOCKED', closedAt: new Date(), closedBy: res.locals.user.id },
       create: { year, month, status: 'LOCKED', closedAt: new Date(), closedBy: res.locals.user.id },
     });
+    await logActivity(db, 'period_locked', `Financial period ${year}-${month} locked`, '/finance/periods', res.locals.user.id);
     res.json(period);
   }));
 
-  app.post('/api/finance/periods/unlock', requireFundManager, asyncHandler(async (req, res) => {
-    const { year, month, reason } = req.body || {};
+  // Reopening a closed period is more sensitive than closing one — it allows
+  // backdated postings into a period that was already reviewed and signed
+  // off, so this requires admin (requirePeriodReopenAccess, not
+  // requireFundManager), a mandatory reason, and its own audit-log entry.
+  app.post('/api/finance/periods/unlock', requirePeriodReopenAccess, asyncHandler(async (req, res) => {
+    const { year, month } = req.body || {};
+    const reason = String(req.body?.reason || '').trim();
+    if (!reason) return res.status(400).json({ error: 'reason is required to reopen a period' });
+    const db = res.locals.db;
     try {
-      const period = await res.locals.db.financialPeriod.update({
+      const period = await db.financialPeriod.update({
         where: { churchId_year_month: { churchId: res.locals.churchId, year, month } },
-        data: { status: 'OPEN', reopenReason: reason || null },
+        data: { status: 'OPEN', reopenReason: reason, reopenedAt: new Date(), reopenedBy: res.locals.user.id },
       });
+      await logActivity(db, 'period_reopened', `Financial period ${year}-${month} reopened: ${reason}`, '/finance/periods', res.locals.user.id);
       res.json(period);
     } catch (e) {
       if (e.code === 'P2025') return res.status(404).json({ error: 'Period not found' });

@@ -27,6 +27,7 @@ test.after(async () => {
   server.close();
   if (createdChurchIds.length) {
     const where = { churchId: { in: createdChurchIds } };
+    await db.activityLog.deleteMany({ where });
     await db.financeReceipt.deleteMany({ where });
     await db.incomeRecord.deleteMany({ where });
     await db.expense.deleteMany({ where });
@@ -116,8 +117,8 @@ test('record income: creates income record + journal entry + auto-numbered recei
   assert.strictEqual(balance.body.raised, 250);
 });
 
-test('record expense: creates expense + journal entry, reduces fund balance', async () => {
-  const { client } = await newSignedInChurch('fin-expense');
+test('record expense: submitted (not posted) until a different fund manager approves it', async () => {
+  const { client, churchId } = await newSignedInChurch('fin-expense');
   const fund = await client.post('/api/finance/funds', { name: 'General', fundType: 'GENERAL' });
   await client.post('/api/finance/income', { transactionDate: '2026-06-01', amount: 500, category: 'Donation', fundId: fund.body.id });
 
@@ -125,11 +126,43 @@ test('record expense: creates expense + journal entry, reduces fund balance', as
     spentOn: '2026-06-05', amount: 120, category: 'Utilities', fundId: fund.body.id, description: 'Electricity bill',
   });
   assert.strictEqual(expense.status, 201);
-  assert.ok(expense.body.journalEntryId);
+  assert.strictEqual(expense.body.approvalStatus, 'SUBMITTED');
+  assert.ok(!expense.body.journalEntryId, 'must not touch the ledger until approved');
+
+  const balanceBefore = await client.get(`/api/finance/funds/${fund.body.id}/balance`);
+  assert.strictEqual(balanceBefore.body.balance, 500, 'a submitted-but-unapproved expense must not move the fund balance');
+
+  // The person who recorded it cannot approve their own expense.
+  const selfApprove = await client.post(`/api/finance/expenses/${expense.body.id}/approve`, {});
+  assert.strictEqual(selfApprove.status, 403);
+
+  const treasurer = await addUser(churchId, 'VIEWER', 'TREASURER');
+  const approved = await treasurer.post(`/api/finance/expenses/${expense.body.id}/approve`, {});
+  assert.strictEqual(approved.status, 200);
+  assert.strictEqual(approved.body.approvalStatus, 'PAID');
+  assert.ok(approved.body.journalEntryId);
 
   const balance = await client.get(`/api/finance/funds/${fund.body.id}/balance`);
   assert.strictEqual(balance.body.balance, 380);
   assert.strictEqual(balance.body.spent, 120);
+});
+
+test('expense approval: rejecting leaves the fund balance untouched', async () => {
+  const { client, churchId } = await newSignedInChurch('fin-expense-reject');
+  const fund = await client.post('/api/finance/funds', { name: 'General', fundType: 'GENERAL' });
+  await client.post('/api/finance/income', { transactionDate: '2026-06-01', amount: 200, category: 'Donation', fundId: fund.body.id });
+  const expense = await client.post('/api/finance/expenses', { spentOn: '2026-06-05', amount: 50, category: 'Utilities', fundId: fund.body.id, description: 'Water bill' });
+
+  const treasurer = await addUser(churchId, 'VIEWER', 'TREASURER');
+  const rejected = await treasurer.post(`/api/finance/expenses/${expense.body.id}/reject`, { note: 'Missing receipt' });
+  assert.strictEqual(rejected.status, 200);
+  assert.strictEqual(rejected.body.approvalStatus, 'REJECTED');
+
+  const balance = await client.get(`/api/finance/funds/${fund.body.id}/balance`);
+  assert.strictEqual(balance.body.balance, 200, 'a rejected expense must never have touched the ledger');
+
+  const reapprove = await treasurer.post(`/api/finance/expenses/${expense.body.id}/approve`, {});
+  assert.strictEqual(reapprove.status, 409, 'a rejected expense cannot later be approved');
 });
 
 test('deleting income reverses its journal entry and voids the receipt, netting the fund balance back', async () => {

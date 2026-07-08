@@ -4,9 +4,10 @@
 // is the bare-path HTML surface).
 //
 // SCOPE matches routes-pg/finance.js: chart of accounts (read-only), funds
-// CRUD, generic income record + reversal, expense record (simplified
-// always-PAID, no approval workflow), journal entry detail + manual
-// reversal, financial period lock/unlock, (Phase 9d) tithes/special
+// CRUD, generic income record + reversal, expense record (submitted, then
+// approved-and-paid by a fund manager other than the recorder), journal
+// entry detail + manual reversal, financial period lock/unlock (unlock is
+// admin-only, with a mandatory reason), (Phase 9d) tithes/special
 // offerings/standalone day-born collections with CSV exports (a NEW
 // convention — no CSV export existed anywhere in the new stack before
 // this; see the small csvEscape/sendCsv helpers below, copied from the
@@ -45,6 +46,15 @@ function requireFinanceReportAccess(req, res, next) {
   if (!u) return res.redirect('/login');
   if (u && (u.role === 'ADMIN' || (u.financeRole && u.financeRole !== 'NONE'))) return next();
   return res.status(403).send('Finance access required');
+}
+// Reopening a closed accounting period is more sensitive than closing one —
+// it allows backdated postings into a period that was already reviewed and
+// signed off. Deliberately narrower than requireFundManager (which TREASURER
+// also passes): only the church owner should be able to do this.
+function requirePeriodReopenAccess(req, res, next) {
+  const u = res.locals.user;
+  if (u && u.role === 'ADMIN') return next();
+  return res.status(403).send('Only an admin can reopen a closed period');
 }
 
 const INCOME_CATEGORIES = [
@@ -200,7 +210,7 @@ async function projectFinanceRow(db, churchId, project) {
     const rs = await ledger.fundRaisedSpent(db, churchId, project.fundId);
     raised = rs.raised; spent = rs.spent;
   } else {
-    const agg = await db.expense.aggregate({ where: { projectId: project.id }, _sum: { amount: true } });
+    const agg = await db.expense.aggregate({ where: { projectId: project.id, approvalStatus: 'PAID' }, _sum: { amount: true } });
     spent = agg._sum.amount || 0;
   }
   const pct = project.targetAmount > 0 ? Math.min(100, Math.round((raised / project.targetAmount) * 100)) : 0;
@@ -657,7 +667,7 @@ function register(app) {
         orderBy: { entry: { entryDate: 'asc' } },
       }),
       db.expense.findMany({
-        where: { spentOn: { gte: startDate, lte: endDate }, ...(fundId ? { fundId } : {}), ...(projectId ? { projectId } : {}) },
+        where: { spentOn: { gte: startDate, lte: endDate }, approvalStatus: 'PAID', ...(fundId ? { fundId } : {}), ...(projectId ? { projectId } : {}) },
         include: { fund: true, project: true, expenseCategory: true },
         orderBy: { spentOn: 'desc' },
       }),
@@ -2156,7 +2166,8 @@ function register(app) {
       ${canManage ? `<p><a class="btn ghost" href="/finance/projects/${id}/edit">Edit project</a></p>` : ''}
       <section class="card">
         <div class="card-head"><h2>Expenses tagged to this project</h2></div>
-        ${expenses.length ? table(['Date', 'Category', 'Description', 'Amount'], expenses.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)), esc(e.category), esc(e.description || '—'), fmtMoney(e.amount)]))
+        <p class="muted-text">Only PAID expenses count toward "Spent" above — SUBMITTED ones are still awaiting a fund manager's approval.</p>
+        ${expenses.length ? table(['Date', 'Category', 'Description', 'Amount', 'Status'], expenses.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)), esc(e.category), esc(e.description || '—'), fmtMoney(e.amount), `<span class="pill pill-${esc(e.approvalStatus.toLowerCase())}">${esc(e.approvalStatus)}</span>`]))
           : '<p class="muted-text">No expenses tagged to this project yet.</p>'}
       </section>`;
     res.page({ title: `Project · ${project.name}`, active: '/finance', noHeader: true, body: `${pageHero(`Project · ${esc(project.name)}`, '')}${body}` });
@@ -2382,11 +2393,13 @@ function register(app) {
     res.redirect(`/finance/budgets/${id}`);
   }));
 
-  // --- Expenses (simplified to always-PAID; approval workflow deferred) ---
+  // --- Expenses: SUBMITTED on creation, posted to the ledger only once a
+  // fund manager other than the recorder approves (maker-checker). ---
   app.get('/finance/expenses', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
+    const canApprove = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(res.locals.user.financeRole);
     const [cats, rows] = await Promise.all([
       db.expenseCategory.findMany({ where: { isActive: true }, orderBy: { categoryName: 'asc' } }),
       db.expense.findMany({ where: {}, orderBy: [{ spentOn: 'desc' }, { id: 'desc' }], take: 100, include: { expenseCategory: { select: { categoryName: true } }, fund: { select: { name: true } }, project: { select: { name: true } }, paymentVoucher: { select: { id: true, voucherNo: true } } } }),
@@ -2409,18 +2422,25 @@ function register(app) {
            </form>
          </details>` : '';
     const body = `${addForm}
-      ${rows.length ? table(['Date', 'Category', 'Description', 'Fund', 'Project', 'Paid to', 'Method', 'Amount', 'Status', 'Voucher'],
+      ${rows.length ? table(['Date', 'Category', 'Description', 'Fund', 'Project', 'Paid to', 'Method', 'Amount', 'Status', 'Voucher', ...(canApprove ? ['Approval'] : [])],
         rows.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)), esc((e.expenseCategory && e.expenseCategory.categoryName) || e.category),
           esc(e.description), esc((e.fund && e.fund.name) || '—'), esc((e.project && e.project.name) || '—'), esc(e.paidTo) || '—', esc(e.paymentMethod) || '—',
           fmtMoney(e.amount), `<span class="pill pill-${esc(e.approvalStatus.toLowerCase())}">${esc(e.approvalStatus)}</span>`,
-          e.paymentVoucher ? `<a class="btn-link" href="/finance/vouchers/${e.paymentVoucher.id}/print">${esc(e.paymentVoucher.voucherNo)}</a>` : '—']))
+          e.paymentVoucher ? `<a class="btn-link" href="/finance/vouchers/${e.paymentVoucher.id}/print">${esc(e.paymentVoucher.voucherNo)}</a>` : '—',
+          ...(canApprove ? [
+            e.approvalStatus === 'SUBMITTED'
+              ? (e.recordedBy === res.locals.user.id
+                ? '<span class="muted-text">Awaiting another fund manager</span>'
+                : `<form method="post" action="/finance/expenses/${e.id}/approve" style="display:inline" onsubmit="return confirm('Approve and pay this expense?')"><button type="submit" class="btn-link">Approve</button></form>
+                   <form method="post" action="/finance/expenses/${e.id}/reject" style="display:inline" onsubmit="return confirm('Reject this expense?')"><button type="submit" class="btn-link">Reject</button></form>`)
+              : '—',
+          ] : [])]))
         : '<p class="muted-text">No expenses recorded yet.</p>'}`;
     res.page({ title: 'Finance · Expenses', active: '/finance', noHeader: true, body: `${pageHero('Expenses', '')}${body}` });
   }));
 
   app.post('/finance/expenses', requireFinanceWrite, asyncHandler(async (req, res) => {
     const db = res.locals.db;
-    const churchId = res.locals.churchId;
     const b = req.body || {};
     if (!isValidDate(b.spentOn)) { flash(req, 'Enter a valid date.'); return res.redirect('/finance/expenses'); }
     if (!isMoneyPositive(b.amount)) { flash(req, 'Amount must be greater than 0.'); return res.redirect('/finance/expenses'); }
@@ -2432,22 +2452,60 @@ function register(app) {
     const projectCheck = await checkProjectId(db, b.projectId);
     if (!projectCheck.ok) { flash(req, 'Project not found.'); return res.redirect('/finance/expenses'); }
 
-    const expense = await db.expense.create({
+    // Not posted to the ledger and not paid yet — a fund manager other than
+    // the person who recorded this must approve it first (see
+    // /finance/expenses/:id/approve below). This is the maker-checker gate:
+    // whoever can record an expense should not also be the one who releases
+    // the payment for it.
+    await db.expense.create({
       data: {
         expenseCatId: cat ? cat.id : null, category: categoryName, amount: Number(b.amount), spentOn: new Date(b.spentOn),
         description: b.description || null, paidTo: b.paidTo || null, paymentMethod: b.paymentMethod || null,
         referenceNumber: b.referenceNumber || null, fundId, projectId: projectCheck.projectId,
-        approvalStatus: 'PAID', paidAt: new Date(),
+        approvalStatus: 'SUBMITTED', submittedAt: new Date(), recordedBy: res.locals.user.id,
       },
     });
+    await logActivity(db, 'expense_submitted', `Expense submitted for approval: ${categoryName} (${fmtMoney(b.amount)})`, '/finance/expenses', res.locals.user.id);
+    flash(req, 'Expense submitted — a fund manager needs to approve it before it is paid.', 'success');
+    res.redirect('/finance/expenses');
+  }));
+
+  app.post('/finance/expenses/:id/approve', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const churchId = res.locals.churchId;
+    const id = Number(req.params.id);
+    const expense = await db.expense.findUnique({ where: { id } });
+    if (!expense) return res.status(404).send('Not found');
+    if (expense.approvalStatus !== 'SUBMITTED') { flash(req, 'This expense is not awaiting approval.'); return res.redirect('/finance/expenses'); }
+    if (expense.recordedBy === res.locals.user.id) { flash(req, 'You cannot approve an expense you recorded yourself — ask another fund manager.'); return res.redirect('/finance/expenses'); }
+
     const entryId = await ledger.postExpensePayment(db, churchId, {
-      date: b.spentOn, amount: Number(b.amount), expenseAccount: ledger.expenseAccountFor(categoryName),
-      category: categoryName, fundId, sourceId: expense.id, createdBy: res.locals.user.id, memo: b.description || categoryName,
+      date: expense.spentOn.toISOString().slice(0, 10), amount: Number(expense.amount), expenseAccount: ledger.expenseAccountFor(expense.category),
+      category: expense.category, fundId: expense.fundId, sourceId: expense.id, createdBy: res.locals.user.id, memo: expense.description || expense.category,
     });
-    const updated = await db.expense.update({ where: { id: expense.id }, data: { journalEntryId: entryId } });
+    const updated = await db.expense.update({
+      where: { id },
+      data: { approvalStatus: 'PAID', approvedBy: res.locals.user.id, approvedAt: new Date(), paidAt: new Date(), journalEntryId: entryId },
+    });
     await syncExpenseVoucher(db, updated, res.locals.user.id);
-    await logActivity(db, 'expense_recorded', `Expense recorded: ${categoryName} (${fmtMoney(b.amount)})`, '/finance/expenses', res.locals.user.id);
-    flash(req, 'Expense recorded — a payment voucher was issued.', 'success');
+    await logActivity(db, 'expense_approved', `Expense approved and paid: ${expense.category} (${fmtMoney(expense.amount)})`, '/finance/expenses', res.locals.user.id);
+    flash(req, 'Expense approved — a payment voucher was issued.', 'success');
+    res.redirect('/finance/expenses');
+  }));
+
+  app.post('/finance/expenses/:id/reject', requireFundManager, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const id = Number(req.params.id);
+    const expense = await db.expense.findUnique({ where: { id } });
+    if (!expense) return res.status(404).send('Not found');
+    if (expense.approvalStatus !== 'SUBMITTED') { flash(req, 'This expense is not awaiting approval.'); return res.redirect('/finance/expenses'); }
+
+    await db.expense.update({
+      where: { id },
+      data: { approvalStatus: 'REJECTED', rejectedAt: new Date(), approvalNote: req.body.note || null },
+    });
+    await logActivity(db, 'expense_rejected', `Expense rejected: ${expense.category} (${fmtMoney(expense.amount)})`, '/finance/expenses', res.locals.user.id);
+    flash(req, 'Expense rejected.', 'success');
     res.redirect('/finance/expenses');
   }));
 
@@ -2490,6 +2548,7 @@ function register(app) {
   app.get('/finance/periods', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const canManage = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(res.locals.user.financeRole);
+    const canReopen = res.locals.user.role === 'ADMIN';
     const periods = await res.locals.db.financialPeriod.findMany({ orderBy: [{ year: 'desc' }, { month: 'desc' }] });
     const now = new Date();
     const lockForm = canManage
@@ -2502,9 +2561,10 @@ function register(app) {
       ${periods.length ? table(['Year', 'Month', 'Status', 'Closed at', 'Actions'],
         periods.map((p) => [p.year, p.month ?? '—', `<span class="pill pill-${esc(p.status.toLowerCase())}">${esc(p.status)}</span>`,
           p.closedAt ? esc(p.closedAt.toISOString().slice(0, 10)) : '—',
-          canManage && p.status === 'LOCKED' ? `<form method="post" action="/finance/periods/unlock" onsubmit="return confirm('Unlock this period?')">
+          canReopen && p.status === 'LOCKED' ? `<form method="post" action="/finance/periods/unlock" class="form" style="display:flex;gap:0.5rem;align-items:center" onsubmit="return confirm('Reopen this period for backdated postings?')">
             <input type="hidden" name="year" value="${p.year}"><input type="hidden" name="month" value="${p.month}">
-            <input type="hidden" name="reason" value="Reopened from Finance"><button class="link" type="submit">Unlock</button></form>` : '']))
+            <input type="text" name="reason" placeholder="Reason for reopening (required)" required style="width:14rem">
+            <button class="link" type="submit">Unlock</button></form>` : '']))
         : '<p class="muted-text">No periods locked yet.</p>'}`;
     res.page({ title: 'Finance · Periods', active: '/finance', noHeader: true, body: `${pageHero('Financial Periods', '')}${body}` });
   }));
@@ -2518,18 +2578,26 @@ function register(app) {
       update: { status: 'LOCKED', closedAt: new Date(), closedBy: res.locals.user.id },
       create: { year, month, status: 'LOCKED', closedAt: new Date(), closedBy: res.locals.user.id },
     });
+    await logActivity(res.locals.db, 'period_locked', `Financial period ${year}-${month} locked`, '/finance/periods', res.locals.user.id);
     flash(req, `Period ${year}-${month} locked.`, 'success');
     res.redirect('/finance/periods');
   }));
 
-  app.post('/finance/periods/unlock', requireFundManager, asyncHandler(async (req, res) => {
+  // Reopening a closed period is more sensitive than closing one — it allows
+  // backdated postings into a period that was already reviewed and signed
+  // off, so this requires admin (requirePeriodReopenAccess, not
+  // requireFundManager), a mandatory reason, and its own audit-log entry.
+  app.post('/finance/periods/unlock', requirePeriodReopenAccess, asyncHandler(async (req, res) => {
     const year = Number(req.body.year);
     const month = Number(req.body.month);
+    const reason = (req.body.reason || '').trim();
+    if (!reason) { flash(req, 'Enter a reason for reopening this period.'); return res.redirect('/finance/periods'); }
     try {
       await res.locals.db.financialPeriod.update({
         where: { churchId_year_month: { churchId: res.locals.churchId, year, month } },
-        data: { status: 'OPEN', reopenReason: req.body.reason || null },
+        data: { status: 'OPEN', reopenReason: reason, reopenedAt: new Date(), reopenedBy: res.locals.user.id },
       });
+      await logActivity(res.locals.db, 'period_reopened', `Financial period ${year}-${month} reopened: ${reason}`, '/finance/periods', res.locals.user.id);
       flash(req, `Period ${year}-${month} unlocked.`, 'success');
     } catch (e) {
       if (e.code !== 'P2025') throw e;

@@ -5,6 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
 const { createTenantApp } = require('../lib/tenant-http');
 const { db } = require('../lib/tenant');
 
@@ -83,6 +84,15 @@ async function signedInClient(tag, email) {
   createdChurchIds.push(signup.body.church.id);
   return { client, churchId: signup.body.church.id };
 }
+async function addUser(churchId, role, financeRole) {
+  const email = uniqueEmail(`u-${role}-${financeRole}`.toLowerCase());
+  const passwordHash = await bcrypt.hash('password123', 10);
+  await db.user.create({ data: { churchId, username: `u-${Date.now()}`, email, passwordHash, role, financeRole } });
+  const client = htmlClient();
+  const login = await client.postJson('/login', { email, password: 'password123' });
+  assert.strictEqual(login.status, 200);
+  return client;
+}
 
 for (const [path, title] of [['/finance', 'Finance'], ['/users', 'Users'], ['/settings', 'Settings']]) {
   test(`unauthenticated GET ${path} redirects to /login`, async () => {
@@ -107,8 +117,8 @@ test('non-platform-admin GET /platform is forbidden', async () => {
   assert.strictEqual(res.status, 403);
 });
 
-test('finance: create a fund, record income, record an expense, verify balance', async () => {
-  const { client } = await signedInClient('html-fin-flow');
+test('finance: create a fund, record income, record + approve an expense, verify balance', async () => {
+  const { client, churchId } = await signedInClient('html-fin-flow');
   const fundsPage = await client.getHtml('/finance/funds');
   const csrf = extractCsrf(fundsPage.text);
 
@@ -135,7 +145,20 @@ test('finance: create a fund, record income, record an expense, verify balance',
   assert.strictEqual(recordedExpense.status, 302);
   const afterExpense = await client.getHtml('/finance/expenses');
   assert.match(afterExpense.text, /Test supplies/);
-  assert.match(afterExpense.text, /PAID/);
+  assert.match(afterExpense.text, /SUBMITTED/, 'a newly recorded expense must not be PAID until a different fund manager approves it');
+
+  // The church owner recorded it, so they cannot approve their own submission
+  // — a second fund manager has to. (Their own view shows no approve/reject
+  // form for a row they recorded themselves, so fetch the id directly.)
+  const expenseRow = await db.expense.findFirst({ where: { churchId, description: 'Test supplies' } });
+  const expenseId = expenseRow.id;
+  const treasurer = await addUser(churchId, 'VIEWER', 'TREASURER');
+  const approvePage = await treasurer.getHtml('/finance/expenses');
+  const csrfApprove = extractCsrf(approvePage.text);
+  const approved = await treasurer.postForm(`/finance/expenses/${expenseId}/approve`, { _csrf: csrfApprove });
+  assert.strictEqual(approved.status, 302);
+  const afterApproval = await client.getHtml('/finance/expenses');
+  assert.match(afterApproval.text, /PAID/);
 
   const report = await client.getHtml('/finance/reports/overview?start=2026-07-01&end=2026-07-31');
   assert.strictEqual(report.status, 200);

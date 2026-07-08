@@ -1016,6 +1016,8 @@ model FinancialPeriod {
   closedAt     DateTime?    @map("closed_at")
   closedBy     Int?         @map("closed_by")
   reopenReason String?      @map("reopen_reason")
+  reopenedAt   DateTime?    @map("reopened_at")
+  reopenedBy   Int?         @map("reopened_by")
   createdAt    DateTime     @default(now()) @map("created_at")
 
   journalEntries JournalEntry[]
@@ -1089,6 +1091,7 @@ model Expense {
   paidTo          String?          @map("paid_to")
   paymentMethod   String?          @map("payment_method")
   referenceNumber String?          @map("reference_number")
+  recordedBy      Int?             @map("recorded_by")
   approvedBy      Int?             @map("approved_by")
   receiptAttached Boolean          @default(false) @map("receipt_attached")
   fundId          Int?             @map("fund_id")
@@ -1096,7 +1099,7 @@ model Expense {
   projectId       Int?             @map("project_id")
   project         FinanceProject?  @relation(fields: [projectId], references: [id])
   journalEntryId  Int?             @map("journal_entry_id")
-  approvalStatus  ApprovalStatus   @default(PAID) @map("approval_status")
+  approvalStatus  ApprovalStatus   @default(SUBMITTED) @map("approval_status")
   submittedAt     DateTime?        @map("submitted_at")
   approvedAt      DateTime?        @map("approved_at")
   paidAt          DateTime?        @map("paid_at")

@@ -7,6 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
 const { createTenantApp } = require('../lib/tenant-http');
 const { db } = require('../lib/tenant');
 const ledger = require('../lib/ledger-pg');
@@ -92,6 +93,22 @@ function csrfOf(html) {
   const m = html.match(/name="_csrf" value="([^"]*)"/);
   return m ? m[1] : null;
 }
+// Expenses are SUBMITTED on creation and only posted to the ledger once a
+// fund manager other than the recorder approves them — every test below
+// that needs a PAID expense (voucher issued, project "spent", budget
+// actuals) has to go through this second-user approval step.
+async function approveExpense(churchId, expenseId) {
+  const email = uniqueEmail('approver');
+  const passwordHash = await bcrypt.hash('password123', 10);
+  await db.user.create({ data: { churchId, username: `approver-${Date.now()}`, email, passwordHash, role: 'VIEWER', financeRole: 'TREASURER' } });
+  const approver = client();
+  const login = await approver.postJson('/login', { email, password: 'password123' });
+  assert.strictEqual(login.status, 200);
+  const page = await approver.getHtml('/finance/expenses');
+  const csrf = csrfOf(page.text);
+  const approved = await approver.postForm(`/finance/expenses/${expenseId}/approve`, { _csrf: csrf });
+  assert.strictEqual(approved.status, 302);
+}
 
 test('signup seeds default expense categories', async () => {
   const { churchId } = await signedInChurch('expcats-seed');
@@ -113,6 +130,10 @@ test('expense creation auto-issues a payment voucher with its own sequential num
   assert.strictEqual(created.status, 302);
 
   const expense = await db.expense.findFirst({ where: { churchId } });
+  assert.strictEqual(expense.approvalStatus, 'SUBMITTED');
+  assert.ok(!(await db.paymentVoucher.findFirst({ where: { expenseId: expense.id } })), 'no voucher until the expense is approved');
+  await approveExpense(churchId, expense.id);
+
   const voucher = await db.paymentVoucher.findFirst({ where: { expenseId: expense.id } });
   assert.ok(voucher);
   assert.match(voucher.voucherNo, /^PV-2026-\d{4}$/);
@@ -125,10 +146,12 @@ test('expense creation auto-issues a payment voucher with its own sequential num
   assert.match(printPage.text, /ECG/);
   assert.match(printPage.text, /250\.75/);
 
-  // A second expense gets its own, sequentially-numbered voucher.
+  // A second expense gets its own, sequentially-numbered voucher once approved.
   const page2 = await c.getHtml('/finance/expenses');
   const csrf2 = csrfOf(page2.text);
   await c.postForm('/finance/expenses', { spentOn: '2026-06-05', expenseCatId: String(cat.id), amount: '80', fundId: String(fund.id), description: 'Water bill', _csrf: csrf2 });
+  const expense2 = await db.expense.findFirst({ where: { churchId, id: { not: expense.id } } });
+  await approveExpense(churchId, expense2.id);
   const voucherCount = await db.paymentVoucher.count({ where: { churchId } });
   assert.strictEqual(voucherCount, 2);
   const voucher2 = await db.paymentVoucher.findFirst({ where: { churchId, expenseId: { not: expense.id } } });
@@ -162,10 +185,14 @@ test('finance project: fund-linked project tracks raised/spent from the ledger; 
   const expPage = await c.getHtml('/finance/expenses');
   const csrf4 = csrfOf(expPage.text);
   await c.postForm('/finance/expenses', { spentOn: '2026-06-11', expenseCatId: String(cat.id), amount: '150', fundId: String(projectFund.id), projectId: String(fundedProject.id), description: 'Roofing materials', _csrf: csrf4 });
+  const roofingExpense = await db.expense.findFirst({ where: { churchId, description: 'Roofing materials' } });
+  await approveExpense(churchId, roofingExpense.id);
 
   const expPage2 = await c.getHtml('/finance/expenses');
   const csrf5 = csrfOf(expPage2.text);
   await c.postForm('/finance/expenses', { spentOn: '2026-06-12', expenseCatId: String(cat.id), amount: '60', projectId: String(standaloneProject.id), description: 'Youth event supplies', _csrf: csrf5 });
+  const youthExpense = await db.expense.findFirst({ where: { churchId, description: 'Youth event supplies' } });
+  await approveExpense(churchId, youthExpense.id);
 
   const fundedDetail = await c.getHtml(`/finance/projects/${fundedProject.id}`);
   assert.strictEqual(fundedDetail.status, 200);
@@ -199,10 +226,13 @@ test('finance budget: budgetActual aggregates real posted journal entries scoped
   const csrf2 = csrfOf(detail.text);
   await c.postForm(`/finance/budgets/${budget.id}/lines`, { lineType: 'EXPENSE', category: 'Utilities', accountId: String(utilitiesAccount.id), amount: '1000', _csrf: csrf2 });
 
-  // Post a real expense against the Utilities account/fund, within 2026.
+  // Post a real expense against the Utilities account/fund, within 2026 —
+  // budgetActual reads posted journal lines, so it only sees this once approved.
   const expPage = await c.getHtml('/finance/expenses');
   const csrf3 = csrfOf(expPage.text);
   await c.postForm('/finance/expenses', { spentOn: '2026-03-15', expenseCatId: String(cat.id), amount: '300', fundId: String(fund.id), description: 'Q1 electricity', _csrf: csrf3 });
+  const q1Expense = await db.expense.findFirst({ where: { churchId, description: 'Q1 electricity' } });
+  await approveExpense(churchId, q1Expense.id);
 
   const detailAfter = await c.getHtml(`/finance/budgets/${budget.id}`);
   assert.strictEqual(detailAfter.status, 200);
@@ -237,6 +267,10 @@ test('cross-tenant: church B cannot see church A\'s vouchers, projects, or budge
   const page = await cA.getHtml('/finance/expenses');
   const csrf = csrfOf(page.text);
   await cA.postForm('/finance/expenses', { spentOn: '2026-06-01', expenseCatId: String(cat.id), amount: '99', fundId: String(fund.id), description: 'Church A Only Expense', paidTo: 'Church A Vendor', _csrf: csrf });
+  // Approve it so a real voucher exists to prove cross-tenant isolation
+  // actually holds, rather than trivially passing because nothing was posted.
+  const churchAExpense = await db.expense.findFirst({ where: { churchId: churchA, description: 'Church A Only Expense' } });
+  await approveExpense(churchA, churchAExpense.id);
 
   const projPage = await cA.getHtml('/finance/projects');
   const csrf2 = csrfOf(projPage.text);
