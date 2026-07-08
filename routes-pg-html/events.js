@@ -529,11 +529,17 @@ function register(app) {
     const memberId = Number(req.body.memberId);
     const response = RSVP_RESPONSES.includes(req.body.response) ? req.body.response : 'GOING';
     if (memberId) {
-      await db.eventRsvp.upsert({
-        where: { eventId_memberId: { eventId: ev.id, memberId } },
-        update: { response, respondedAt: new Date() },
-        create: { eventId: ev.id, memberId, response },
-      });
+      // memberId comes from an unauthenticated public form — must confirm it
+      // belongs to this church (db is tenant-scoped) before upserting, the
+      // same way /checkin/:token validates req.body.memberId above.
+      const m = await db.member.findFirst({ where: { id: memberId, deletedAt: null } });
+      if (m) {
+        await db.eventRsvp.upsert({
+          where: { eventId_memberId: { eventId: ev.id, memberId } },
+          update: { response, respondedAt: new Date() },
+          create: { eventId: ev.id, memberId, response },
+        });
+      }
     }
     res.redirect(`/rsvp/${req.params.token}?ok=1`);
   }));

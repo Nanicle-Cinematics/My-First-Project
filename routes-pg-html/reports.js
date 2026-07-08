@@ -75,6 +75,12 @@ function register(app) {
 
   app.get('/reports/day-born', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
+    // Named per-day-born amounts — same sensitivity as /reports/income and
+    // finance.js's /finance/reports/giving, which require financeRole access.
+    const u = res.locals.user;
+    if (!(u.role === 'ADMIN' || (u.financeRole && u.financeRole !== 'NONE'))) {
+      return res.status(403).send('Finance access required');
+    }
     const churchId = res.locals.churchId;
     const { start, end } = defaultRange(req);
 

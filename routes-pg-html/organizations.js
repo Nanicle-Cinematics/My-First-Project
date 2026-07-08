@@ -205,13 +205,18 @@ function register(app) {
   }));
 
   app.post('/organizations', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
     const b = req.body || {};
     if (!b.name || !b.name.trim()) { flash(req, 'Organization name is required.'); return res.redirect('/organizations/new'); }
+    // create() only stamps churchId on the NEW row — verify the leader
+    // belongs to this tenant explicitly, matching /organizations/:id/leader.
+    const leader = b.leaderId ? await db.member.findUnique({ where: { id: Number(b.leaderId) } }) : null;
+    if (b.leaderId && !leader) { flash(req, 'Leader not found.'); return res.redirect('/organizations/new'); }
     try {
-      await res.locals.db.organization.create({
+      await db.organization.create({
         data: {
           name: b.name.trim(), description: b.description || null, meetsOn: b.meetsOn || null,
-          leaderId: b.leaderId ? Number(b.leaderId) : null,
+          leaderId: leader ? leader.id : null,
         },
       });
       flash(req, `Added "${b.name.trim()}".`, 'success');
@@ -256,11 +261,14 @@ function register(app) {
   }));
 
   app.post('/organizations/:id/leader', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
     const oid = Number(req.params.id);
+    const leader = req.body.leaderId ? await db.member.findUnique({ where: { id: Number(req.body.leaderId) } }) : null;
+    if (req.body.leaderId && !leader) { flash(req, 'Leader not found.'); return res.redirect(`/organizations/${oid}`); }
     try {
-      await res.locals.db.organization.update({
+      await db.organization.update({
         where: { id: oid },
-        data: { leaderId: req.body.leaderId ? Number(req.body.leaderId) : null },
+        data: { leaderId: leader ? leader.id : null },
       });
     } catch (e) {
       if (e.code !== 'P2025') throw e;

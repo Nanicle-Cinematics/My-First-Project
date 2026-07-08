@@ -40,6 +40,13 @@ function requireFundManager(req, res, next) {
   return res.status(403).json({ error: 'forbidden' });
 }
 
+function requireFinanceReportAccess(req, res, next) {
+  const u = res.locals.user;
+  if (!u) return res.status(401).json({ error: 'not logged in' });
+  if (u.role === 'ADMIN' || (u.financeRole && u.financeRole !== 'NONE')) return next();
+  return res.status(403).json({ error: 'Finance access required' });
+}
+
 function requireAuth(req, res, next) {
   if (!res.locals.user) return res.status(401).json({ error: 'not logged in' });
   next();
@@ -92,6 +99,33 @@ async function checkPledgeRefs(db, bodyMemberId, bodyHarvestId) {
     db.harvest.findUnique({ where: { id: Number(bodyHarvestId) } }),
   ]);
   return { ok: Boolean(member && harvest) };
+}
+
+/** Same tenant-validation as checkFundId, for SpecialOffering.donorId. */
+async function checkDonorId(db, bodyDonorId) {
+  if (!bodyDonorId) return { ok: true, donorId: null };
+  const member = await db.member.findUnique({ where: { id: Number(bodyDonorId) } });
+  return member ? { ok: true, donorId: member.id } : { ok: false, donorId: null };
+}
+
+/** Same tenant-validation as checkFundId, for Service.serviceTypeId (required, not optional). */
+async function checkServiceTypeId(db, bodyServiceTypeId) {
+  const serviceType = await db.serviceType.findUnique({ where: { id: Number(bodyServiceTypeId) } });
+  return serviceType ? { ok: true, serviceTypeId: serviceType.id } : { ok: false, serviceTypeId: null };
+}
+
+/** Same tenant-validation as checkFundId, for Harvest.orgId. */
+async function checkOrgId(db, bodyOrgId) {
+  if (!bodyOrgId) return { ok: true, orgId: null };
+  const org = await db.organization.findUnique({ where: { id: Number(bodyOrgId) } });
+  return org ? { ok: true, orgId: org.id } : { ok: false, orgId: null };
+}
+
+/** Same tenant-validation as checkFundId, for FinanceBudgetLine.accountId. */
+async function checkAccountId(db, bodyAccountId) {
+  if (!bodyAccountId) return { ok: true, accountId: null };
+  const account = await db.account.findUnique({ where: { id: Number(bodyAccountId) } });
+  return account ? { ok: true, accountId: account.id } : { ok: false, accountId: null };
 }
 
 async function nextReceiptNo(db, dateStr) {
@@ -157,7 +191,7 @@ function register(app) {
   }));
 
   // --- Funds ---
-  app.get('/api/finance/funds', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/funds', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.fund.findMany({ where: { active: true }, orderBy: { name: 'asc' } });
     res.json(rows);
   }));
@@ -182,7 +216,7 @@ function register(app) {
     }
   }));
 
-  app.get('/api/finance/funds/:id/balance', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/funds/:id/balance', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const db = res.locals.db;
     const churchId = res.locals.churchId;
     const fundId = Number(req.params.id);
@@ -274,7 +308,7 @@ function register(app) {
   }));
 
   // --- Standalone day-born collections ---
-  app.get('/api/finance/day-borns', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/day-borns', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.dayBornCollection.findMany({
       where: { deletedAt: null }, orderBy: [{ collectionDate: 'desc' }, { id: 'desc' }], take: 120,
       include: { fund: { select: { name: true } } },
@@ -335,7 +369,7 @@ function register(app) {
   }));
 
   // --- Special offerings (no receipt, no delete route — matches the original) ---
-  app.get('/api/finance/special', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/special', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.specialOffering.findMany({
       where: { deletedAt: null }, orderBy: [{ offeringDate: 'desc' }, { id: 'desc' }], take: 100,
       include: { specialCategory: { select: { categoryName: true } }, donor: { select: { firstName: true, lastName: true } } },
@@ -354,7 +388,9 @@ function register(app) {
 
     const cat = await db.specialCategory.findUnique({ where: { id: specialCatId } });
     if (!cat) return res.status(404).json({ error: 'Special category not found' });
-    const donorId = b.donorId ? Number(b.donorId) : null;
+    const donorCheck = await checkDonorId(db, b.donorId);
+    if (!donorCheck.ok) return res.status(404).json({ error: 'Donor not found' });
+    const donorId = donorCheck.donorId;
     const fundId = await defaultFundId(db);
 
     const row = await db.specialOffering.create({
@@ -374,7 +410,7 @@ function register(app) {
   }));
 
   // --- Tithes (no receipt, no delete route — matches the original) ---
-  app.get('/api/finance/tithes', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/tithes', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const memberId = req.query.memberId ? Number(req.query.memberId) : null;
     const rows = await res.locals.db.tithe.findMany({
       where: { deletedAt: null, ...(memberId ? { memberId } : {}) }, orderBy: [{ titheDate: 'desc' }, { id: 'desc' }], take: 200,
@@ -412,7 +448,7 @@ function register(app) {
   }));
 
   // --- Services (no receipt, no fund/payment-method picker — matches the original) ---
-  app.get('/api/finance/services', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/services', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.service.findMany({
       where: { deletedAt: null }, orderBy: [{ serviceDate: 'desc' }, { id: 'desc' }], take: 50,
       include: { serviceType: { select: { typeName: true } } },
@@ -420,7 +456,7 @@ function register(app) {
     res.json(rows);
   }));
 
-  app.get('/api/finance/services/:id', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/services/:id', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const db = res.locals.db;
     const id = Number(req.params.id);
     const service = await db.service.findFirst({ where: { id, deletedAt: null }, include: { serviceType: { select: { typeName: true } } } });
@@ -433,13 +469,14 @@ function register(app) {
     const db = res.locals.db;
     const churchId = res.locals.churchId;
     const b = req.body || {};
-    const serviceTypeId = Number(b.serviceTypeId);
-    if (!serviceTypeId) return res.status(400).json({ error: 'serviceTypeId is required' });
+    if (!Number(b.serviceTypeId)) return res.status(400).json({ error: 'serviceTypeId is required' });
     if (!isValidDate(b.serviceDate)) return res.status(400).json({ error: 'Enter a valid service date.' });
     if (!isMoneyNonNeg(b.totalAmount)) return res.status(400).json({ error: 'Total amount must be 0 or more.' });
+    const serviceTypeCheck = await checkServiceTypeId(db, b.serviceTypeId);
+    if (!serviceTypeCheck.ok) return res.status(404).json({ error: 'Service type not found' });
 
     const service = await db.service.create({
-      data: { serviceTypeId, serviceDate: new Date(b.serviceDate), totalAmount: Number(b.totalAmount) || 0, notes: b.notes || null, recordedBy: res.locals.user.id },
+      data: { serviceTypeId: serviceTypeCheck.serviceTypeId, serviceDate: new Date(b.serviceDate), totalAmount: Number(b.totalAmount) || 0, notes: b.notes || null, recordedBy: res.locals.user.id },
     });
     const splits = parseDayBornSplitInputs(b);
     if (splits.length) {
@@ -481,7 +518,7 @@ function register(app) {
   }));
 
   // --- Harvests (no receipt, no fund/payment-method picker, read-only pledges) ---
-  app.get('/api/finance/harvests', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/harvests', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.harvest.findMany({
       where: { deletedAt: null }, orderBy: [{ harvestYear: 'desc' }, { id: 'desc' }], take: 50,
       include: { organization: { select: { name: true } } },
@@ -489,7 +526,7 @@ function register(app) {
     res.json(rows);
   }));
 
-  app.get('/api/finance/harvests/:id', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/harvests/:id', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const db = res.locals.db;
     const id = Number(req.params.id);
     const harvest = await db.harvest.findFirst({ where: { id, deletedAt: null }, include: { organization: { select: { name: true } } } });
@@ -514,12 +551,14 @@ function register(app) {
     if (!b.harvestName || !String(b.harvestName).trim()) return res.status(400).json({ error: 'harvestName is required' });
     if (b.harvestDate && !isValidDate(b.harvestDate)) return res.status(400).json({ error: 'Enter a valid harvest date.' });
     if (!isMoneyNonNeg(b.totalCollected || 0)) return res.status(400).json({ error: 'Total collected must be 0 or more.' });
+    const orgCheck = await checkOrgId(db, b.orgId);
+    if (!orgCheck.ok) return res.status(404).json({ error: 'Organization not found' });
 
     const harvest = await db.harvest.create({
       data: {
         harvestType, harvestYear, harvestName: String(b.harvestName).trim(),
         harvestDate: b.harvestDate ? new Date(b.harvestDate) : null,
-        orgId: b.orgId ? Number(b.orgId) : null, theme: b.theme || null,
+        orgId: orgCheck.orgId, theme: b.theme || null,
         totalCollected: Number(b.totalCollected) || 0, notes: b.notes || null, recordedBy: res.locals.user.id,
       },
     });
@@ -565,7 +604,7 @@ function register(app) {
   }
   function pledgePaymentReceiptNo(paymentId) { return 'RCT-' + String(paymentId).padStart(5, '0'); }
 
-  app.get('/api/finance/pledges', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/pledges', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.pledge.findMany({
       where: { member: { deletedAt: null } }, orderBy: [{ pledgeDate: 'desc' }, { id: 'desc' }], take: 100,
       include: { member: { select: { id: true, firstName: true, lastName: true } }, harvest: { select: { harvestName: true } } },
@@ -685,7 +724,7 @@ function register(app) {
   }));
 
   // --- Payment vouchers (read-only API — vouchers are never independently created) ---
-  app.get('/api/finance/vouchers', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/vouchers', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.paymentVoucher.findMany({
       orderBy: [{ voucherDate: 'desc' }, { id: 'desc' }], take: 100,
       include: { expense: { select: { category: true, amount: true, description: true } } },
@@ -693,7 +732,7 @@ function register(app) {
     res.json(rows);
   }));
 
-  app.get('/api/finance/vouchers/:id', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/vouchers/:id', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const voucher = await res.locals.db.paymentVoucher.findFirst({
       where: { id: Number(req.params.id) },
       include: { expense: true },
@@ -703,7 +742,7 @@ function register(app) {
   }));
 
   // --- Finance projects ---
-  app.get('/api/finance/projects', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/projects', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.financeProject.findMany({ orderBy: { name: 'asc' }, include: { fund: { select: { name: true } } } });
     res.json(rows);
   }));
@@ -732,7 +771,7 @@ function register(app) {
     }
   }));
 
-  app.get('/api/finance/projects/:id', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/projects/:id', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const db = res.locals.db;
     const churchId = res.locals.churchId;
     const id = Number(req.params.id);
@@ -773,7 +812,7 @@ function register(app) {
   }));
 
   // --- Finance budgets ---
-  app.get('/api/finance/budgets', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/budgets', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const rows = await res.locals.db.financeBudget.findMany({ orderBy: [{ year: 'desc' }, { id: 'desc' }] });
     res.json(rows);
   }));
@@ -791,7 +830,7 @@ function register(app) {
     res.status(201).json(budget);
   }));
 
-  app.get('/api/finance/budgets/:id', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/budgets/:id', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const db = res.locals.db;
     const churchId = res.locals.churchId;
     const id = Number(req.params.id);
@@ -817,8 +856,11 @@ function register(app) {
     if (!['INCOME', 'EXPENSE'].includes(b.lineType)) return res.status(400).json({ error: 'lineType must be INCOME or EXPENSE' });
     if (!b.category || !String(b.category).trim()) return res.status(400).json({ error: 'category is required' });
     if (!isMoneyNonNeg(b.amount)) return res.status(400).json({ error: 'amount must be 0 or more' });
+    const accountCheck = await checkAccountId(db, b.accountId);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!accountCheck.ok || !fundCheck.ok) return res.status(404).json({ error: 'Account or fund not found' });
     const line = await db.financeBudgetLine.create({
-      data: { budgetId: id, lineType: b.lineType, category: String(b.category).trim(), accountId: b.accountId ? Number(b.accountId) : null, fundId: b.fundId ? Number(b.fundId) : null, amount: Number(b.amount), notes: b.notes || null },
+      data: { budgetId: id, lineType: b.lineType, category: String(b.category).trim(), accountId: accountCheck.accountId, fundId: fundCheck.fundId, amount: Number(b.amount), notes: b.notes || null },
     });
     res.status(201).json(line);
   }));
@@ -832,10 +874,13 @@ function register(app) {
     if (!budget) return res.status(404).json({ error: 'Not found' });
     if (budget.status === 'CLOSED') return res.status(409).json({ error: 'This budget is closed; lines are immutable' });
     if (!isMoneyNonNeg(b.amount)) return res.status(400).json({ error: 'amount must be 0 or more' });
+    const accountCheck = await checkAccountId(db, b.accountId);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!accountCheck.ok || !fundCheck.ok) return res.status(404).json({ error: 'Account or fund not found' });
     try {
       const line = await db.financeBudgetLine.update({
         where: { id: lineId },
-        data: { lineType: ['INCOME', 'EXPENSE'].includes(b.lineType) ? b.lineType : undefined, category: b.category ? String(b.category).trim() : undefined, accountId: b.accountId ? Number(b.accountId) : null, fundId: b.fundId ? Number(b.fundId) : null, amount: Number(b.amount), notes: b.notes || null },
+        data: { lineType: ['INCOME', 'EXPENSE'].includes(b.lineType) ? b.lineType : undefined, category: b.category ? String(b.category).trim() : undefined, accountId: accountCheck.accountId, fundId: fundCheck.fundId, amount: Number(b.amount), notes: b.notes || null },
       });
       res.json(line);
     } catch (e) {
@@ -873,7 +918,7 @@ function register(app) {
   }));
 
   // --- Journal entries ---
-  app.get('/api/finance/journal/:id', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/finance/journal/:id', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const entry = await res.locals.db.journalEntry.findUnique({
       where: { id: Number(req.params.id) },
       include: { lines: { include: { account: true, fund: true } } },

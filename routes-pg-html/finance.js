@@ -100,6 +100,33 @@ async function checkPledgeRefs(db, bodyMemberId, bodyHarvestId) {
   return { ok: Boolean(member && harvest) };
 }
 
+/** Same tenant-validation as checkFundId, for SpecialOffering.donorId. */
+async function checkDonorId(db, bodyDonorId) {
+  if (!bodyDonorId) return { ok: true, donorId: null };
+  const member = await db.member.findUnique({ where: { id: Number(bodyDonorId) } });
+  return member ? { ok: true, donorId: member.id } : { ok: false, donorId: null };
+}
+
+/** Same tenant-validation as checkFundId, for Service.serviceTypeId (required, not optional). */
+async function checkServiceTypeId(db, bodyServiceTypeId) {
+  const serviceType = await db.serviceType.findUnique({ where: { id: Number(bodyServiceTypeId) } });
+  return serviceType ? { ok: true, serviceTypeId: serviceType.id } : { ok: false, serviceTypeId: null };
+}
+
+/** Same tenant-validation as checkFundId, for Harvest.orgId. */
+async function checkOrgId(db, bodyOrgId) {
+  if (!bodyOrgId) return { ok: true, orgId: null };
+  const org = await db.organization.findUnique({ where: { id: Number(bodyOrgId) } });
+  return org ? { ok: true, orgId: org.id } : { ok: false, orgId: null };
+}
+
+/** Same tenant-validation as checkFundId, for FinanceBudgetLine.accountId. */
+async function checkAccountId(db, bodyAccountId) {
+  if (!bodyAccountId) return { ok: true, accountId: null };
+  const account = await db.account.findUnique({ where: { id: Number(bodyAccountId) } });
+  return account ? { ok: true, accountId: account.id } : { ok: false, accountId: null };
+}
+
 async function fundOptions(db, selected, includeBlank = true) {
   const funds = await db.fund.findMany({ where: { active: true }, orderBy: { name: 'asc' } });
   const options = includeBlank ? ['<option value="">General fund</option>'] : [];
@@ -473,7 +500,7 @@ function reportSection(title, content, meta = '') {
 }
 
 function register(app) {
-  app.get('/finance', asyncHandler(async (req, res) => {
+  app.get('/finance', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const churchId = res.locals.churchId;
@@ -799,7 +826,7 @@ function register(app) {
   }));
 
   // --- Funds ---
-  app.get('/finance/funds', asyncHandler(async (req, res) => {
+  app.get('/finance/funds', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const churchId = res.locals.churchId;
@@ -869,7 +896,7 @@ function register(app) {
   }));
 
   // --- Generic income ---
-  app.get('/finance/income', asyncHandler(async (req, res) => {
+  app.get('/finance/income', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -970,7 +997,7 @@ function register(app) {
   }));
 
   // --- Standalone day-born collections ---
-  app.get('/finance/day-borns', asyncHandler(async (req, res) => {
+  app.get('/finance/day-borns', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1022,7 +1049,7 @@ function register(app) {
     res.page({ title: 'Finance · Day-Borns', active: '/finance', noHeader: true, body: `${pageHero('Day-Born Collections', '')}${body}` });
   }));
 
-  app.get('/finance/day-borns.csv', asyncHandler(async (req, res) => {
+  app.get('/finance/day-borns.csv', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const rows = await res.locals.db.dayBornCollection.findMany({
       where: { deletedAt: null }, orderBy: [{ collectionDate: 'desc' }, { id: 'desc' }],
@@ -1089,7 +1116,7 @@ function register(app) {
   }));
 
   // --- Special offerings (no receipt, no delete route — matches the original) ---
-  app.get('/finance/special', asyncHandler(async (req, res) => {
+  app.get('/finance/special', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1133,7 +1160,7 @@ function register(app) {
     res.page({ title: 'Finance · Special Offerings', active: '/finance', noHeader: true, body: `${pageHero('Special Offerings', '')}${body}` });
   }));
 
-  app.get('/finance/special.csv', asyncHandler(async (req, res) => {
+  app.get('/finance/special.csv', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const rows = await res.locals.db.specialOffering.findMany({
       where: { deletedAt: null }, orderBy: [{ offeringDate: 'desc' }, { id: 'desc' }],
@@ -1156,7 +1183,9 @@ function register(app) {
 
     const cat = await db.specialCategory.findUnique({ where: { id: specialCatId } });
     if (!cat) { flash(req, 'Special category not found.'); return res.redirect('/finance/special'); }
-    const donorId = b.donorId ? Number(b.donorId) : null;
+    const donorCheck = await checkDonorId(db, b.donorId);
+    if (!donorCheck.ok) { flash(req, 'Donor not found.'); return res.redirect('/finance/special'); }
+    const donorId = donorCheck.donorId;
     const fundId = await defaultFundId(db);
 
     const row = await db.specialOffering.create({
@@ -1178,7 +1207,7 @@ function register(app) {
   }));
 
   // --- Tithes (no receipt, no delete route — matches the original) ---
-  app.get('/finance/tithes', asyncHandler(async (req, res) => {
+  app.get('/finance/tithes', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1248,7 +1277,7 @@ function register(app) {
     res.page({ title: 'Finance · Tithes', active: '/finance', noHeader: true, body: `${pageHero('Tithes', '')}${body}` });
   }));
 
-  app.get('/finance/tithes.csv', asyncHandler(async (req, res) => {
+  app.get('/finance/tithes.csv', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const memberId = req.query.memberId ? Number(req.query.memberId) : null;
     const rows = await res.locals.db.tithe.findMany({
@@ -1293,7 +1322,7 @@ function register(app) {
   // --- Services (weekly/service collections, with optional day-born splits) ---
   // No receipt, no payment-method/fund picker — matches the original exactly
   // (services/harvests always post to defaultFundId(), unlike day-borns).
-  app.get('/finance/services', asyncHandler(async (req, res) => {
+  app.get('/finance/services', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1336,10 +1365,12 @@ function register(app) {
     const db = res.locals.db;
     const churchId = res.locals.churchId;
     const b = req.body || {};
-    const serviceTypeId = Number(b.serviceTypeId);
-    if (!serviceTypeId) { flash(req, 'Pick a service type.'); return res.redirect('/finance/services'); }
+    if (!Number(b.serviceTypeId)) { flash(req, 'Pick a service type.'); return res.redirect('/finance/services'); }
     if (!isValidDate(b.serviceDate)) { flash(req, 'Enter a valid service date.'); return res.redirect('/finance/services'); }
     if (!isMoneyNonNeg(b.totalAmount)) { flash(req, 'Total amount must be 0 or more.'); return res.redirect('/finance/services'); }
+    const serviceTypeCheck = await checkServiceTypeId(db, b.serviceTypeId);
+    if (!serviceTypeCheck.ok) { flash(req, 'Service type not found.'); return res.redirect('/finance/services'); }
+    const serviceTypeId = serviceTypeCheck.serviceTypeId;
 
     const service = await db.service.create({
       data: { serviceTypeId, serviceDate: new Date(b.serviceDate), totalAmount: Number(b.totalAmount) || 0, notes: b.notes || null, recordedBy: res.locals.user.id },
@@ -1361,7 +1392,7 @@ function register(app) {
     res.redirect(`/finance/services/${service.id}`);
   }));
 
-  app.get('/finance/services/:id', asyncHandler(async (req, res) => {
+  app.get('/finance/services/:id', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1424,7 +1455,7 @@ function register(app) {
   }));
 
   // --- Harvests (annual/organizational fundraisers, with day-born splits + read-only pledges) ---
-  app.get('/finance/harvests', asyncHandler(async (req, res) => {
+  app.get('/finance/harvests', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1482,12 +1513,14 @@ function register(app) {
     if (!b.harvestName || !String(b.harvestName).trim()) { flash(req, 'Enter a harvest name.'); return res.redirect('/finance/harvests'); }
     if (b.harvestDate && !isValidDate(b.harvestDate)) { flash(req, 'Enter a valid harvest date.'); return res.redirect('/finance/harvests'); }
     if (!isMoneyNonNeg(b.totalCollected || 0)) { flash(req, 'Total collected must be 0 or more.'); return res.redirect('/finance/harvests'); }
+    const orgCheck = await checkOrgId(db, b.orgId);
+    if (!orgCheck.ok) { flash(req, 'Organization not found.'); return res.redirect('/finance/harvests'); }
 
     const harvest = await db.harvest.create({
       data: {
         harvestType, harvestYear, harvestName: String(b.harvestName).trim(),
         harvestDate: b.harvestDate ? new Date(b.harvestDate) : null,
-        orgId: b.orgId ? Number(b.orgId) : null, theme: b.theme || null,
+        orgId: orgCheck.orgId, theme: b.theme || null,
         totalCollected: Number(b.totalCollected) || 0, notes: b.notes || null, recordedBy: res.locals.user.id,
       },
     });
@@ -1505,7 +1538,7 @@ function register(app) {
     res.redirect(`/finance/harvests/${harvest.id}`);
   }));
 
-  app.get('/finance/harvests/:id', asyncHandler(async (req, res) => {
+  app.get('/finance/harvests/:id', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1594,7 +1627,7 @@ function register(app) {
   }));
 
   // --- Pledges (creation/edit never touch the ledger — only payments do, matching the original) ---
-  app.get('/finance/pledges', asyncHandler(async (req, res) => {
+  app.get('/finance/pledges', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1713,7 +1746,7 @@ function register(app) {
   }));
 
   // --- Pledge payment receipts + outstanding-balance statements ---
-  app.get('/finance/pledges/payments/:id/receipt', asyncHandler(async (req, res) => {
+  app.get('/finance/pledges/payments/:id/receipt', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1772,7 +1805,7 @@ function register(app) {
     res.redirect(`/finance/pledges/payments/${r.id}/receipt?sent=${result.dryRun ? 'dry' : 'sent'}`);
   }));
 
-  app.get('/finance/pledges/statement/:memberId', asyncHandler(async (req, res) => {
+  app.get('/finance/pledges/statement/:memberId', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -1827,7 +1860,7 @@ function register(app) {
   }));
 
   // --- Unified receipts index + printable income receipts ---
-  app.get('/finance/receipts', asyncHandler(async (req, res) => {
+  app.get('/finance/receipts', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const [outstanding, unified, recent] = await Promise.all([
@@ -1866,7 +1899,7 @@ function register(app) {
     res.page({ title: 'Finance · Receipts', active: '/finance', noHeader: true, body: `${pageHero('Receipts', '')}${body}` });
   }));
 
-  app.get('/finance/receipts/:receiptNo/print', asyncHandler(async (req, res) => {
+  app.get('/finance/receipts/:receiptNo/print', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const receiptNo = decodeURIComponent(req.params.receiptNo);
@@ -1897,7 +1930,7 @@ function register(app) {
   }));
 
   // --- Annual giving statements ---
-  app.get('/finance/statements', asyncHandler(async (req, res) => {
+  app.get('/finance/statements', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const year = safeYear(req.query.year);
@@ -1921,7 +1954,7 @@ function register(app) {
     res.page({ title: 'Finance · Statements', active: '/finance', noHeader: true, body });
   }));
 
-  app.get('/members/:id/statement', asyncHandler(async (req, res) => {
+  app.get('/members/:id/statement', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const id = Number(req.params.id);
@@ -1956,7 +1989,7 @@ function register(app) {
   }));
 
   // --- Payment vouchers (list + print — never independently created) ---
-  app.get('/finance/vouchers', asyncHandler(async (req, res) => {
+  app.get('/finance/vouchers', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const rows = await db.paymentVoucher.findMany({
@@ -1975,7 +2008,7 @@ function register(app) {
     res.page({ title: 'Finance · Vouchers', active: '/finance', noHeader: true, body: `${pageHero('Payment Vouchers', '')}${body}` });
   }));
 
-  app.get('/finance/vouchers.csv', asyncHandler(async (req, res) => {
+  app.get('/finance/vouchers.csv', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const rows = await res.locals.db.paymentVoucher.findMany({
       orderBy: [{ voucherDate: 'desc' }, { id: 'desc' }],
@@ -1985,7 +2018,7 @@ function register(app) {
       rows.map((v) => [v.voucherNo, v.voucherDate.toISOString().slice(0, 10), v.expense.category, v.expense.description || '', v.expense.paidTo || '', v.expense.amount]));
   }));
 
-  app.get('/finance/vouchers/:id/print', asyncHandler(async (req, res) => {
+  app.get('/finance/vouchers/:id/print', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const v = await db.paymentVoucher.findFirst({ where: { id: Number(req.params.id) }, include: { expense: true } });
@@ -2023,7 +2056,7 @@ function register(app) {
   }));
 
   // --- Finance projects ---
-  app.get('/finance/projects', asyncHandler(async (req, res) => {
+  app.get('/finance/projects', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const churchId = res.locals.churchId;
@@ -2060,7 +2093,7 @@ function register(app) {
     res.page({ title: 'Finance · Projects', active: '/finance', noHeader: true, body: `${pageHero('Finance Projects', '')}${body}` });
   }));
 
-  app.get('/finance/projects.csv', asyncHandler(async (req, res) => {
+  app.get('/finance/projects.csv', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const churchId = res.locals.churchId;
@@ -2096,7 +2129,7 @@ function register(app) {
     res.redirect('/finance/projects');
   }));
 
-  app.get('/finance/projects/:id', asyncHandler(async (req, res) => {
+  app.get('/finance/projects/:id', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const churchId = res.locals.churchId;
@@ -2181,7 +2214,7 @@ function register(app) {
   }));
 
   // --- Finance budgets ---
-  app.get('/finance/budgets', asyncHandler(async (req, res) => {
+  app.get('/finance/budgets', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canManage = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(res.locals.user.financeRole);
@@ -2226,7 +2259,7 @@ function register(app) {
     res.redirect(`/finance/budgets/${budget.id}`);
   }));
 
-  app.get('/finance/budgets/:id', asyncHandler(async (req, res) => {
+  app.get('/finance/budgets/:id', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const churchId = res.locals.churchId;
@@ -2285,7 +2318,7 @@ function register(app) {
     res.page({ title: `Budget · ${budget.name}`, active: '/finance', noHeader: true, body: `${pageHero(`Budget · ${esc(budget.name)}`, '')}${body}` });
   }));
 
-  app.get('/finance/budgets/:id.csv', asyncHandler(async (req, res) => {
+  app.get('/finance/budgets/:id.csv', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const churchId = res.locals.churchId;
@@ -2309,8 +2342,11 @@ function register(app) {
       flash(req, 'Pick a type, enter a category label, and a budgeted amount of 0 or more.');
       return res.redirect(`/finance/budgets/${id}`);
     }
+    const accountCheck = await checkAccountId(db, b.accountId);
+    const fundCheck = await checkFundId(db, b.fundId);
+    if (!accountCheck.ok || !fundCheck.ok) { flash(req, 'Account or fund not found.'); return res.redirect(`/finance/budgets/${id}`); }
     await db.financeBudgetLine.create({
-      data: { budgetId: id, lineType: b.lineType, category: String(b.category).trim(), accountId: b.accountId ? Number(b.accountId) : null, fundId: b.fundId ? Number(b.fundId) : null, amount: Number(b.amount), notes: b.notes || null },
+      data: { budgetId: id, lineType: b.lineType, category: String(b.category).trim(), accountId: accountCheck.accountId, fundId: fundCheck.fundId, amount: Number(b.amount), notes: b.notes || null },
     });
     flash(req, 'Budget line added.', 'success');
     res.redirect(`/finance/budgets/${id}`);
@@ -2347,7 +2383,7 @@ function register(app) {
   }));
 
   // --- Expenses (simplified to always-PAID; approval workflow deferred) ---
-  app.get('/finance/expenses', asyncHandler(async (req, res) => {
+  app.get('/finance/expenses', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canWrite = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER', 'CASHIER'].includes(res.locals.user.financeRole);
@@ -2416,7 +2452,7 @@ function register(app) {
   }));
 
   // --- Journal entries ---
-  app.get('/finance/journal/:id', asyncHandler(async (req, res) => {
+  app.get('/finance/journal/:id', requireFinanceReportAccess, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const db = res.locals.db;
     const canManage = res.locals.user.role === 'ADMIN' || ['FINANCE_ADMIN', 'TREASURER'].includes(res.locals.user.financeRole);

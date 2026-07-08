@@ -17,6 +17,22 @@ async function loadOrganizations(db) {
   return db.organization.findMany({ where: { active: true }, orderBy: { name: 'asc' }, select: { id: true, name: true } });
 }
 
+// tenantDb only stamps churchId onto a create's own row — it never validates
+// a client-supplied foreign-key id embedded in that row's data, so
+// Ministry.leaderId/orgId must be checked explicitly through the scoped
+// client first, or a cross-tenant id in the request body would silently
+// attach this church's bible class to another church's member/organization.
+async function checkLeaderId(db, bodyLeaderId) {
+  if (!bodyLeaderId) return { ok: true, leaderId: null };
+  const member = await db.member.findUnique({ where: { id: Number(bodyLeaderId) } });
+  return member ? { ok: true, leaderId: member.id } : { ok: false, leaderId: null };
+}
+async function checkOrgId(db, bodyOrgId) {
+  if (!bodyOrgId) return { ok: true, orgId: null };
+  const org = await db.organization.findUnique({ where: { id: Number(bodyOrgId) } });
+  return org ? { ok: true, orgId: org.id } : { ok: false, orgId: null };
+}
+
 function register(app) {
   app.get('/bible-classes', asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
@@ -109,15 +125,19 @@ function register(app) {
   }));
 
   app.post('/bible-classes', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
     const b = req.body || {};
     if (!b.name || !String(b.name).trim()) return res.redirect('/bible-classes');
+    const leaderCheck = await checkLeaderId(db, b.leaderId);
+    const orgCheck = await checkOrgId(db, b.orgId);
+    if (!leaderCheck.ok || !orgCheck.ok) return res.redirect('/bible-classes');
     try {
-      await res.locals.db.ministry.create({
+      await db.ministry.create({
         data: {
           name: String(b.name).trim(),
           description: b.description || null,
-          leaderId: b.leaderId ? Number(b.leaderId) : null,
-          orgId: b.orgId ? Number(b.orgId) : null,
+          leaderId: leaderCheck.leaderId,
+          orgId: orgCheck.orgId,
           meetsOn: b.meetsOn || null,
         },
       });
@@ -128,14 +148,18 @@ function register(app) {
   }));
 
   app.post('/bible-classes/:id', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
     const id = Number(req.params.id);
     const b = req.body || {};
+    const leaderCheck = await checkLeaderId(db, b.leaderId);
+    const orgCheck = await checkOrgId(db, b.orgId);
+    if (!leaderCheck.ok || !orgCheck.ok) return res.redirect('/bible-classes');
     try {
-      await res.locals.db.ministry.update({
+      await db.ministry.update({
         where: { id },
         data: {
-          leaderId: b.leaderId ? Number(b.leaderId) : null,
-          orgId: b.orgId ? Number(b.orgId) : null,
+          leaderId: leaderCheck.leaderId,
+          orgId: orgCheck.orgId,
         },
       });
     } catch (e) {

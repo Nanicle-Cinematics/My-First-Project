@@ -33,6 +33,17 @@ function iso(d) {
   return d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
 }
 
+// tenantDb only stamps churchId onto a create's own row — it never validates
+// a client-supplied foreign-key id embedded in that row's data, so
+// PreachingPlan.memberId must be checked explicitly through the scoped
+// client first, or a cross-tenant id would let this church send a real
+// reminder SMS/email to another church's member and leak their contact info.
+async function checkMemberId(db, bodyMemberId) {
+  if (!bodyMemberId) return { ok: true, memberId: null };
+  const member = await db.member.findUnique({ where: { id: Number(bodyMemberId) } });
+  return member ? { ok: true, memberId: member.id } : { ok: false, memberId: null };
+}
+
 function parsePlanBody(b) {
   const preachDate = b.preachDate ? new Date(b.preachDate) : null;
   return {
@@ -212,7 +223,9 @@ function register(app) {
   app.post('/preaching', requireAdmin, asyncHandler(async (req, res) => {
     const v = parsePlanBody(req.body || {});
     if (!v.preachDate || Number.isNaN(v.preachDate.getTime())) return res.redirect('/preaching');
-    const plan = await res.locals.db.preachingPlan.create({ data: v });
+    const memberCheck = await checkMemberId(res.locals.db, v.memberId);
+    if (!memberCheck.ok) return res.redirect('/preaching');
+    const plan = await res.locals.db.preachingPlan.create({ data: { ...v, memberId: memberCheck.memberId } });
     await logActivity(res.locals.db, 'preaching_scheduled',
       `Scheduled preaching for ${fmtPreachDate(iso(plan.preachDate))}`, '/preaching', res.locals.user.id);
     res.redirect('/preaching');
@@ -233,10 +246,12 @@ function register(app) {
     const id = Number(req.params.id);
     const v = parsePlanBody(req.body || {});
     if (!v.preachDate || Number.isNaN(v.preachDate.getTime())) return res.redirect(`/preaching/${id}/edit`);
+    const memberCheck = await checkMemberId(res.locals.db, v.memberId);
+    if (!memberCheck.ok) return res.redirect(`/preaching/${id}/edit`);
     try {
       await res.locals.db.preachingPlan.update({
         where: { id },
-        data: { ...v, updatedAt: new Date() },
+        data: { ...v, memberId: memberCheck.memberId, updatedAt: new Date() },
       });
     } catch (e) {
       if (e.code !== 'P2025') throw e;

@@ -107,6 +107,24 @@ async function saveMemberOrgs(db, memberId, orgIds) {
   if (orgIds.length) await db.organizationMembership.createMany({ data: orgIds.map((orgId) => ({ orgId, memberId })) });
 }
 
+// createMany only stamps churchId onto each new row — it does not verify
+// that a client-supplied orgId belongs to this tenant, so callers must
+// validate orgIds through the scoped client before calling saveMemberOrgs,
+// or a cross-tenant orgId in the request body would silently link the
+// member into another church's organization roster.
+async function validOrgIds(db, orgIds) {
+  if (!orgIds.length) return true;
+  const found = await db.organization.count({ where: { id: { in: orgIds } } });
+  return found === new Set(orgIds).size;
+}
+
+// Same tenant-validation as validOrgIds, for Member.bibleClassId.
+async function checkBibleClassId(db, bodyBibleClassId) {
+  if (!bodyBibleClassId) return { ok: true, bibleClassId: null };
+  const ministry = await db.ministry.findUnique({ where: { id: Number(bodyBibleClassId) } });
+  return ministry ? { ok: true, bibleClassId: ministry.id } : { ok: false, bibleClassId: null };
+}
+
 async function memberForm(db, member = {}, memberOrgIds, action) {
   const [bibleClasses, organizations] = await Promise.all([
     db.ministry.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
@@ -286,9 +304,12 @@ function register(app) {
     const b = req.body || {};
     const err = memberErrors(b);
     if (err) { flash(req, err); return res.redirect('/members/new'); }
-    const externalId = await nextMemberId(db);
-    const member = await db.member.create({ data: { ...parseMemberBody(b), externalId, unsubscribeToken: require('crypto').randomBytes(16).toString('hex') } });
     const orgIds = parseOrgIds(b);
+    if (!(await validOrgIds(db, orgIds))) { flash(req, 'One or more organizations were not found.'); return res.redirect('/members/new'); }
+    const bibleClassCheck = await checkBibleClassId(db, b.bibleClassId);
+    if (!bibleClassCheck.ok) { flash(req, 'Bible class not found.'); return res.redirect('/members/new'); }
+    const externalId = await nextMemberId(db);
+    const member = await db.member.create({ data: { ...parseMemberBody(b), bibleClassId: bibleClassCheck.bibleClassId, externalId, unsubscribeToken: require('crypto').randomBytes(16).toString('hex') } });
     if (orgIds.length) await saveMemberOrgs(db, member.id, orgIds);
     await logActivity(db, 'member_added', `New member added: ${b.firstName} ${b.lastName} (${externalId})`, `/members/${member.id}`, res.locals.user.id);
     res.redirect(`/members/${member.id}`);
@@ -377,13 +398,17 @@ function register(app) {
     const b = req.body || {};
     const err = memberErrors(b);
     if (err) { flash(req, err); return res.redirect(`/members/${id}`); }
+    const orgIds = parseOrgIds(b);
+    if (!(await validOrgIds(db, orgIds))) { flash(req, 'One or more organizations were not found.'); return res.redirect(`/members/${id}`); }
+    const bibleClassCheck = await checkBibleClassId(db, b.bibleClassId);
+    if (!bibleClassCheck.ok) { flash(req, 'Bible class not found.'); return res.redirect(`/members/${id}`); }
     try {
-      await db.member.update({ where: { id }, data: parseMemberBody(b) });
+      await db.member.update({ where: { id }, data: { ...parseMemberBody(b), bibleClassId: bibleClassCheck.bibleClassId } });
     } catch (e) {
       if (e.code !== 'P2025') throw e;
       return res.status(404).send('Not found');
     }
-    await saveMemberOrgs(db, id, parseOrgIds(b));
+    await saveMemberOrgs(db, id, orgIds);
     await logActivity(db, 'member_updated', `Member updated: ${b.firstName} ${b.lastName}`, `/members/${id}`, res.locals.user.id);
     res.redirect(`/members/${id}`);
   }));

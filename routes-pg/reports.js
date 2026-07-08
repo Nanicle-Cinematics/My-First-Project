@@ -23,6 +23,16 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// day-born and income both carry named per-donor amounts — same sensitivity
+// as finance.js's /finance/reports/giving and the HTML /reports/day-born
+// and /reports/income routes, which require financeRole access.
+function requireFinanceReportAccess(req, res, next) {
+  const u = res.locals.user;
+  if (!u) return res.status(401).json({ error: 'not logged in' });
+  if (u.role === 'ADMIN' || (u.financeRole && u.financeRole !== 'NONE')) return next();
+  return res.status(403).json({ error: 'Finance access required' });
+}
+
 function defaultRange(query) {
   const today = new Date();
   const start = query.start || new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
@@ -32,7 +42,7 @@ function defaultRange(query) {
 
 function register(app) {
   // --- Day-born report: CTE (totals/mx) + crosstab (CASE-based pivot). ---
-  app.get('/api/reports/day-born', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/reports/day-born', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const churchId = res.locals.churchId;
     const { start, end } = defaultRange(req.query);
 
@@ -91,7 +101,7 @@ function register(app) {
   }));
 
   // --- Income detail: UNION ALL across 6 income-bearing tables. ---
-  app.get('/api/reports/income', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/reports/income', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const churchId = res.locals.churchId;
     const { start, end } = defaultRange(req.query);
 

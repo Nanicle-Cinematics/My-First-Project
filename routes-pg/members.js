@@ -104,6 +104,16 @@ async function validOrgIds(db, orgIds) {
   return found === new Set(orgIds).size;
 }
 
+// Same tenant-validation as validOrgIds, for Member.bibleClassId — a
+// client-supplied id must be checked through the scoped client, or a
+// cross-tenant id would silently link this member to another church's
+// bible class ("Ministry" model).
+async function checkBibleClassId(db, bodyBibleClassId) {
+  if (!bodyBibleClassId) return { ok: true, bibleClassId: null };
+  const ministry = await db.ministry.findUnique({ where: { id: Number(bodyBibleClassId) } });
+  return ministry ? { ok: true, bibleClassId: ministry.id } : { ok: false, bibleClassId: null };
+}
+
 function register(app) {
   app.get('/api/members', requireAuth, asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -149,10 +159,13 @@ function register(app) {
     if (err) return res.status(400).json({ error: err });
     const orgIds = Array.isArray(b.orgIds) ? b.orgIds.map(Number).filter(Boolean) : [];
     if (!(await validOrgIds(db, orgIds))) return res.status(400).json({ error: 'One or more organizations were not found' });
+    const bibleClassCheck = await checkBibleClassId(db, b.bibleClassId);
+    if (!bibleClassCheck.ok) return res.status(400).json({ error: 'Bible class not found' });
     const externalId = await nextMemberId(db);
     const member = await db.member.create({
       data: {
         ...parseMemberBody(b),
+        bibleClassId: bibleClassCheck.bibleClassId,
         externalId,
         unsubscribeToken: require('crypto').randomBytes(16).toString('hex'),
       },
@@ -199,8 +212,10 @@ function register(app) {
     if (err) return res.status(400).json({ error: err });
     const orgIds = Array.isArray(b.orgIds) ? b.orgIds.map(Number).filter(Boolean) : [];
     if (!(await validOrgIds(db, orgIds))) return res.status(400).json({ error: 'One or more organizations were not found' });
+    const bibleClassCheck = await checkBibleClassId(db, b.bibleClassId);
+    if (!bibleClassCheck.ok) return res.status(400).json({ error: 'Bible class not found' });
     try {
-      const member = await db.member.update({ where: { id }, data: parseMemberBody(b) });
+      const member = await db.member.update({ where: { id }, data: { ...parseMemberBody(b), bibleClassId: bibleClassCheck.bibleClassId } });
       await saveMemberOrgs(db, id, orgIds);
       res.json(member);
     } catch (e) {

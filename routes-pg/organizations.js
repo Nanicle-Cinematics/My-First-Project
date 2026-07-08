@@ -18,6 +18,17 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// tenantDb only stamps churchId onto a create's own row — it never validates
+// a client-supplied foreign-key id embedded in that row's data, so
+// Organization.leaderId must be checked explicitly through the scoped
+// client first, or a cross-tenant id in the request body would silently
+// install another church's member as this church's group leader.
+async function checkLeaderId(db, bodyLeaderId) {
+  if (!bodyLeaderId) return { ok: true, leaderId: null };
+  const member = await db.member.findUnique({ where: { id: Number(bodyLeaderId) } });
+  return member ? { ok: true, leaderId: member.id } : { ok: false, leaderId: null };
+}
+
 function register(app) {
   app.get('/api/organizations', requireAuth, asyncHandler(async (req, res) => {
     const q = (req.query.q || '').trim();
@@ -40,15 +51,18 @@ function register(app) {
   }));
 
   app.post('/api/organizations', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
     const b = req.body || {};
     if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'name is required' });
+    const leaderCheck = await checkLeaderId(db, b.leaderId);
+    if (!leaderCheck.ok) return res.status(400).json({ error: 'Leader not found' });
     try {
-      const org = await res.locals.db.organization.create({
+      const org = await db.organization.create({
         data: {
           name: String(b.name).trim(),
           description: b.description || null,
           meetsOn: b.meetsOn || null,
-          leaderId: b.leaderId ? Number(b.leaderId) : null,
+          leaderId: leaderCheck.leaderId,
         },
       });
       res.status(201).json(org);
@@ -113,10 +127,13 @@ function register(app) {
   }));
 
   app.put('/api/organizations/:id/leader', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    const leaderCheck = await checkLeaderId(db, req.body.leaderId);
+    if (!leaderCheck.ok) return res.status(400).json({ error: 'Leader not found' });
     try {
-      const org = await res.locals.db.organization.update({
+      const org = await db.organization.update({
         where: { id: Number(req.params.id) },
-        data: { leaderId: req.body.leaderId ? Number(req.body.leaderId) : null },
+        data: { leaderId: leaderCheck.leaderId },
       });
       res.json(org);
     } catch (e) {

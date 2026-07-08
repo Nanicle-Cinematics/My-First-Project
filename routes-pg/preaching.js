@@ -78,6 +78,17 @@ async function sendPreachingReminder(db, plan, userId, churchName) {
   };
 }
 
+// tenantDb only stamps churchId onto a create's own row — it never validates
+// a client-supplied foreign-key id embedded in that row's data, so
+// PreachingPlan.memberId must be checked explicitly through the scoped
+// client first, or a cross-tenant id would let this church send a real
+// reminder SMS/email to another church's member and leak their contact info.
+async function checkMemberId(db, bodyMemberId) {
+  if (!bodyMemberId) return { ok: true, memberId: null };
+  const member = await db.member.findUnique({ where: { id: Number(bodyMemberId) } });
+  return member ? { ok: true, memberId: member.id } : { ok: false, memberId: null };
+}
+
 function parsePlanBody(b) {
   const preachDate = b.preachDate ? new Date(b.preachDate) : null;
   return {
@@ -122,23 +133,29 @@ function register(app) {
   }));
 
   app.post('/api/preaching', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
     const v = parsePlanBody(req.body || {});
     if (!v.preachDate || Number.isNaN(v.preachDate.getTime())) {
       return res.status(400).json({ error: 'preachDate is required' });
     }
-    const plan = await res.locals.db.preachingPlan.create({ data: v });
+    const memberCheck = await checkMemberId(db, v.memberId);
+    if (!memberCheck.ok) return res.status(400).json({ error: 'Member not found' });
+    const plan = await db.preachingPlan.create({ data: { ...v, memberId: memberCheck.memberId } });
     res.status(201).json(plan);
   }));
 
   app.put('/api/preaching/:id', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
     const v = parsePlanBody(req.body || {});
     if (!v.preachDate || Number.isNaN(v.preachDate.getTime())) {
       return res.status(400).json({ error: 'preachDate is required' });
     }
+    const memberCheck = await checkMemberId(db, v.memberId);
+    if (!memberCheck.ok) return res.status(400).json({ error: 'Member not found' });
     try {
-      const plan = await res.locals.db.preachingPlan.update({
+      const plan = await db.preachingPlan.update({
         where: { id: Number(req.params.id) },
-        data: { ...v, updatedAt: new Date() },
+        data: { ...v, memberId: memberCheck.memberId, updatedAt: new Date() },
       });
       res.json(plan);
     } catch (e) {
