@@ -1288,7 +1288,7 @@ form.inline button { padding: 0.4rem 0.7rem; font-size: 0.85rem; height: 34px; }
   border-radius: 16px; padding: 1rem 1.1rem; min-width: 180px; flex: 1 1 180px;
   color: #fff; box-shadow: var(--shadow);
 }
-.hero-stat.gold   { background: linear-gradient(135deg, #e2b73a, #c8920f); color: var(--gold-ink); }
+.hero-stat.gold   { background: linear-gradient(135deg, #e2b73a, #c8920f); }
 .hero-stat.green  { background: linear-gradient(135deg, #22b765, #15924c); }
 .hero-stat.blue   { background: linear-gradient(135deg, #3a82d6, #1d4e89); }
 .hero-stat.purple { background: linear-gradient(135deg, #8b6cff, #6240e0); }
