@@ -8147,6 +8147,11 @@ code.break-all { word-break: break-all; }
   padding-bottom: .35rem;
   overflow-x: auto;
   scrollbar-width: thin;
+  /* There are more report tabs than fit most viewports — fade the right
+     edge so the row visibly hints "more to scroll" instead of hard-clipping
+     the last tab with no indication anything is cut off. */
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent 100%);
 }
 .finance-report-tabs a {
   flex: 0 0 auto;

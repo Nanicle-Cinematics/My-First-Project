@@ -2167,7 +2167,7 @@ function register(app) {
       <section class="card">
         <div class="card-head"><h2>Expenses tagged to this project</h2></div>
         <p class="muted-text">Only PAID expenses count toward "Spent" above — SUBMITTED ones are still awaiting a fund manager's approval.</p>
-        ${expenses.length ? table(['Date', 'Category', 'Description', 'Amount', 'Status'], expenses.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)), esc(e.category), esc(e.description || '—'), fmtMoney(e.amount), `<span class="pill pill-${esc(e.approvalStatus.toLowerCase())}">${esc(e.approvalStatus)}</span>`]))
+        ${expenses.length ? table(['Date', 'Amount', 'Status', 'Category', 'Description'], expenses.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)), fmtMoney(e.amount), `<span class="pill pill-${esc(e.approvalStatus.toLowerCase())}">${esc(e.approvalStatus)}</span>`, esc(e.category), esc(e.description || '—')]), { keyCols: 3 })
           : '<p class="muted-text">No expenses tagged to this project yet.</p>'}
       </section>`;
     res.page({ title: `Project · ${project.name}`, active: '/finance', noHeader: true, body: `${pageHero(`Project · ${esc(project.name)}`, '')}${body}` });
@@ -2422,10 +2422,11 @@ function register(app) {
            </form>
          </details>` : '';
     const body = `${addForm}
-      ${rows.length ? table(['Date', 'Category', 'Description', 'Fund', 'Project', 'Paid to', 'Method', 'Amount', 'Status', 'Voucher', ...(canApprove ? ['Approval'] : [])],
-        rows.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)), esc((e.expenseCategory && e.expenseCategory.categoryName) || e.category),
-          esc(e.description), esc((e.fund && e.fund.name) || '—'), esc((e.project && e.project.name) || '—'), esc(e.paidTo) || '—', esc(e.paymentMethod) || '—',
+      ${rows.length ? table(['Date', 'Amount', 'Status', 'Category', 'Description', 'Fund', 'Project', 'Paid to', 'Method', 'Voucher', ...(canApprove ? ['Approval'] : [])],
+        rows.map((e) => [esc(e.spentOn.toISOString().slice(0, 10)),
           fmtMoney(e.amount), `<span class="pill pill-${esc(e.approvalStatus.toLowerCase())}">${esc(e.approvalStatus)}</span>`,
+          esc((e.expenseCategory && e.expenseCategory.categoryName) || e.category),
+          esc(e.description), esc((e.fund && e.fund.name) || '—'), esc((e.project && e.project.name) || '—'), esc(e.paidTo) || '—', esc(e.paymentMethod) || '—',
           e.paymentVoucher ? `<a class="btn-link" href="/finance/vouchers/${e.paymentVoucher.id}/print">${esc(e.paymentVoucher.voucherNo)}</a>` : '—',
           ...(canApprove ? [
             e.approvalStatus === 'SUBMITTED'
@@ -2434,7 +2435,7 @@ function register(app) {
                 : `<form method="post" action="/finance/expenses/${e.id}/approve" style="display:inline" onsubmit="return confirm('Approve and pay this expense?')"><button type="submit" class="btn-link">Approve</button></form>
                    <form method="post" action="/finance/expenses/${e.id}/reject" style="display:inline" onsubmit="return confirm('Reject this expense?')"><button type="submit" class="btn-link">Reject</button></form>`)
               : '—',
-          ] : [])]))
+          ] : [])]), { keyCols: 3 })
         : '<p class="muted-text">No expenses recorded yet.</p>'}`;
     res.page({ title: 'Finance · Expenses', active: '/finance', noHeader: true, body: `${pageHero('Expenses', '')}${body}` });
   }));
