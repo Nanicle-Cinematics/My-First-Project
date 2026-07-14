@@ -106,7 +106,7 @@ async function signedInClient(tag) {
 test('broadcast: dry-run send updates recipients and tallies correctly', async () => {
   const { client, churchId } = await signedInClient('html-broadcast-dry');
   await db.member.create({
-    data: { churchId, externalId: 'MBR-001', firstName: 'Ama', lastName: 'Owusu', mobilePhone: '0244000001', email: 'ama@example.test', membershipStatus: 'MEMBER', preferredChannel: 'EITHER', unsubscribeToken: 'tok-b1' },
+    data: { churchId, externalId: 'MBR-001', firstName: 'Ama', lastName: 'Owusu', mobilePhone: '0244000001', email: 'ama@example.test', membershipStatus: 'MEMBER', preferredChannel: 'EITHER', unsubscribeToken: `tok-b1-${process.pid}-${Date.now()}` },
   });
 
   const page = await client.getHtml('/communications/broadcast');
