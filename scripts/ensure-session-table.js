@@ -7,9 +7,10 @@
 // via this script — never via createTableIfMissing at runtime.
 const { Pool } = require('pg');
 require('../lib/tenant'); // side-effect: Prisma loads .env into process.env
+const { getDatabaseUrl } = require('../lib/database-url');
 
 async function main() {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = new Pool({ connectionString: getDatabaseUrl() });
   await pool.query(`
     CREATE TABLE IF NOT EXISTS "session" (
       "sid" varchar NOT NULL COLLATE "default",
