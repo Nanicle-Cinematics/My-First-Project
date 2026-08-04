@@ -29,10 +29,6 @@ photos/
 .vscode
 .idea
 
-# Per-church deployment configs — operator-specific, not part of the image
-deploys/
-deploy/churches/
-
 # Docs and dev-only files (image doesn't need them)
 README.md
 marketing/
