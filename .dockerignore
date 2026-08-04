@@ -1,15 +1,17 @@
-# Don't ship local node_modules into the Docker image — they're compiled
+# Don't ship local node_modules into the Docker image — they're resolved
 # for whatever host you're on (Mac), but the container is Linux.
-# Native modules like better-sqlite3 will throw "invalid ELF header" if
-# Mac-compiled binaries get loaded by Linux. The Dockerfile runs
+# Prisma's query engine is a platform-specific binary (the local tree has
+# libquery_engine-darwin.dylib.node), so a Mac-built node_modules copied
+# over the container's will fail to load on Linux. The Dockerfile runs
 # `npm install` inside the build, so node_modules will be rebuilt fresh
 # with Linux binaries — but only if the host's node_modules isn't COPY'd
 # in over the top of them.
 node_modules
 npm-debug.log
 
-# Local state and databases — never ship into the image. The real DB
-# lives on the Fly volume at /data/church.db, separate from the image.
+# Local state and leftover SQLite files — never ship into the image. The
+# real database is Neon Postgres (DATABASE_URL); the Fly volume now holds
+# only member photos at /data/photos.
 *.db
 *.db-journal
 demo.db
