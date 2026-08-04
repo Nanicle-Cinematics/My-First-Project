@@ -42,6 +42,11 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
           BACKUP_DIR: /tmp/church-backup
+          # pg-backup.sh upgrades the connection to sslmode=verify-full, and
+          # libpq needs an explicit CA bundle for that -- it does not use
+          # Node's bundled certificates. Without this, pg_dump looks for
+          # ~/.postgresql/root.crt and fails to connect.
+          PGSSLROOTCERT: /etc/ssl/certs/ca-certificates.crt
         run: bash scripts/pg-backup.sh
       - name: Full restore drill
         env:

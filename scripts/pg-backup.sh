@@ -9,10 +9,23 @@ mkdir -p "$BACKUP_DIR"
 file="$BACKUP_DIR/church-manager-$stamp.dump"
 partial="$file.partial"
 trap 'rm -f "$partial"' EXIT
-PG_URL="$(node -e '
+# Strip Prisma-only pool params (pg_dump rejects them as invalid URI query
+# parameters), then apply the same sslmode=verify-full policy the app uses,
+# via lib/database-url.js so the rule lives in exactly one place. Doing it
+# here means the script is correct however it is invoked -- the Fly container
+# passes an already-normalized DATABASE_URL, but CI passes the raw secret.
+#
+# verify-full requires a CA bundle, and libpq does NOT use Node's bundled
+# certificates: it reads ~/.postgresql/root.crt unless PGSSLROOTCERT points
+# elsewhere. Callers must set PGSSLROOTCERT (fly.toml sets it for the
+# container; the backup workflow sets it for the runner) or pg_dump fails
+# with: root certificate file "/root/.postgresql/root.crt" does not exist
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PG_URL="$(SCRIPT_DIR="$SCRIPT_DIR" node -e '
+  const { normalizePostgresSslMode } = require(process.env.SCRIPT_DIR + "/../lib/database-url");
   const u = new URL(process.env.DATABASE_URL);
   for (const key of ["connection_limit", "pool_timeout", "pgbouncer"]) u.searchParams.delete(key);
-  process.stdout.write(u.toString());
+  process.stdout.write(normalizePostgresSslMode(u.toString()));
 ')"
 
 pg_dump "$PG_URL" --format=custom --no-owner --no-acl --file="$partial"
