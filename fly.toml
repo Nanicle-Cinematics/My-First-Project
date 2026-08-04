@@ -15,6 +15,12 @@ primary_region = "lhr"
 [env]
   NODE_ENV   = "production"
   PORT       = "3000"
+  # lib/database-url.js rewrites DATABASE_URL to sslmode=verify-full, and
+  # lib/operations-scheduler.js hands that same env to scripts/pg-backup.sh.
+  # Node's Prisma and pg clients carry their own CA bundles, but libpq
+  # (pg_dump) does not -- without this it looks for ~/.postgresql/root.crt,
+  # finds nothing, and every scheduled backup fails to connect.
+  PGSSLROOTCERT = "/etc/ssl/certs/ca-certificates.crt"
   PHOTO_DIR  = "/data/photos"
   LOGO_DIR   = "/data/church-logos"
   BACKUP_DIR = "/data/backups/postgres"
