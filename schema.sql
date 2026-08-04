@@ -11,7 +11,7 @@ CREATE TABLE households (
     city           TEXT,
     state          TEXT,
     postal_code    TEXT,
-    country        TEXT    DEFAULT 'USA',
+    country        TEXT    DEFAULT 'Ghana',
     home_phone     TEXT,
     created_at     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
