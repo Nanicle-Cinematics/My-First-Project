@@ -146,7 +146,14 @@ test('communications: post an announcement, then load broadcast composer', async
 test('events: create an event, view detail, check in a member, then RSVP', async () => {
   const { client, churchId } = await signedInClient('html-evt-create');
   const member = await db.member.create({
-    data: { churchId, externalId: 'MBR-EVT-1', firstName: 'Kofi', lastName: 'Mensah', membershipStatus: 'MEMBER', unsubscribeToken: 'tok-evt-1' },
+    data: {
+      churchId,
+      externalId: 'MBR-EVT-1',
+      firstName: 'Kofi',
+      lastName: 'Mensah',
+      membershipStatus: 'MEMBER',
+      unsubscribeToken: `tok-evt-1-${process.pid}-${Date.now()}`,
+    },
   });
 
   const newPage = await client.getHtml('/events/new');

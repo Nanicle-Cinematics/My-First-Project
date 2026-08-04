@@ -140,7 +140,16 @@ test('reports: day-born, income, and members reports render with real data acros
   const svcType = await db.serviceType.findFirst({ where: { churchId, typeName: 'Sunday Service' } });
   const svc = await db.service.create({ data: { churchId, serviceTypeId: svcType.id, serviceDate: new Date(), totalAmount: 500 } });
   await db.dayBornSplit.create({ data: { churchId, serviceId: svc.id, dayBorn: 'MONDAY', amount: 200 } });
-  const member = await db.member.create({ data: { churchId, externalId: 'MBR-001', firstName: 'Ama', lastName: 'Owusu', membershipStatus: 'MEMBER', unsubscribeToken: 'tok-rep-1' } });
+  const member = await db.member.create({
+    data: {
+      churchId,
+      externalId: 'MBR-001',
+      firstName: 'Ama',
+      lastName: 'Owusu',
+      membershipStatus: 'MEMBER',
+      unsubscribeToken: `tok-rep-1-${process.pid}-${Date.now()}`,
+    },
+  });
   await db.tithe.create({ data: { churchId, memberId: member.id, amount: 100, titheDate: new Date() } });
 
   const dayBorn = await client.getHtml('/reports/day-born');

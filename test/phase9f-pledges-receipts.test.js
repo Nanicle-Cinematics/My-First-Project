@@ -142,7 +142,7 @@ test('pledge: creation never posts to the ledger; status starts PENDING then tra
 test('pledge payment receipt: prints with the running paid-to-date balance, dry-run send does not crash', async () => {
   const { client: c, churchId } = await signedInChurch('pledgereceipt');
   await db.fund.create({ data: { churchId, name: 'General', fundType: 'GENERAL', code: 'GEN' } });
-  const member = await db.member.create({ data: { churchId, externalId: 'MBR-902', firstName: 'Abena', lastName: 'Frimpong', membershipStatus: 'MEMBER', preferredChannel: 'EITHER', mobilePhone: '0244000099', email: 'abena@example.test', unsubscribeToken: 'tok-9f-1' } });
+  const member = await db.member.create({ data: { churchId, externalId: 'MBR-902', firstName: 'Abena', lastName: 'Frimpong', membershipStatus: 'MEMBER', preferredChannel: 'EITHER', mobilePhone: '0244000099', email: 'abena@example.test', unsubscribeToken: `tok-9f-1-${process.pid}-${Date.now()}` } });
   const harvest = await db.harvest.create({ data: { churchId, harvestType: 'ORGANIZATIONAL', harvestYear: 2026, harvestName: 'Youth Harvest' } });
   const pledge = await db.pledge.create({ data: { churchId, memberId: member.id, harvestId: harvest.id, pledgedAmount: 500, pledgeDate: new Date('2026-02-01') } });
 

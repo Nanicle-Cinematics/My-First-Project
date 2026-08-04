@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-concurrency=1 --test-force-exit \"test/**/*.test.js\"",
+    "test": "node --require ./test/setup.js --test --test-concurrency=1 --test-force-exit \"test/**/*.test.js\"",
     "check:raw-sql-tenant-scoping": "node scripts/check-raw-sql-tenant-scoping.js",
     "build-db": "bash build.sh",
     "migrate-live-db": "node scripts/migrate-live-db.js",
