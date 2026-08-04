@@ -219,7 +219,10 @@ test('cross-tenant isolation: church B cannot see church A rows via a converted 
   const signupB = await clientB.post('/signup', { churchName: 'Isolation Church B', name: 'Owner B', email: uniqueEmail('iso-b'), password: 'password123' });
   createdChurchIds.push(signupA.body.church.id, signupB.body.church.id);
 
-  await db.preachingPlan.create({ data: { churchId: signupA.body.church.id, preachDate: new Date('2026-09-06'), topic: 'Only for A' } });
+  // Must stay in the future: the assertions below count `upcoming`, which
+  // GET /api/preaching filters by `preachDate >= today`.
+  const future = new Date(Date.now() + 30 * 86400000);
+  await db.preachingPlan.create({ data: { churchId: signupA.body.church.id, preachDate: future, topic: 'Only for A' } });
 
   const seenByA = await clientA.get('/api/preaching');
   const seenByB = await clientB.get('/api/preaching');

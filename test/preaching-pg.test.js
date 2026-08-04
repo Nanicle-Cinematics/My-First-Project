@@ -11,6 +11,11 @@ const { signupChurch } = require('../lib/provision');
 
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret';
 
+// GET /api/preaching splits on `preachDate >= today`, so any appointment a
+// test expects in `upcoming` must be dated relative to the run. A hardcoded
+// literal here passes until that date arrives and then fails forever.
+const daysFromNow = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const createdChurchIds = [];
 
@@ -88,7 +93,7 @@ async function addNonAdminUser(churchId, role) {
 test('create, read, update, soft-delete a preaching appointment', async () => {
   const { client } = await newSignedInChurch('preaching-crud');
 
-  const created = await client.post('/api/preaching', { preachDate: '2026-08-02', topic: 'Faith', serviceLabel: 'Sunday 9am' });
+  const created = await client.post('/api/preaching', { preachDate: daysFromNow(30), topic: 'Faith', serviceLabel: 'Sunday 9am' });
   assert.strictEqual(created.status, 201);
   const id = created.body.id;
 
@@ -96,7 +101,7 @@ test('create, read, update, soft-delete a preaching appointment', async () => {
   assert.strictEqual(fetched.status, 200);
   assert.strictEqual(fetched.body.topic, 'Faith');
 
-  const updated = await client.put(`/api/preaching/${id}`, { preachDate: '2026-08-02', topic: 'Grace' });
+  const updated = await client.put(`/api/preaching/${id}`, { preachDate: daysFromNow(30), topic: 'Grace' });
   assert.strictEqual(updated.status, 200);
   assert.strictEqual(updated.body.topic, 'Grace');
 
@@ -121,13 +126,13 @@ test('editing/deleting someone else\'s appointment id (cross-tenant) 404s, never
   const a = await newSignedInChurch('preaching-cross-a');
   const b = await newSignedInChurch('preaching-cross-b');
 
-  const created = await a.client.post('/api/preaching', { preachDate: '2026-08-16', topic: 'Church A only' });
+  const created = await a.client.post('/api/preaching', { preachDate: daysFromNow(45), topic: 'Church A only' });
   const id = created.body.id;
 
   const crossRead = await b.client.get(`/api/preaching/${id}`);
   assert.strictEqual(crossRead.status, 404);
 
-  const crossUpdate = await b.client.put(`/api/preaching/${id}`, { preachDate: '2026-08-16', topic: 'Hijacked' });
+  const crossUpdate = await b.client.put(`/api/preaching/${id}`, { preachDate: daysFromNow(45), topic: 'Hijacked' });
   assert.strictEqual(crossUpdate.status, 404);
 
   const crossDelete = await b.client.del(`/api/preaching/${id}`);
@@ -146,6 +151,6 @@ test('non-admin (VIEWER) can read but not write', async () => {
   const read = await viewer.get('/api/preaching');
   assert.strictEqual(read.status, 200);
 
-  const write = await viewer.post('/api/preaching', { preachDate: '2026-08-20', topic: 'Should be blocked' });
+  const write = await viewer.post('/api/preaching', { preachDate: daysFromNow(60), topic: 'Should be blocked' });
   assert.strictEqual(write.status, 403);
 });
