@@ -3,7 +3,7 @@
 // reversal, fund balance, period locking). Same conventions as the other
 // routes-pg/*.js test files; lib/ledger-pg.js's own correctness (balance
 // validation, reversal, locking, concurrency) is covered directly and more
-// thoroughly in test/ledger-pg.test.js — this file focuses on the HTTP
+// thoroughly in test/ledger.test.js — this file focuses on the HTTP
 // surface, RBAC, and cross-tenant isolation.
 const test = require('node:test');
 const assert = require('node:assert');

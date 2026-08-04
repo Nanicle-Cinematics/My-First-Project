@@ -1,7 +1,7 @@
 'use strict';
 // Phase 8c verification: thin HTTP smoke tests for the three new HTML
 // modules (attendance, communications, events) — same pattern as
-// test/preaching-html.test.js / test/phase8b-html.test.js.
+// test/html-preaching.test.js / test/html-bible-classes-inventory-organizations.test.js.
 const test = require('node:test');
 const assert = require('node:assert');
 const { Pool } = require('pg');

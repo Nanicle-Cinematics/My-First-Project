@@ -1,7 +1,7 @@
 'use strict';
 // Phase 8b verification: thin HTTP smoke tests for the three new HTML
 // modules (bible-classes, inventory, organizations) — same pattern as
-// test/preaching-html.test.js. Not a substitute for the required manual
+// test/html-preaching.test.js. Not a substitute for the required manual
 // browser click-through.
 const test = require('node:test');
 const assert = require('node:assert');
