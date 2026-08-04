@@ -29,11 +29,19 @@ COPY . .
 # generate its query engine as part of a production install. Omitting this
 # step is what crash-looped the app during the Phase 8g cutover.
 #
-# NOTE: prisma (the CLI) is currently a regular dependency, so the prune
-# below does NOT drop it and the CLI ships in the runtime image. Moving it
-# to devDependencies would shrink the image and still work, since generate
-# already runs before the prune -- but that is the exact arrangement that
-# caused the cutover crash-loop, so it deserves its own verified change.
+# NOTE: the prune below does NOT drop the prisma CLI (~70MB), and moving
+# prisma between dependencies and devDependencies does not change that:
+# @prisma/client declares prisma as an OPTIONAL PEER dependency, so npm
+# keeps it in the production tree either way (its package-lock entry has
+# no "dev" flag). Verified empirically, not assumed.
+#
+# Dropping those 70MB requires deleting it outright after generate:
+#   RUN rm -rf node_modules/prisma node_modules/.bin/prisma
+# That looks safe -- the runtime query engine lives in
+# node_modules/.prisma/client/ and @prisma/client never requires the CLI
+# at runtime -- but it has not been proven in a real image build, and the
+# failure mode is a container that boots green and dies on first query.
+# Do it as its own change, with a deploy you watch.
 RUN npx prisma generate
 RUN npm prune --omit=dev
 
