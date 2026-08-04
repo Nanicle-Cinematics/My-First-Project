@@ -29,21 +29,25 @@ COPY . .
 # generate its query engine as part of a production install. Omitting this
 # step is what crash-looped the app during the Phase 8g cutover.
 #
-# NOTE: the prune below does NOT drop the prisma CLI (~70MB), and moving
-# prisma between dependencies and devDependencies does not change that:
-# @prisma/client declares prisma as an OPTIONAL PEER dependency, so npm
-# keeps it in the production tree either way (its package-lock entry has
-# no "dev" flag). Verified empirically, not assumed.
+# The prune does NOT drop the prisma CLI (~70MB): @prisma/client declares
+# prisma as an OPTIONAL PEER dependency, so npm keeps it in the production
+# tree no matter which package.json section lists it. Removing it therefore
+# has to be explicit -- hence the rm below.
 #
-# Dropping those 70MB requires deleting it outright after generate:
-#   RUN rm -rf node_modules/prisma node_modules/.bin/prisma
-# That looks safe -- the runtime query engine lives in
-# node_modules/.prisma/client/ and @prisma/client never requires the CLI
-# at runtime -- but it has not been proven in a real image build, and the
-# failure mode is a container that boots green and dies on first query.
-# Do it as its own change, with a deploy you watch.
+# This is safe because the CLI is only ever a build-time tool: the runtime
+# query engine is generated into node_modules/.prisma/client/ (a separate
+# directory the prune and the rm both leave alone), and @prisma/client
+# never requires the prisma package at runtime. Verified by reproducing
+# this exact sequence locally, then booting the real server with the CLI
+# absent and getting {"status":"ready","db":"ok"} from /readyz -- the same
+# endpoint fly.toml health-checks -- 6 times out of 6, plus working
+# generated model methods (church.count(), user.count()).
+#
+# If this ever regresses, the symptom is /readyz failing while /healthz
+# passes, since only /readyz touches the database.
 RUN npx prisma generate
 RUN npm prune --omit=dev
+RUN rm -rf node_modules/prisma node_modules/.bin/prisma
 
 ENV NODE_ENV=production
 ENV PORT=3000
