@@ -8,10 +8,10 @@
 // plan for the full history).
 //
 // The original single-tenant, better-sqlite3-backed app that used to live
-// in this file has been fully superseded. Its source (routes/*.js,
-// lib/db.js, lib/ledger.js, lib/finance.js, schema.sql) is left in place
-// for one more commit as a reference/rollback point, then removed in a
-// follow-up cleanup commit — see the plan's Phase 8g checklist.
+// in this file has been fully superseded, and its source (routes/*.js,
+// lib/db.js, lib/ledger.js, lib/finance.js, schema.sql) has now been
+// removed along with the better-sqlite3 dependencies. To consult it, read
+// the tree at the cutover commit fae9159 or its parent.
 //
 // package.json's "main"/"start" ("node server.js") and every deploy config
 // (fly.toml, Dockerfile) already point at this file, so no deploy-config

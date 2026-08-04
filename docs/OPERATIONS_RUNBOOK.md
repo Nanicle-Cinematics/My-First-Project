@@ -20,11 +20,16 @@ curl -fsS https://church-management-system.fly.dev/readyz
 
 3. Create and verify a backup from `/backups`.
 
-4. Download the backup and verify it locally:
+4. Create and verify a Postgres dump locally (writes to `./backups/postgres`,
+   then re-reads the dump to confirm it is not truncated):
 
 ```bash
-./scripts/verify-backup.sh path/to/backup.db
+DATABASE_URL="$PRODUCTION_DATABASE_URL" ./scripts/pg-backup.sh
 ```
+
+Note this runs nightly and unattended via `.github/workflows/production-backup.yml`,
+which also encrypts the dump and uploads it as an artifact. That workflow only
+runs when the `ENABLE_PRODUCTION_BACKUP` repository variable is set to `true`.
 
 ## Monthly Restore Drill
 
@@ -33,8 +38,14 @@ curl -fsS https://church-management-system.fly.dev/readyz
 2. Run:
 
 ```bash
-./scripts/dr-restore-drill.sh path/to/backup.db
+RESTORE_DRILL_DATABASE_URL="postgresql://…/disposable_drill_db" \
+ALLOW_RESTORE_DRILL=1 \
+./scripts/pg-restore-drill.sh path/to/backup.dump
 ```
+
+The drill DROPs and recreates the target's `public` schema, so it refuses to
+run unless `ALLOW_RESTORE_DRILL=1` and the target differs from `DATABASE_URL`.
+Point it only at a throwaway database.
 
 3. Record:
 
