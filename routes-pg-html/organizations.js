@@ -9,6 +9,7 @@ const asyncHandler = require('../lib/async-handler');
 const { esc, initials } = require('../lib/format');
 const { pageHero, statsRow, filterCard, listCard, ICON_EYE, ICON_TRASH, memberAvatar } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
+const { logActivity } = require('../lib/tenant-activity');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -213,12 +214,13 @@ function register(app) {
     const leader = b.leaderId ? await db.member.findUnique({ where: { id: Number(b.leaderId) } }) : null;
     if (b.leaderId && !leader) { flash(req, 'Leader not found.'); return res.redirect('/organizations/new'); }
     try {
-      await db.organization.create({
+      const created = await db.organization.create({
         data: {
           name: b.name.trim(), description: b.description || null, meetsOn: b.meetsOn || null,
           leaderId: leader ? leader.id : null,
         },
       });
+      await logActivity(db, 'organization_added', `Organization created: ${created.name}`, `/organizations/${created.id}`, res.locals.user.id);
       flash(req, `Added "${b.name.trim()}".`, 'success');
     } catch (e) {
       if (e.code !== 'P2002') throw e;
@@ -242,6 +244,8 @@ function register(app) {
     if (!org || !member) { flash(req, 'Organization or member not found.'); return res.redirect(`/organizations/${oid}`); }
     try {
       await db.organizationMembership.create({ data: { orgId: oid, memberId: mid, role: req.body.role === 'leader' ? 'leader' : 'member' } });
+      await logActivity(db, 'organization_member_added',
+        `${member.firstName} ${member.lastName} joined ${org.name}`, `/organizations/${oid}`, res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2002') throw e;
       flash(req, 'That member is already in this group.', 'info');
@@ -250,10 +254,20 @@ function register(app) {
   }));
 
   app.post('/organizations/:id/remove', requireAdmin, asyncHandler(async (req, res) => {
+    const db = res.locals.db;
     const oid = Number(req.params.id);
     const mid = Number(req.body.memberId);
     try {
-      await res.locals.db.organizationMembership.delete({ where: { orgId_memberId: { orgId: oid, memberId: mid } } });
+      await db.organizationMembership.delete({ where: { orgId_memberId: { orgId: oid, memberId: mid } } });
+      // Names are only worth fetching once the delete has actually happened —
+      // a P2025 below means there was nothing to log in the first place.
+      const [org, member] = await Promise.all([
+        db.organization.findUnique({ where: { id: oid } }),
+        db.member.findUnique({ where: { id: mid } }),
+      ]);
+      await logActivity(db, 'organization_member_removed',
+        `${member ? `${member.firstName} ${member.lastName}` : `Member #${mid}`} removed from ${org ? org.name : `organization #${oid}`}`,
+        `/organizations/${oid}`, res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }
@@ -266,10 +280,13 @@ function register(app) {
     const leader = req.body.leaderId ? await db.member.findUnique({ where: { id: Number(req.body.leaderId) } }) : null;
     if (req.body.leaderId && !leader) { flash(req, 'Leader not found.'); return res.redirect(`/organizations/${oid}`); }
     try {
-      await db.organization.update({
+      const org = await db.organization.update({
         where: { id: oid },
         data: { leaderId: leader ? leader.id : null },
       });
+      await logActivity(db, 'organization_leader_changed',
+        leader ? `${leader.firstName} ${leader.lastName} set as leader of ${org.name}` : `Leader cleared for ${org.name}`,
+        `/organizations/${oid}`, res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }
@@ -278,7 +295,8 @@ function register(app) {
 
   app.post('/organizations/:id/archive', requireAdmin, asyncHandler(async (req, res) => {
     try {
-      await res.locals.db.organization.update({ where: { id: Number(req.params.id) }, data: { active: false } });
+      const org = await res.locals.db.organization.update({ where: { id: Number(req.params.id) }, data: { active: false } });
+      await logActivity(res.locals.db, 'organization_archived', `Organization archived: ${org.name}`, '/organizations', res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }

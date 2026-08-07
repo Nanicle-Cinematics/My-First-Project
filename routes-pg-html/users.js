@@ -19,6 +19,7 @@ const { esc } = require('../lib/format');
 const { pageHero, table } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
+const { logSecurityEvent } = require('../lib/security-audit');
 const { db: rawDb } = require('../lib/tenant');
 
 const ROLES = ['ADMIN', 'EDITOR', 'VIEWER'];
@@ -128,7 +129,16 @@ function register(app) {
       }
     }
     try {
-      await db.user.update({ where: { id }, data: { role, financeRole } });
+      const updated = await db.user.update({ where: { id }, data: { role, financeRole } });
+      await logActivity(db, 'user_role_changed',
+        `Role changed for ${updated.username}: ${role} / finance ${financeRole}`, '/users', res.locals.user.id);
+      // A privilege change is a security event, not just feed noise — same
+      // trail (with IP/user-agent) the MFA changes in settings.js write to.
+      await logSecurityEvent(db, req, {
+        event: 'user.role_changed',
+        subject: `${updated.email} -> ${role}/${financeRole}`,
+        actorId: res.locals.user.id,
+      });
     } catch (e) {
       if (e.code !== 'P2025') throw e;
       return res.status(404).send('Not found');
@@ -141,7 +151,13 @@ function register(app) {
     if (!password || String(password).length < 8) { flash(req, 'Password must be at least 8 characters.'); return res.redirect('/users'); }
     try {
       const passwordHash = await bcrypt.hash(password, 10);
-      await res.locals.db.user.update({ where: { id: Number(req.params.id) }, data: { passwordHash } });
+      const target = await res.locals.db.user.update({ where: { id: Number(req.params.id) }, data: { passwordHash } });
+      await logActivity(res.locals.db, 'user_password_reset', `Password reset for ${target.username}`, '/users', res.locals.user.id);
+      await logSecurityEvent(res.locals.db, req, {
+        event: 'user.password_reset_by_admin',
+        subject: target.email,
+        actorId: res.locals.user.id,
+      });
       flash(req, 'Password reset.', 'success');
     } catch (e) {
       if (e.code !== 'P2025') throw e;
@@ -152,7 +168,15 @@ function register(app) {
 
   app.post('/users/:id/disable-2fa', requireOwner, asyncHandler(async (req, res) => {
     try {
-      await res.locals.db.user.update({ where: { id: Number(req.params.id) }, data: { totpSecret: null, totpEnabled: false } });
+      const target = await res.locals.db.user.update({ where: { id: Number(req.params.id) }, data: { totpSecret: null, totpEnabled: false } });
+      await logActivity(res.locals.db, 'user_2fa_disabled', `Two-factor disabled for ${target.username}`, '/users', res.locals.user.id);
+      // Distinct from settings.js's self-service 'auth.mfa_disabled' — this is
+      // an admin disabling it on someone else's account.
+      await logSecurityEvent(res.locals.db, req, {
+        event: 'user.mfa_disabled_by_admin',
+        subject: target.email,
+        actorId: res.locals.user.id,
+      });
     } catch (e) {
       if (e.code !== 'P2025') throw e;
       return res.status(404).send('Not found');
@@ -164,7 +188,13 @@ function register(app) {
     const id = Number(req.params.id);
     if (id === res.locals.user.id) { flash(req, "You can't delete your own account."); return res.redirect('/users'); }
     try {
-      await res.locals.db.user.update({ where: { id }, data: { deletedAt: new Date() } });
+      const target = await res.locals.db.user.update({ where: { id }, data: { deletedAt: new Date() } });
+      await logActivity(res.locals.db, 'user_deleted', `User account deleted: ${target.username}`, '/users', res.locals.user.id);
+      await logSecurityEvent(res.locals.db, req, {
+        event: 'user.deleted',
+        subject: target.email,
+        actorId: res.locals.user.id,
+      });
     } catch (e) {
       if (e.code !== 'P2025') throw e;
       return res.status(404).send('Not found');

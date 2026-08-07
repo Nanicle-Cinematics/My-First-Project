@@ -7,6 +7,7 @@
 const asyncHandler = require('../lib/async-handler');
 const { esc, initials } = require('../lib/format');
 const { pageHero, statsRow, filterCard, listCard } = require('../lib/views');
+const { logActivity } = require('../lib/tenant-activity');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -132,7 +133,7 @@ function register(app) {
     const orgCheck = await checkOrgId(db, b.orgId);
     if (!leaderCheck.ok || !orgCheck.ok) return res.redirect('/bible-classes');
     try {
-      await db.ministry.create({
+      const created = await db.ministry.create({
         data: {
           name: String(b.name).trim(),
           description: b.description || null,
@@ -141,6 +142,7 @@ function register(app) {
           meetsOn: b.meetsOn || null,
         },
       });
+      await logActivity(db, 'bible_class_added', `Bible class created: ${created.name}`, '/bible-classes', res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2002') throw e; // duplicate name — silently ignored, matching the original's scope
     }
@@ -155,13 +157,14 @@ function register(app) {
     const orgCheck = await checkOrgId(db, b.orgId);
     if (!leaderCheck.ok || !orgCheck.ok) return res.redirect('/bible-classes');
     try {
-      await db.ministry.update({
+      const updated = await db.ministry.update({
         where: { id },
         data: {
           leaderId: leaderCheck.leaderId,
           orgId: orgCheck.orgId,
         },
       });
+      await logActivity(db, 'bible_class_updated', `Bible class updated: ${updated.name}`, '/bible-classes', res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }

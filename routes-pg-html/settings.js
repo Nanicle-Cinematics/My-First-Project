@@ -18,6 +18,7 @@ const { PLAN_LIMITS, isPro } = require('../routes-pg/settings');
 const QRCode = require('qrcode');
 const { createTotpSecret, verifyTotp, createRecoveryCodes, consumeRecoveryCode } = require('../lib/mfa');
 const { logSecurityEvent } = require('../lib/security-audit');
+const { logActivity } = require('../lib/tenant-activity');
 const { db: rawDb } = require('../lib/tenant');
 const { exportTenantData } = require('../lib/tenant-export');
 const { csrfValid } = require('../lib/tenant-csrf');
@@ -162,6 +163,7 @@ function register(app) {
     const name = (req.body?.name || '').trim();
     if (!name) { flash(req, 'Church name is required.'); return res.redirect('/settings'); }
     await res.locals.db.church.update({ where: { id: res.locals.churchId }, data: { name } });
+    await logActivity(res.locals.db, 'settings_updated', `Church name set to: ${name}`, '/settings', res.locals.user.id);
     flash(req, 'Settings saved.', 'success');
     res.redirect('/settings');
   }));
@@ -175,12 +177,14 @@ function register(app) {
     const ext = LOGO_EXT_FROM_MIME[String(req.file.mimetype).toLowerCase()] || 'png';
     deleteTenantLogo(res.locals.churchId);
     fs.writeFileSync(path.join(LOGO_DIR, `${res.locals.churchId}.${ext}`), req.file.buffer);
+    await logActivity(res.locals.db, 'settings_logo_updated', 'Church logo updated', '/settings', res.locals.user.id);
     flash(req, 'Church logo updated.', 'success');
     res.redirect('/settings');
   }));
 
   app.post('/settings/logo/delete', requireOwner, asyncHandler(async (req, res) => {
     deleteTenantLogo(res.locals.churchId);
+    await logActivity(res.locals.db, 'settings_logo_removed', 'Church logo removed', '/settings', res.locals.user.id);
     flash(req, 'Default church logo restored.', 'success');
     res.redirect('/settings');
   }));
