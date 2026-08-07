@@ -39,6 +39,14 @@ function iso(d) {
 }
 function fmtDt(d) { return iso(d).replace('T', ' '); }
 
+// Attendance/RSVP routes only carry ids, but an audit line naming "member #47"
+// is close to useless — resolve through the tenant-scoped client (so a foreign
+// id can never be named) and fall back to the id if it does not resolve.
+async function memberLabel(db, memberId) {
+  const m = await db.member.findUnique({ where: { id: memberId } });
+  return m ? `${m.firstName} ${m.lastName}` : `member #${memberId}`;
+}
+
 function toIntOrNull(v) {
   if (v === undefined || v === null || String(v).trim() === '') return null;
   const n = Number(v);
@@ -330,14 +338,19 @@ function register(app) {
         update: { response, respondedAt: new Date() },
         create: { eventId, memberId, response },
       });
+      await logActivity(res.locals.db, 'event_rsvp_recorded',
+        `RSVP ${response} recorded for ${await memberLabel(res.locals.db, memberId)}`, `/events/${eventId}`, res.locals.user.id);
     }
     res.redirect(`/events/${eventId}`);
   }));
 
   app.post('/events/:id/rsvp/remove', requireAdmin, asyncHandler(async (req, res) => {
     const eventId = Number(req.params.id);
+    const memberId = Number(req.body.memberId);
     try {
-      await res.locals.db.eventRsvp.delete({ where: { eventId_memberId: { eventId, memberId: Number(req.body.memberId) } } });
+      await res.locals.db.eventRsvp.delete({ where: { eventId_memberId: { eventId, memberId } } });
+      await logActivity(res.locals.db, 'event_rsvp_removed',
+        `RSVP removed for ${await memberLabel(res.locals.db, memberId)}`, `/events/${eventId}`, res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }
@@ -349,14 +362,19 @@ function register(app) {
     const memberId = Number(req.body.memberId);
     if (memberId) {
       await res.locals.db.attendance.upsert({ where: { eventId_memberId: { eventId, memberId } }, update: {}, create: { eventId, memberId } });
+      await logActivity(res.locals.db, 'attendance_recorded',
+        `${await memberLabel(res.locals.db, memberId)} checked in`, `/events/${eventId}`, res.locals.user.id);
     }
     res.redirect(`/events/${eventId}`);
   }));
 
   app.post('/events/:id/uncheck', requireAdmin, asyncHandler(async (req, res) => {
     const eventId = Number(req.params.id);
+    const memberId = Number(req.body.memberId);
     try {
-      await res.locals.db.attendance.delete({ where: { eventId_memberId: { eventId, memberId: Number(req.body.memberId) } } });
+      await res.locals.db.attendance.delete({ where: { eventId_memberId: { eventId, memberId } } });
+      await logActivity(res.locals.db, 'attendance_removed',
+        `${await memberLabel(res.locals.db, memberId)} checked out`, `/events/${eventId}`, res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }
@@ -539,6 +557,10 @@ function register(app) {
           update: { response, respondedAt: new Date() },
           create: { eventId: ev.id, memberId, response },
         });
+        // Public form: no session, so no actor — null, exactly as the public
+        // self-check-in above records it.
+        await logActivity(db, 'event_rsvp_recorded',
+          `${m.firstName} ${m.lastName} self-RSVPed ${response} to ${ev.title}`, `/events/${ev.id}`, null);
       }
     }
     res.redirect(`/rsvp/${req.params.token}?ok=1`);

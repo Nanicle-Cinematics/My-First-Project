@@ -215,6 +215,9 @@ function register(app) {
     const r = await sendPreachingReminder(db, plan, res.locals.user.id, church.name);
     if (!r.ok) return res.redirect('/preaching?reminder=nocontact');
     if (!r.hadPhone && !r.hadEmail) return res.redirect('/preaching?reminder=nocontact');
+    const who = plan.member ? `${plan.member.firstName} ${plan.member.lastName}` : 'preacher';
+    await logActivity(db, 'preaching_reminder_sent',
+      `Reminder sent to ${who}${r.dryRun ? ' (dry run)' : ''}`, '/preaching', res.locals.user.id);
     if (r.dryRun) return res.redirect('/preaching?reminder=dry');
     const delivered = (r.smsOk === true) || (r.emailOk === true);
     return res.redirect('/preaching?reminder=' + (delivered ? 'ok' : 'fail'));
@@ -249,10 +252,12 @@ function register(app) {
     const memberCheck = await checkMemberId(res.locals.db, v.memberId);
     if (!memberCheck.ok) return res.redirect(`/preaching/${id}/edit`);
     try {
-      await res.locals.db.preachingPlan.update({
+      const updated = await res.locals.db.preachingPlan.update({
         where: { id },
         data: { ...v, memberId: memberCheck.memberId, updatedAt: new Date() },
       });
+      await logActivity(res.locals.db, 'preaching_updated',
+        `Preaching appointment updated: ${updated.topic || iso(updated.preachDate)}`, '/preaching', res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }
@@ -261,10 +266,12 @@ function register(app) {
 
   app.post('/preaching/:id/delete', requireAdmin, asyncHandler(async (req, res) => {
     try {
-      await res.locals.db.preachingPlan.update({
+      const removed = await res.locals.db.preachingPlan.update({
         where: { id: Number(req.params.id) },
         data: { deletedAt: new Date() },
       });
+      await logActivity(res.locals.db, 'preaching_deleted',
+        `Preaching appointment removed: ${removed.topic || iso(removed.preachDate)}`, '/preaching', res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }

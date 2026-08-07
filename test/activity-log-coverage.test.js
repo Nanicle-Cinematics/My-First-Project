@@ -28,8 +28,17 @@ test.after(async () => {
     const where = { churchId: { in: createdChurchIds } };
     await db.activityLog.deleteMany({ where });
     await db.securityAuditLog.deleteMany({ where });
+    await db.financeBudgetLine.deleteMany({ where });
+    await db.financeBudget.deleteMany({ where });
+    await db.financialPeriod.deleteMany({ where });
+    await db.journalLine.deleteMany({ where });
+    await db.journalEntry.deleteMany({ where });
+    await db.financeReceipt.deleteMany({ where });
+    await db.incomeRecord.deleteMany({ where });
+    await db.fund.deleteMany({ where });
     await db.organizationMembership.deleteMany({ where });
     await db.organization.deleteMany({ where });
+    await db.preachingPlan.deleteMany({ where });
     await db.ministry.deleteMany({ where });
     await db.member.deleteMany({ where });
     await db.account.deleteMany({ where });
@@ -252,6 +261,66 @@ test('users: refused privilege changes write neither an activity nor a security 
   const stillAdmin = await db.user.findUnique({ where: { id: admin.id } });
   assert.strictEqual(stillAdmin.role, 'ADMIN');
   assert.strictEqual(stillAdmin.deletedAt, null);
+});
+
+test('members and preaching: removals are recorded, not just creations', async () => {
+  const { client, churchId } = await signedInClient('act-removals');
+  const member = await db.member.create({
+    data: { churchId, firstName: 'Kofi', lastName: 'Boateng', externalId: 'MBR-901' },
+  });
+  const membersPage = await client.getHtml('/members');
+  await client.postForm(`/members/${member.id}/delete`, { _csrf: extractCsrf(membersPage.text) });
+
+  const preachPage = await client.getHtml('/preaching');
+  const csrf = extractCsrf(preachPage.text);
+  await client.postForm('/preaching', { preachDate: '2030-01-06', topic: 'Grace Abounding', _csrf: csrf });
+  const plan = await db.preachingPlan.findFirst({ where: { churchId, topic: 'Grace Abounding' } });
+  assert.ok(plan, 'expected the preaching plan to exist');
+  const listed = await client.getHtml('/preaching');
+  await client.postForm(`/preaching/${plan.id}/delete`, { _csrf: extractCsrf(listed.text) });
+
+  const seen = await kinds(churchId);
+  assert.ok(seen.includes('member_deleted'), `expected member_deleted, got ${seen.join(', ')}`);
+  assert.ok(seen.includes('preaching_deleted'), `expected preaching_deleted, got ${seen.join(', ')}`);
+  const removed = await db.activityLog.findFirst({ where: { churchId, kind: 'member_deleted' } });
+  assert.match(removed.description, /Kofi Boateng/);
+  assert.match(removed.description, /MBR-901/);
+  await assertActorsRecorded(churchId);
+});
+
+test('finance: a journal reversal and the budget lifecycle are recorded', async () => {
+  const { client, churchId } = await signedInClient('act-finance');
+  const fund = await client.postJson('/api/finance/funds', { name: 'General', fundType: 'GENERAL' });
+  assert.strictEqual(fund.status, 201);
+  const income = await client.postJson('/api/finance/income', {
+    transactionDate: '2026-06-10', amount: 250, category: 'Tithe', fundId: fund.body.id,
+  });
+  assert.strictEqual(income.status, 201);
+
+  const journalPage = await client.getHtml(`/finance/journal/${income.body.journalEntryId}`);
+  await client.postForm(`/finance/journal/${income.body.journalEntryId}/reverse`,
+    { reason: 'Recorded against the wrong fund', _csrf: extractCsrf(journalPage.text) });
+
+  const budgetsPage = await client.getHtml('/finance/budgets');
+  const bCsrf = extractCsrf(budgetsPage.text);
+  await client.postForm('/finance/budgets', { name: 'FY2026', year: '2026', scope: 'ANNUAL', _csrf: bCsrf });
+  const budget = await db.financeBudget.findFirst({ where: { churchId, name: 'FY2026' } });
+  assert.ok(budget, 'expected the budget to exist');
+  const detail = await client.getHtml(`/finance/budgets/${budget.id}`);
+  const dCsrf = extractCsrf(detail.text);
+  await client.postForm(`/finance/budgets/${budget.id}/lines`,
+    { lineType: 'EXPENSE', category: 'Utilities', amount: '1200', _csrf: dCsrf });
+  await client.postForm(`/finance/budgets/${budget.id}/status`, { status: 'APPROVED', _csrf: dCsrf });
+
+  const seen = await kinds(churchId);
+  for (const kind of ['journal_reversed', 'budget_created', 'budget_line_added', 'budget_status_changed']) {
+    assert.ok(seen.includes(kind), `expected ${kind}, got ${seen.join(', ')}`);
+  }
+  // The reversal reason is the whole point of the entry — a bare "reversed"
+  // line would not tell an auditor anything the ledger does not already say.
+  const reversal = await db.activityLog.findFirst({ where: { churchId, kind: 'journal_reversed' } });
+  assert.match(reversal.description, /wrong fund/);
+  await assertActorsRecorded(churchId);
 });
 
 test('activity entries never leak across tenants', async () => {

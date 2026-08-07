@@ -415,7 +415,10 @@ function register(app) {
 
   app.post('/members/:id/delete', requireAdmin, asyncHandler(async (req, res) => {
     try {
-      await res.locals.db.member.update({ where: { id: Number(req.params.id) }, data: { deletedAt: new Date() } });
+      const removed = await res.locals.db.member.update({ where: { id: Number(req.params.id) }, data: { deletedAt: new Date() } });
+      await logActivity(res.locals.db, 'member_deleted',
+        `Member removed: ${removed.firstName} ${removed.lastName}${removed.externalId ? ` (${removed.externalId})` : ''}`,
+        '/members', res.locals.user.id);
     } catch (e) {
       if (e.code !== 'P2025') throw e;
     }

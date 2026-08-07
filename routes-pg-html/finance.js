@@ -1447,6 +1447,11 @@ function register(app) {
     if (splits.length) {
       await db.dayBornSplit.createMany({ data: splits.map((s) => ({ serviceId: id, dayBorn: s.dayBorn, amount: s.amount, headCount: s.headCount })) });
     }
+    // Splits are a wholesale delete-and-replace, so the previous breakdown is
+    // gone with no ledger movement to trace it — log that it changed.
+    await logActivity(db, 'finance_splits_updated',
+      `Day-born breakdown saved for service #${id} (${splits.length} ${splits.length === 1 ? 'row' : 'rows'})`,
+      `/finance/services/${id}`, res.locals.user.id);
     flash(req, 'Breakdown saved.', 'success');
     res.redirect(`/finance/services/${id}`);
   }));
@@ -1619,6 +1624,9 @@ function register(app) {
     if (splits.length) {
       await db.dayBornSplit.createMany({ data: splits.map((s) => ({ harvestId: id, dayBorn: s.dayBorn, amount: s.amount, headCount: s.headCount })) });
     }
+    await logActivity(db, 'finance_splits_updated',
+      `Day-born breakdown saved for harvest #${id} (${splits.length} ${splits.length === 1 ? 'row' : 'rows'})`,
+      `/finance/harvests/${id}`, res.locals.user.id);
     flash(req, 'Breakdown saved.', 'success');
     res.redirect(`/finance/harvests/${id}`);
   }));
@@ -1693,9 +1701,13 @@ function register(app) {
       flash(req, 'Member or harvest not found.');
       return res.redirect('/finance/pledges');
     }
-    await db.pledge.create({
+    const pledge = await db.pledge.create({
       data: { memberId, harvestId, pledgedAmount: pledged, paidAmount: paid, pledgeDate: new Date(b.pledgeDate), status: pledgeStatusFor(pledged, paid), notes: b.notes || null },
     });
+    // Creating a pledge never touches the ledger (only payments do), so this
+    // entry is the only record that it happened at all.
+    await logActivity(db, 'pledge_created',
+      `Pledge recorded: ${fmtMoney(pledged)}`, `/finance/pledges/${pledge.id}/edit`, res.locals.user.id);
     flash(req, 'Pledge recorded.', 'success');
     res.redirect('/finance/pledges');
   }));
@@ -2266,6 +2278,9 @@ function register(app) {
     const month = scope === 'MONTHLY' ? Number(b.month) : null;
     if (scope === 'MONTHLY' && !(month >= 1 && month <= 12)) { flash(req, 'Pick a month (1-12) for a monthly budget.'); return res.redirect('/finance/budgets'); }
     const budget = await db.financeBudget.create({ data: { name, year, month, scope, notes: b.notes || null } });
+    await logActivity(db, 'budget_created',
+      `Budget created: ${budget.name} (${scope === 'MONTHLY' ? `${year}-${String(month).padStart(2, '0')}` : year})`,
+      `/finance/budgets/${budget.id}`, res.locals.user.id);
     flash(req, 'Budget created.', 'success');
     res.redirect(`/finance/budgets/${budget.id}`);
   }));
@@ -2356,9 +2371,11 @@ function register(app) {
     const accountCheck = await checkAccountId(db, b.accountId);
     const fundCheck = await checkFundId(db, b.fundId);
     if (!accountCheck.ok || !fundCheck.ok) { flash(req, 'Account or fund not found.'); return res.redirect(`/finance/budgets/${id}`); }
-    await db.financeBudgetLine.create({
+    const line = await db.financeBudgetLine.create({
       data: { budgetId: id, lineType: b.lineType, category: String(b.category).trim(), accountId: accountCheck.accountId, fundId: fundCheck.fundId, amount: Number(b.amount), notes: b.notes || null },
     });
+    await logActivity(db, 'budget_line_added',
+      `Budget line added to "${budget.name}": ${line.category} ${fmtMoney(line.amount)}`, `/finance/budgets/${id}`, res.locals.user.id);
     flash(req, 'Budget line added.', 'success');
     res.redirect(`/finance/budgets/${id}`);
   }));
@@ -2370,7 +2387,9 @@ function register(app) {
     if (!budget) return res.status(404).send('Not found');
     if (budget.status === 'CLOSED') { flash(req, 'This budget is closed; lines are immutable.'); return res.redirect(`/finance/budgets/${id}`); }
     try {
-      await db.financeBudgetLine.delete({ where: { id: Number(req.params.lineId) } });
+      const line = await db.financeBudgetLine.delete({ where: { id: Number(req.params.lineId) } });
+      await logActivity(db, 'budget_line_removed',
+        `Budget line removed from "${budget.name}": ${line.category} ${fmtMoney(line.amount)}`, `/finance/budgets/${id}`, res.locals.user.id);
       flash(req, 'Budget line removed.', 'success');
     } catch (e) {
       if (e.code !== 'P2025') throw e;
@@ -2384,7 +2403,9 @@ function register(app) {
     const status = req.body && req.body.status;
     if (!['DRAFT', 'APPROVED', 'CLOSED'].includes(status)) { flash(req, 'Pick a valid status.'); return res.redirect(`/finance/budgets/${id}`); }
     try {
-      await db.financeBudget.update({ where: { id }, data: { status } });
+      const budget = await db.financeBudget.update({ where: { id }, data: { status } });
+      await logActivity(db, 'budget_status_changed',
+        `Budget "${budget.name}" set to ${status}`, `/finance/budgets/${id}`, res.locals.user.id);
       flash(req, `Budget status set to ${status}.`, 'success');
     } catch (e) {
       if (e.code !== 'P2025') throw e;
@@ -2537,6 +2558,9 @@ function register(app) {
   app.post('/finance/journal/:id/reverse', requireFundManager, asyncHandler(async (req, res) => {
     try {
       await ledger.reverseJournal(res.locals.db, res.locals.churchId, Number(req.params.id), req.body?.reason, res.locals.user.id);
+      await logActivity(res.locals.db, 'journal_reversed',
+        `Journal entry #${Number(req.params.id)} reversed${req.body?.reason ? `: ${String(req.body.reason).slice(0, 120)}` : ''}`,
+        `/finance/journal/${req.params.id}`, res.locals.user.id);
       flash(req, 'Journal entry reversed.', 'success');
     } catch (e) {
       if (!/not found|already reversed/i.test(e.message)) throw e;
