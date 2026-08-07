@@ -199,10 +199,13 @@ test('users: account-security actions write to BOTH the activity feed and the se
   });
 
   const afterCreate = await client.getHtml('/users');
-  const idMatch = afterCreate.text.match(/\/users\/(\d+)\/role/);
-  assert.ok(idMatch, 'expected a role-change form for the new teammate');
-  const teammateId = idMatch[1];
   const csrf = extractCsrf(afterCreate.text);
+  // Resolve the teammate by identity, not by scraping the first role form off
+  // the page — that matches the admin's own row, and the last-admin and
+  // self-delete guards then (correctly) refuse the write.
+  const teammate = await db.user.findFirst({ where: { churchId, username: 'teammate' } });
+  assert.ok(teammate, 'expected the teammate account to exist');
+  const teammateId = String(teammate.id);
 
   await client.postForm(`/users/${teammateId}/role`, { role: 'VIEWER', financeRole: 'NONE', _csrf: csrf });
   await client.postForm(`/users/${teammateId}/reset`, { password: 'newpassword123', _csrf: csrf });
@@ -226,6 +229,29 @@ test('users: account-security actions write to BOTH the activity feed and the se
   assert.ok(roleEvent.actorId, 'security events must capture the acting admin');
   assert.match(roleEvent.subject, new RegExp(teammateEmail.replace(/[.+]/g, '\\$&')));
   await assertActorsRecorded(churchId);
+});
+
+test('users: refused privilege changes write neither an activity nor a security entry', async () => {
+  const { client, churchId } = await signedInClient('act-users-guard');
+  const listPage = await client.getHtml('/users');
+  const csrf = extractCsrf(listPage.text);
+  const admin = await db.user.findFirst({ where: { churchId, role: 'ADMIN' } });
+
+  // Both of these are refused by existing guards: demoting the only admin,
+  // and deleting your own account. Neither may leave an audit trace.
+  await client.postForm(`/users/${admin.id}/role`, { role: 'VIEWER', financeRole: 'NONE', _csrf: csrf });
+  await client.postForm(`/users/${admin.id}/delete`, { _csrf: csrf });
+
+  const seen = await kinds(churchId);
+  assert.ok(!seen.includes('user_role_changed'), 'a blocked demotion must not be logged as a role change');
+  assert.ok(!seen.includes('user_deleted'), 'a blocked self-delete must not be logged as a deletion');
+  const events = (await db.securityAuditLog.findMany({ where: { churchId } })).map((r) => r.event);
+  assert.ok(!events.includes('user.role_changed'), 'a blocked demotion must not reach the security trail');
+  assert.ok(!events.includes('user.deleted'), 'a blocked self-delete must not reach the security trail');
+
+  const stillAdmin = await db.user.findUnique({ where: { id: admin.id } });
+  assert.strictEqual(stillAdmin.role, 'ADMIN');
+  assert.strictEqual(stillAdmin.deletedAt, null);
 });
 
 test('activity entries never leak across tenants', async () => {
