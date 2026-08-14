@@ -1,0 +1,87 @@
+name: css
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: css-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  css:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # need the base commit to render "before"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+
+      # Dead-rule guard. styles.css spent nine generations accumulating rules
+      # for markup that no longer exists; this reports how much has come back.
+      - name: Unreferenced selectors
+        run: node scripts/find-unused-css.js
+
+      # Both stylesheets must parse. A stray brace in a hand-edited sheet is
+      # otherwise invisible until a page renders unstyled in production.
+      - name: Stylesheets parse
+        run: |
+          node -e '
+            const fs = require("fs");
+            let bad = false;
+            for (const f of ["public/styles.css", "public/theme-ios26.css"]) {
+              const css = fs.readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+              let depth = 0, unmatched = 0;
+              for (const ch of css) {
+                if (ch === "{") depth++;
+                else if (ch === "}") { depth--; if (depth < 0) unmatched++; }
+              }
+              const ok = depth === 0 && unmatched === 0;
+              console.log(`${f}: depth=${depth} unmatched=${unmatched} ${ok ? "OK" : "BROKEN"}`);
+              if (!ok) bad = true;
+            }
+            process.exit(bad ? 1 : 0);
+          '
+
+      # What actually changed on screen, relative to the base commit. This is
+      # reported, not enforced: a stylesheet edit is SUPPOSED to change how
+      # things look. The value is seeing the blast radius — an edit meant for
+      # one page showing up on four others is the thing worth catching.
+      - name: Rendered diff vs base
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "No usable base commit — skipping comparison (first push on this branch)."
+            exit 0
+          fi
+
+          HEAD_SHA="$(git rev-parse HEAD)"
+          node scripts/css-snapshot.js /tmp/after.json
+
+          git checkout --quiet --detach "$BASE"
+          # Run THIS commit's tooling against the base commit's stylesheets.
+          # The base may predate these scripts entirely (it does the first time
+          # this workflow runs), and even when it doesn't, comparing output
+          # from two different versions of the probe would be meaningless.
+          git checkout --quiet "$HEAD_SHA" -- scripts/css-snapshot.js scripts/css-diff.js scripts/ui-preview.js
+          node scripts/css-snapshot.js /tmp/before.json
+          git checkout --quiet --force "$HEAD_SHA"
+
+          {
+            echo '## Rendered CSS diff vs base'
+            echo
+            echo '```'
+            node scripts/css-diff.js /tmp/before.json /tmp/after.json --max 40
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
