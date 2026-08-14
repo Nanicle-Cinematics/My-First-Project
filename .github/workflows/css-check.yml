@@ -59,12 +59,21 @@ jobs:
           CHROME_BIN: /usr/bin/google-chrome
         run: |
           set -euo pipefail
+          # Pick something to compare against. github.event.before is all
+          # zeros on the first push of a new branch — which is precisely when
+          # the comparison is most useful — so fall back to where this branch
+          # left main rather than skipping.
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            echo "No usable base commit — skipping comparison (first push on this branch)."
+            BASE="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+            echo "No push base; using merge-base with origin/main: ${BASE:-<none>}"
+          fi
+          if [ -z "$BASE" ] || [ "$BASE" = "$(git rev-parse HEAD)" ]; then
+            echo "Nothing to compare against — skipping."
             exit 0
           fi
+          echo "Comparing against $BASE"
 
           HEAD_SHA="$(git rev-parse HEAD)"
           node scripts/css-snapshot.js /tmp/after.json
