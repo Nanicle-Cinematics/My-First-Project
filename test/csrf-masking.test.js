@@ -51,10 +51,12 @@ test('a masked token from this session validates', () => {
   assert.strictEqual(csrfValid(req), true);
 });
 
-test('an unmasked legacy token still validates during rollout', () => {
-  // A form rendered before this change is still open in someone's browser.
+test('a bare unmasked token is rejected', () => {
+  // This was accepted while masking rolled out, so forms rendered before the
+  // deploy could still be submitted. That transition is over: an unmasked
+  // token must no longer work, or the masking buys nothing.
   const session = { csrfToken: RAW };
-  assert.strictEqual(csrfValid({ session, body: { _csrf: RAW } }), true);
+  assert.strictEqual(csrfValid({ session, body: { _csrf: RAW } }), false);
 });
 
 test('a token from a different session is rejected', () => {
