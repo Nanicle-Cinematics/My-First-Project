@@ -122,7 +122,15 @@ function loginPage() {
   return layout({ title: 'Sign in', body, bare: true, active: null, user: null, churchName: CHURCH });
 }
 
-const PAGES = { dashboard, members: membersPage, form: formPage, login: loginPage };
+// The public marketing page builds its own document rather than going through
+// lib/shell.js, so it needs its own preview entry.
+function landing() {
+  return require('../lib/tenant-landing').landingPage(false);
+}
+
+const PAGES = {
+  dashboard, members: membersPage, form: formPage, login: loginPage, landing,
+};
 
 function main() {
   const outDir = process.argv[2] || path.join(ROOT, '.ui-preview');

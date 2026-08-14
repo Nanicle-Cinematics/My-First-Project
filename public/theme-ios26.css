@@ -1071,7 +1071,77 @@ table tbody tr:nth-child(even):hover td,
 }
 
 /* --------------------------------------------------------------------------
-   19 · Fallbacks and motion preferences
+   19 · Public landing page — dark-mode legibility
+   --------------------------------------------------------------------------
+   The marketing page was built light-only: its headline, section headings,
+   proof labels and plan prices are hardcoded near-black (#13211b, #102018,
+   #07111f) with no dark variant. The page background does follow the dark
+   theme, so on a dark-mode device the headline and both section headings were
+   effectively invisible.
+
+   This corrects ink colour only. The light theme is untouched, and the layout,
+   spacing and card treatments are left exactly as designed.
+   -------------------------------------------------------------------------- */
+:root[data-theme="dark"] .public-landing .landing-hero h1,
+:root[data-theme="dark"] .public-landing .section-head h2,
+:root[data-theme="dark"] .public-landing .signup-copy h2 {
+  color: #f2f7f4;
+}
+/* The second half of the headline is brand green by design — keep the accent,
+   lift it to a tint that holds up on a dark background. */
+:root[data-theme="dark"] .public-landing .landing-hero h1 em,
+:root[data-theme="dark"] .public-landing .landing-hero h1 span,
+:root[data-theme="dark"] .public-landing .landing-hero h1 b {
+  color: var(--g-green);
+}
+:root[data-theme="dark"] .public-landing .landing-hero p,
+:root[data-theme="dark"] .public-landing .section-head p,
+:root[data-theme="dark"] .public-landing .landing-trust {
+  color: rgba(238, 243, 248, 0.74);
+}
+:root[data-theme="dark"] .public-landing .public-proof strong {
+  color: #f2f7f4;
+}
+:root[data-theme="dark"] .public-landing .public-proof span {
+  color: rgba(238, 243, 248, 0.62);
+}
+/* Plan cards: the free plan stays a light card (dark ink on it is correct);
+   only the dark "featured" card needs its price lifted. */
+/* The featured plan card is dark green in BOTH themes, but its heading and
+   price inherit the same near-black ink as the light cards — so "Pro" and the
+   price were unreadable on it in light mode too, not just dark. Not scoped to
+   a theme for that reason. */
+.public-landing .public-plan.featured h3,
+.public-landing .public-plan.featured .public-price,
+.public-landing .public-plan.featured .public-price small,
+:root[data-theme="dark"] .public-landing .public-plan.featured h3,
+:root[data-theme="dark"] .public-landing .public-plan.featured .public-price,
+:root[data-theme="dark"] .public-landing .public-plan.featured .public-price small {
+  color: #f2f7f4;
+}
+.public-landing .public-plan.featured p,
+.public-landing .public-plan.featured li,
+:root[data-theme="dark"] .public-landing .public-plan.featured p,
+:root[data-theme="dark"] .public-landing .public-plan.featured li {
+  color: rgba(242, 247, 244, 0.82);
+}
+/* The free plan deliberately stays a light card even in dark mode, so the
+   dark-mode ghost button (light ink on a translucent white fill) disappeared
+   on it. Ink goes dark here, against the card rather than the page. */
+:root[data-theme="dark"] .public-landing .public-plan:not(.featured) .btn.ghost,
+:root[data-theme="dark"] .public-landing .public-plan:not(.featured) .btn:not(.primary) {
+  background: #ffffff;
+  color: #0b1622;
+  border-color: rgba(11, 22, 34, 0.16);
+}
+:root[data-theme="dark"] .public-landing .public-plan:not(.featured) .btn.ghost:hover,
+:root[data-theme="dark"] .public-landing .public-plan:not(.featured) .btn:not(.primary):hover {
+  background: #f2f4f7;
+  color: #0b1622;
+}
+
+/* --------------------------------------------------------------------------
+   20 · Fallbacks and motion preferences
    -------------------------------------------------------------------------- */
 /* Where backdrop-filter is unavailable the translucency would leave text on a
    near-transparent panel, so those surfaces go solid instead. */
