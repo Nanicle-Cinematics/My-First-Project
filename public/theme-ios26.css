@@ -1,0 +1,1082 @@
+/* ==========================================================================
+   iOS 26 · Liquid Glass theme layer
+   --------------------------------------------------------------------------
+   Loaded AFTER public/styles.css and deliberately kept in its own file.
+
+   styles.css is ~10k lines carrying nine generations of redesign stacked on
+   top of each other (twelve separate :root blocks, the last one winning).
+   Appending a tenth layer in there would have been unreviewable. Keeping the
+   new look here means the whole visual change is one file you can read, and
+   removing it is deleting one <link> — the old design is untouched underneath.
+
+   What this layer changes: material (translucent glass + backdrop blur),
+   geometry (larger, concentric corner radii), depth (floating chrome, layered
+   elevation), typography (tighter tracking, larger optical sizes) and motion
+   (spring easing, press-scale). It changes hues as little as possible — the
+   church's green and Harvest Gold carry through.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1 · Tokens
+   -------------------------------------------------------------------------- */
+:root {
+  /* Brand — carried over from the existing palette, re-saturated for glass.
+     Colour reads dull under a blur, so the source has to be more vivid. */
+  --g-brand: #0f7d5c;
+  --g-brand-2: #0a5a42;
+  --g-brand-ink: #ffffff;
+  --g-gold: #d9a63f;
+  --g-gold-2: #c08c22;
+  --g-gold-ink: #2a2004;
+
+  /* Canvas */
+  --g-bg: #eef1f5;
+  --g-bg-tint-a: rgba(15, 125, 92, 0.10);
+  --g-bg-tint-b: rgba(217, 166, 63, 0.11);
+  --g-bg-tint-c: rgba(40, 107, 183, 0.08);
+
+  /* Glass materials. Three depths: chrome (most opaque, always legible),
+     panel (content cards), well (recessed fields and rows). */
+  --g-chrome: rgba(255, 255, 255, 0.68);
+  --g-panel: rgba(255, 255, 255, 0.60);
+  --g-panel-solid: #ffffff;
+  --g-well: rgba(255, 255, 255, 0.50);
+  --g-raise: rgba(255, 255, 255, 0.78);
+
+  /* Edges. `spec` is the specular top highlight that makes glass read as
+     glass; `edge` is the hairline that separates it from what is behind. */
+  --g-edge: rgba(11, 22, 34, 0.08);
+  --g-edge-strong: rgba(11, 22, 34, 0.13);
+  --g-spec: rgba(255, 255, 255, 0.75);
+
+  /* Ink */
+  --g-ink: #0b1622;
+  --g-ink-2: #44526a;
+  --g-muted: #6a7891;
+  --g-faint: rgba(11, 22, 34, 0.06);
+
+  /* Semantic */
+  --g-green: #12996e;
+  --g-blue: #2b7fe0;
+  --g-orange: #e08a1e;
+  --g-red: #e03b3b;
+  --g-purple: #7c5cfc;
+
+  /* Blur strengths */
+  --g-blur-chrome: blur(34px) saturate(190%);
+  --g-blur-panel: blur(24px) saturate(170%);
+  --g-blur-well: blur(14px) saturate(150%);
+
+  /* Corner radii — an iOS-style concentric scale. A nested element should
+     take the next step down so its corners stay parallel to its parent's. */
+  --g-r-xs: 10px;
+  --g-r-sm: 14px;
+  --g-r-md: 18px;
+  --g-r-lg: 24px;
+  --g-r-xl: 30px;
+  --g-r-pill: 999px;
+
+  /* Elevation */
+  --g-e1: 0 1px 2px rgba(11, 22, 34, 0.04), 0 4px 14px rgba(11, 22, 34, 0.05);
+  --g-e2: 0 2px 6px rgba(11, 22, 34, 0.05), 0 14px 36px rgba(11, 22, 34, 0.08);
+  --g-e3: 0 10px 24px rgba(11, 22, 34, 0.09), 0 34px 76px rgba(11, 22, 34, 0.13);
+
+  /* Motion — a spring-ish curve for travel, a softer one for fades. */
+  --g-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --g-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --g-gap: 14px;
+}
+
+:root[data-theme="dark"] {
+  --g-brand: #2fd39b;
+  --g-brand-2: #0f3d2f;
+  --g-brand-ink: #04140e;
+  --g-gold: #f0c96f;
+  --g-gold-2: #d9ad4c;
+  --g-gold-ink: #241a02;
+
+  --g-bg: #070a0d;
+  --g-bg-tint-a: rgba(47, 211, 155, 0.10);
+  --g-bg-tint-b: rgba(240, 201, 111, 0.08);
+  --g-bg-tint-c: rgba(90, 150, 240, 0.08);
+
+  --g-chrome: rgba(26, 32, 39, 0.66);
+  --g-panel: rgba(28, 34, 42, 0.56);
+  --g-panel-solid: #161b21;
+  --g-well: rgba(255, 255, 255, 0.05);
+  --g-raise: rgba(52, 62, 74, 0.72);
+
+  --g-edge: rgba(255, 255, 255, 0.10);
+  --g-edge-strong: rgba(255, 255, 255, 0.16);
+  --g-spec: rgba(255, 255, 255, 0.14);
+
+  --g-ink: #eef3f8;
+  --g-ink-2: #b3c0d0;
+  --g-muted: #8a99ad;
+  --g-faint: rgba(255, 255, 255, 0.06);
+
+  --g-green: #3ddba0;
+  --g-blue: #6ba9f5;
+  --g-orange: #f0a94a;
+  --g-red: #ff6b6b;
+  --g-purple: #a98bff;
+
+  --g-e1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.3);
+  --g-e2: 0 2px 6px rgba(0, 0, 0, 0.4), 0 14px 36px rgba(0, 0, 0, 0.44);
+  --g-e3: 0 10px 24px rgba(0, 0, 0, 0.5), 0 34px 76px rgba(0, 0, 0, 0.6);
+
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------
+   2 · Foundations
+   -------------------------------------------------------------------------- */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Inter", "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.011em;
+  color: var(--g-ink);
+  background:
+    radial-gradient(120% 90% at 12% -8%, var(--g-bg-tint-a), transparent 58%),
+    radial-gradient(110% 80% at 92% 2%, var(--g-bg-tint-b), transparent 55%),
+    radial-gradient(120% 100% at 60% 108%, var(--g-bg-tint-c), transparent 60%),
+    var(--g-bg);
+  background-attachment: fixed;
+}
+
+/* The cm-layer painted a light wash over the content column; with translucent
+   chrome on top that wash reads as a seam. */
+.main { background: transparent; }
+
+h1, h2, h3, .page > h1, .card-head h2 {
+  letter-spacing: -0.022em;
+  color: var(--g-ink);
+}
+.page > h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.028em; }
+.page > .subtitle { color: var(--g-muted); font-size: 0.96rem; }
+
+/* Link colour is scoped to content regions. Applied globally it bleeds into
+   the sidebar, whose links sit on a dark brand panel and need their own
+   treatment — that produced a nav where half the items read as links and
+   half as labels.
+
+   Buttons are excluded: many are anchors (a.btn), and a region-scoped link
+   rule outranks the plain .btn rule, which repainted their label with the
+   link colour. */
+.page a:not(.btn):not(.icon-btn),
+.card a:not(.btn):not(.icon-btn),
+.footer a:not(.btn),
+.auth-card a:not(.btn) { color: var(--g-brand); }
+:root[data-theme="dark"] .page a:not(.btn):not(.icon-btn),
+:root[data-theme="dark"] .card a:not(.btn):not(.icon-btn),
+:root[data-theme="dark"] .footer a:not(.btn),
+:root[data-theme="dark"] .auth-card a:not(.btn) { color: var(--g-green); }
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--g-brand) 26%, transparent);
+  border-radius: var(--g-r-sm);
+}
+
+/* --------------------------------------------------------------------------
+   3 · Sidebar — a floating glass panel rather than a full-height slab
+   -------------------------------------------------------------------------- */
+.app { grid-template-columns: 278px 1fr; }
+
+.sidebar {
+  margin: var(--g-gap) 0 var(--g-gap) var(--g-gap);
+  height: calc(100vh - (var(--g-gap) * 2));
+  top: var(--g-gap);
+  padding: 1.1rem 0.75rem 0.9rem;
+  border-radius: var(--g-r-xl);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0) 42%),
+    linear-gradient(180deg, var(--g-brand) 0%, var(--g-brand-2) 100%);
+  backdrop-filter: var(--g-blur-panel);
+  -webkit-backdrop-filter: var(--g-blur-panel);
+  box-shadow:
+    var(--g-e3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.14);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Against a near-black canvas the light brand gradient glows; dark mode gets
+   a deeper, flatter panel so the sidebar sits behind the content, not above. */
+:root[data-theme="dark"] .sidebar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 40%),
+    linear-gradient(180deg, #0d3a2d 0%, #07231b 100%);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.sidebar .brand {
+  padding: 0.15rem 0.4rem 0.9rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.sidebar .brand .name { letter-spacing: -0.02em; font-size: 1.02rem; }
+.sidebar .brand .tag {
+  font-size: 0.66rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.62);
+}
+.brand-logo-img {
+  border-radius: var(--g-r-xs);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+}
+
+.nav-section { margin-top: 0.5rem; }
+.nav-section-label {
+  padding: 0 0.65rem 0.3rem;
+  font-size: 0.64rem; font-weight: 700; letter-spacing: 0.09em;
+  text-transform: uppercase; color: rgba(255, 255, 255, 0.45);
+}
+
+.sidebar nav a,
+:root[data-theme="dark"] .sidebar nav a {
+  position: relative;
+  padding: 0.56rem 0.7rem;
+  border-radius: var(--g-r-sm);
+  font-size: 0.92rem; font-weight: 500;
+  color: rgba(255, 255, 255, 0.84);
+  border: 1px solid transparent;
+  transition: background 0.2s var(--g-out), color 0.2s var(--g-out),
+    transform 0.18s var(--g-spring);
+}
+.sidebar nav a:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+  transform: translateX(2px);
+}
+.sidebar nav a.active,
+:root[data-theme="dark"] .sidebar nav a.active {
+  color: #fff;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.17);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 6px 18px rgba(0, 0, 0, 0.20);
+}
+.sidebar nav a .ico {
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.10);
+  display: inline-grid; place-items: center;
+  font-size: 0.86rem;
+  transition: background 0.2s var(--g-out);
+}
+.sidebar nav a.active .ico {
+  background: var(--g-gold);
+  color: var(--g-gold-ink);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+}
+
+.sidebar-user {
+  margin-top: auto;
+  padding: 0.6rem 0.65rem;
+  border-radius: var(--g-r-md);
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  transition: background 0.2s var(--g-out);
+}
+.sidebar-user:hover { background: rgba(255, 255, 255, 0.16); text-decoration: none; }
+.sidebar-user .avatar {
+  border-radius: var(--g-r-pill);
+  background: linear-gradient(150deg, var(--g-gold), var(--g-gold-2));
+  color: var(--g-gold-ink); font-weight: 700;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+}
+.sidebar-user .role-badge {
+  border-radius: var(--g-r-pill);
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.66rem; font-weight: 600;
+  padding: 0.08rem 0.5rem;
+  letter-spacing: 0.01em;
+}
+
+.scripture {
+  margin-top: 0.7rem;
+  padding: 0.85rem 0.9rem;
+  border-radius: var(--g-r-md);
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.scripture .title {
+  font-size: 0.66rem; letter-spacing: 0.07em; text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55); font-weight: 700;
+}
+.scripture blockquote { font-size: 0.83rem; line-height: 1.5; }
+
+/* --------------------------------------------------------------------------
+   4 · Topbar — a floating glass bar
+   -------------------------------------------------------------------------- */
+.topbar {
+  margin: var(--g-gap) var(--g-gap) 0;
+  padding: 0.6rem 0.75rem;
+  gap: 0.75rem;
+  border-radius: var(--g-r-lg);
+  border: 1px solid var(--g-edge);
+  background: var(--g-chrome);
+  backdrop-filter: var(--g-blur-chrome);
+  -webkit-backdrop-filter: var(--g-blur-chrome);
+  box-shadow: var(--g-e2), inset 0 1px 0 var(--g-spec);
+  top: var(--g-gap);
+}
+/* styles.css:6131 paints a 2px red accent line under the topbar with
+   !important, from a design generation this layer replaces. Matching the
+   !important is the only way to retire it without editing that file. */
+.topbar,
+:root[data-theme="dark"] .topbar {
+  border-bottom: 1px solid var(--g-edge) !important;
+  border-bottom-color: var(--g-edge) !important;
+}
+:root[data-theme="dark"] .topbar {
+  border-color: var(--g-edge);
+  background: var(--g-chrome);
+}
+/* The old layer also carried the red line in its shadow. */
+.topbar { box-shadow: var(--g-e2), inset 0 1px 0 var(--g-spec); }
+.topbar-title { border-right: 1px solid var(--g-edge); }
+
+.topbar-title .breadcrumb {
+  font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--g-muted); font-weight: 600;
+}
+.topbar-title .current {
+  font-size: 1rem; font-weight: 650; letter-spacing: -0.02em; color: var(--g-ink);
+}
+
+.topbar .search {
+  background: var(--g-well);
+  border: 1px solid var(--g-edge);
+  border-radius: var(--g-r-pill);
+  padding: 0.42rem 0.95rem;
+  box-shadow: inset 0 1px 2px rgba(11, 22, 34, 0.04);
+  transition: box-shadow 0.22s var(--g-out), border-color 0.22s var(--g-out),
+    background 0.22s var(--g-out);
+}
+.topbar .search:focus-within {
+  background: var(--g-raise);
+  border-color: color-mix(in srgb, var(--g-brand) 45%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--g-brand) 18%, transparent);
+}
+.topbar .search input { color: var(--g-ink); }
+.topbar .search input::placeholder { color: var(--g-muted); }
+
+.topbar .theme-toggle,
+.topbar .bell {
+  width: 38px; height: 38px;
+  border-radius: var(--g-r-pill);
+  background: var(--g-well);
+  border: 1px solid var(--g-edge);
+  color: var(--g-ink-2);
+  box-shadow: inset 0 1px 0 var(--g-spec);
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+  transition: transform 0.18s var(--g-spring), background 0.2s var(--g-out);
+}
+.topbar .theme-toggle:hover,
+.topbar .bell:hover { background: var(--g-raise); transform: scale(1.06); }
+.topbar .theme-toggle:active,
+.topbar .bell:active { transform: scale(0.94); }
+.topbar .bell .badge {
+  border-radius: var(--g-r-pill);
+  background: var(--g-red);
+  box-shadow: 0 0 0 2px var(--g-chrome);
+  font-weight: 700;
+}
+
+.topbar .who {
+  padding: 0.25rem 0.7rem 0.25rem 0.3rem;
+  border-radius: var(--g-r-pill);
+  border: 1px solid transparent;
+  transition: background 0.2s var(--g-out), border-color 0.2s var(--g-out);
+}
+.topbar .who:hover {
+  background: var(--g-well);
+  border-color: var(--g-edge);
+  text-decoration: none;
+}
+.topbar .avatar {
+  border-radius: var(--g-r-pill);
+  background: linear-gradient(150deg, var(--g-brand), var(--g-brand-2));
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--g-brand) 30%, transparent);
+}
+.topbar .who .name { font-weight: 600; color: var(--g-ink); }
+.topbar .who .role { color: var(--g-muted); }
+.topbar .sign-out {
+  border-radius: var(--g-r-pill);
+  padding: 0.4rem 0.8rem;
+  color: var(--g-muted);
+  font-weight: 550;
+  transition: background 0.2s var(--g-out), color 0.2s var(--g-out);
+}
+.topbar .sign-out:hover {
+  background: var(--g-well); color: var(--g-ink); text-decoration: none;
+}
+
+/* --------------------------------------------------------------------------
+   5 · Page rhythm
+   -------------------------------------------------------------------------- */
+.page { padding: 1.5rem var(--g-gap) 2rem; }
+
+/* --------------------------------------------------------------------------
+   6 · Cards — the core glass panel
+   -------------------------------------------------------------------------- */
+.card,
+.list-card,
+.filters-card,
+.trend-card,
+.upcoming-card,
+.recent-members-card,
+.report-tile,
+.day-card,
+.help-card,
+.attendance-counts-card {
+  border-radius: var(--g-r-lg);
+  border: 1px solid var(--g-edge);
+  background: var(--g-panel);
+  backdrop-filter: var(--g-blur-panel);
+  -webkit-backdrop-filter: var(--g-blur-panel);
+  box-shadow: var(--g-e1), inset 0 1px 0 var(--g-spec);
+  padding: 1.15rem 1.3rem;
+  transition: transform 0.24s var(--g-spring), box-shadow 0.24s var(--g-out),
+    background 0.24s var(--g-out);
+}
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .list-card,
+:root[data-theme="dark"] .filters-card,
+:root[data-theme="dark"] .trend-card,
+:root[data-theme="dark"] .upcoming-card,
+:root[data-theme="dark"] .recent-members-card,
+:root[data-theme="dark"] .report-tile,
+:root[data-theme="dark"] .day-card,
+:root[data-theme="dark"] .help-card,
+:root[data-theme="dark"] .attendance-counts-card {
+  border-color: var(--g-edge);
+  background: var(--g-panel);
+}
+
+.card:hover,
+.dash-shell .card:hover,
+:root[data-theme="dark"] .card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--g-e2), inset 0 1px 0 var(--g-spec);
+  background: var(--g-raise);
+}
+:root[data-theme="dark"] .card:hover { background: var(--g-panel); }
+
+.card-head { margin-bottom: 0.9rem; }
+.card-head h2 {
+  font-size: 1.02rem; font-weight: 650; letter-spacing: -0.02em;
+}
+.card-head .meta, .card-head a { font-size: 0.84rem; color: var(--g-muted); }
+.card-head a { color: var(--g-brand); font-weight: 550; }
+
+.count-badge {
+  border-radius: var(--g-r-pill);
+  background: color-mix(in srgb, var(--g-brand) 12%, transparent);
+  color: var(--g-brand);
+  border: 1px solid color-mix(in srgb, var(--g-brand) 22%, transparent);
+  padding: 0.16rem 0.62rem;
+  font-size: 0.74rem; font-weight: 650;
+}
+
+/* --------------------------------------------------------------------------
+   7 · Page hero
+   -------------------------------------------------------------------------- */
+.page-hero,
+.page-hero.command-center,
+:root[data-theme="dark"] .page-hero.command-center {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--g-r-xl);
+  padding: 1.9rem 2rem;
+  margin-bottom: 1.15rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  /* The gold glow sits high and tight; spread wider it mixes with the green
+     into olive. Kept as a highlight at the corner, not a wash. */
+  background:
+    radial-gradient(80% 120% at 96% -40%, rgba(240, 205, 128, 0.42), transparent 58%),
+    linear-gradient(138deg, var(--g-brand) 0%, var(--g-brand-2) 96%);
+  box-shadow: var(--g-e2), inset 0 1px 0 rgba(255, 255, 255, 0.26);
+  color: #fff;
+}
+/* Specular sweep across the top edge — the cue that reads as "glass". */
+.page-hero::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 45%);
+  pointer-events: none;
+}
+.page-hero > * { position: relative; z-index: 1; }
+.page-hero h1,
+.page-hero.command-center h1,
+:root[data-theme="dark"] .page-hero.command-center h1 {
+  font-size: 1.95rem; font-weight: 700; letter-spacing: -0.032em; color: #fff;
+  margin-top: 0;
+}
+.page-hero p { color: rgba(255, 255, 255, 0.84); font-size: 0.97rem; }
+.hero-kicker,
+:root[data-theme="dark"] .page-hero.command-center .hero-kicker {
+  border-radius: var(--g-r-pill);
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  padding: 0.22rem 0.7rem;
+  color: #fff; font-size: 0.66rem; letter-spacing: 0.08em; font-weight: 700;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  margin-bottom: 0.7rem;
+}
+
+/* --------------------------------------------------------------------------
+   8 · Stat tiles — glass, with a vivid icon well instead of a solid slab
+   -------------------------------------------------------------------------- */
+.hero-stat {
+  border-radius: var(--g-r-lg);
+  padding: 1.05rem 1.15rem;
+  gap: 0.9rem;
+  border: 1px solid var(--g-edge);
+  background: var(--g-panel);
+  backdrop-filter: var(--g-blur-panel);
+  -webkit-backdrop-filter: var(--g-blur-panel);
+  box-shadow: var(--g-e1), inset 0 1px 0 var(--g-spec);
+  color: var(--g-ink);
+  transition: transform 0.24s var(--g-spring), box-shadow 0.24s var(--g-out);
+}
+.hero-stat:hover { transform: translateY(-3px); box-shadow: var(--g-e2), inset 0 1px 0 var(--g-spec); }
+.hero-stat .hs-value {
+  font-size: 1.6rem; font-weight: 700; letter-spacing: -0.03em;
+  line-height: 1.1; color: var(--g-ink);
+}
+.hero-stat .hs-label {
+  font-size: 0.79rem; color: var(--g-muted); font-weight: 500;
+}
+.hs-ico {
+  width: 44px; height: 44px;
+  border-radius: var(--g-r-sm);
+  font-size: 1.15rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+/* The colour variants each set their own saturated gradient at a specificity
+   above plain .hero-stat, so the tile body has to be restated per variant.
+   Colour now lives in the icon well, not the whole slab. */
+.hero-stat.gold, .hero-stat.green, .hero-stat.blue,
+.hero-stat.purple, .hero-stat.orange,
+:root[data-theme="dark"] .hero-stat.gold,
+:root[data-theme="dark"] .hero-stat.green,
+:root[data-theme="dark"] .hero-stat.blue,
+:root[data-theme="dark"] .hero-stat.purple,
+:root[data-theme="dark"] .hero-stat.orange {
+  background: var(--g-panel);
+  color: var(--g-ink);
+}
+
+.hero-stat.gold   .hs-ico { background: linear-gradient(150deg, var(--g-gold), var(--g-gold-2)); color: var(--g-gold-ink); }
+.hero-stat.green  .hs-ico { background: linear-gradient(150deg, var(--g-brand), var(--g-brand-2)); color: #fff; }
+.hero-stat.blue   .hs-ico { background: linear-gradient(150deg, #4a9bf0, var(--g-blue)); color: #fff; }
+.hero-stat.purple .hs-ico { background: linear-gradient(150deg, #9b7dff, var(--g-purple)); color: #fff; }
+.hero-stat.orange .hs-ico { background: linear-gradient(150deg, #f4a94b, var(--g-orange)); color: #fff; }
+:root[data-theme="dark"] .hero-stat.gold .hs-ico { color: var(--g-gold-ink); }
+:root[data-theme="dark"] .hero-stat.green .hs-ico { background: linear-gradient(150deg, var(--g-brand), #0a7d5b); color: #04140e; }
+
+.stat {
+  border-radius: var(--g-r-lg);
+  border: 1px solid var(--g-edge);
+  background: var(--g-panel);
+  backdrop-filter: var(--g-blur-panel);
+  -webkit-backdrop-filter: var(--g-blur-panel);
+  box-shadow: var(--g-e1), inset 0 1px 0 var(--g-spec);
+  padding: 1.2rem;
+  transition: transform 0.24s var(--g-spring), box-shadow 0.24s var(--g-out);
+}
+.stat:hover { transform: translateY(-3px); box-shadow: var(--g-e2), inset 0 1px 0 var(--g-spec); }
+.stat .ico { border-radius: var(--g-r-sm); }
+.stat .value { font-weight: 700; letter-spacing: -0.03em; }
+.stat .label { color: var(--g-muted); }
+
+/* --------------------------------------------------------------------------
+   9 · Buttons — capsules with a spring press
+   -------------------------------------------------------------------------- */
+/* .filter-bar button[type="submit"] is carried here because styles.css:4012
+   styles it with a higher-specificity selector and a purple gradient from an
+   earlier generation. */
+button, .btn,
+.filter-bar button[type="submit"] {
+  border-radius: var(--g-r-pill);
+  padding: 0.58rem 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  background: linear-gradient(160deg, var(--g-gold) 0%, var(--g-gold-2) 100%);
+  color: var(--g-gold-ink);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 1px 2px rgba(11, 22, 34, 0.10),
+    0 6px 18px color-mix(in srgb, var(--g-gold) 30%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.36);
+  transition: transform 0.16s var(--g-spring), box-shadow 0.22s var(--g-out),
+    filter 0.18s var(--g-out);
+}
+button:hover, .btn:hover {
+  filter: brightness(1.04);
+  transform: translateY(-1px);
+  box-shadow:
+    0 2px 4px rgba(11, 22, 34, 0.10),
+    0 10px 26px color-mix(in srgb, var(--g-gold) 38%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.36);
+  color: var(--g-gold-ink);
+}
+button:active, .btn:active { transform: scale(0.965); }
+
+/* Dark mode inherited a rule that tinted button text gold, which on a gold
+   fill left the label unreadable. Ink is restated for both states. */
+:root[data-theme="dark"] button,
+:root[data-theme="dark"] .btn,
+:root[data-theme="dark"] .filter-bar button[type="submit"],
+:root[data-theme="dark"] button:hover,
+:root[data-theme="dark"] .btn:hover {
+  color: var(--g-gold-ink);
+}
+:root[data-theme="dark"] button.ghost,
+:root[data-theme="dark"] .btn.ghost,
+:root[data-theme="dark"] button.ghost:hover,
+:root[data-theme="dark"] .btn.ghost:hover { color: var(--g-ink); }
+:root[data-theme="dark"] button.danger,
+:root[data-theme="dark"] button.danger:hover { color: #fff; }
+:root[data-theme="dark"] button.link,
+:root[data-theme="dark"] button.link:hover { color: var(--g-red); }
+
+button.ghost, .btn.ghost,
+.drawer-signout button {
+  background: var(--g-well);
+  color: var(--g-ink);
+  border: 1px solid var(--g-edge-strong);
+  box-shadow: var(--g-e1), inset 0 1px 0 var(--g-spec);
+}
+button.ghost:hover, .btn.ghost:hover {
+  background: var(--g-raise); color: var(--g-ink); filter: none;
+}
+:root[data-theme="dark"] button.ghost,
+:root[data-theme="dark"] .btn.ghost { background: var(--g-well); color: var(--g-ink); }
+
+button.danger, .btn.danger,
+button.danger:hover, .btn.danger:hover,
+.form button.danger, .form button.danger:hover {
+  background: linear-gradient(160deg, #f05252, var(--g-red));
+  border-color: transparent;
+  color: #fff;
+  box-shadow:
+    0 1px 2px rgba(11, 22, 34, 0.10),
+    0 6px 18px color-mix(in srgb, var(--g-red) 32%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+button.link, button.link:hover {
+  background: none; border: none; box-shadow: none; padding: 0;
+  color: var(--g-red); font-weight: 550; transform: none;
+}
+.btn.ghost.disabled { opacity: 0.4; box-shadow: none; }
+
+.icon-btn {
+  border-radius: var(--g-r-xs);
+  border: 1px solid var(--g-edge);
+  background: var(--g-well);
+  color: var(--g-ink-2);
+  box-shadow: inset 0 1px 0 var(--g-spec);
+  transition: transform 0.16s var(--g-spring), background 0.2s var(--g-out);
+}
+.icon-btn:hover { transform: scale(1.08); }
+.icon-btn:active { transform: scale(0.92); }
+.icon-btn.view:hover { background: color-mix(in srgb, var(--g-blue) 15%, transparent); color: var(--g-blue); border-color: color-mix(in srgb, var(--g-blue) 30%, transparent); }
+.icon-btn.edit:hover { background: color-mix(in srgb, var(--g-gold) 18%, transparent); color: var(--g-gold-2); border-color: color-mix(in srgb, var(--g-gold) 32%, transparent); }
+.icon-btn.del:hover  { background: color-mix(in srgb, var(--g-red) 14%, transparent); color: var(--g-red); border-color: color-mix(in srgb, var(--g-red) 28%, transparent); }
+
+/* --------------------------------------------------------------------------
+   10 · Forms — recessed wells, iOS-style
+   -------------------------------------------------------------------------- */
+/* Block, not flex: the shell injects a `*` span into required labels, and as
+   a flex item that lands on its own row instead of trailing the label text. */
+.form label {
+  display: block;
+  font-size: 0.78rem; font-weight: 600; letter-spacing: 0.01em;
+  color: var(--g-muted); text-transform: none;
+}
+/* Plain text inputs were inline-level, so their label text sat beside them
+   while selects and textareas stacked — the same form read two ways. */
+.form label input,
+.form label select,
+.form label textarea { display: block; width: 100%; margin-top: 0.32rem; }
+.form label input,
+.form label select,
+.form label textarea,
+input[type="text"], input[type="search"], input[type="email"],
+input[type="password"], input[type="number"], input[type="date"],
+input[type="tel"], select, textarea {
+  border-radius: var(--g-r-sm);
+  border: 1px solid var(--g-edge-strong);
+  background: var(--g-well);
+  color: var(--g-ink);
+  padding: 0.62rem 0.8rem;
+  font-size: 0.95rem;
+  box-shadow: inset 0 1px 2px rgba(11, 22, 34, 0.05);
+  transition: border-color 0.2s var(--g-out), box-shadow 0.2s var(--g-out),
+    background 0.2s var(--g-out);
+}
+.form label input:focus,
+.form label select:focus,
+.form label textarea:focus,
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  background: var(--g-raise);
+  border-color: color-mix(in srgb, var(--g-brand) 55%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--g-brand) 16%, transparent);
+}
+.form label input[readonly] { background: var(--g-faint); color: var(--g-muted); }
+.form .actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.3rem; }
+.req-star { color: var(--g-red); }
+
+.search-field {
+  border-radius: var(--g-r-pill);
+  border: 1px solid var(--g-edge-strong);
+  background: var(--g-well);
+  padding: 0.34rem 0.9rem;
+}
+.search-field input { border: none; background: transparent; box-shadow: none; padding: 0.28rem 0; }
+.search-field input:focus { box-shadow: none; background: transparent; }
+.filter-bar select { border-radius: var(--g-r-pill); padding: 0.5rem 0.9rem; }
+
+/* --------------------------------------------------------------------------
+   11 · Tables — inset grouped lists
+   -------------------------------------------------------------------------- */
+.table-wrap {
+  border-radius: var(--g-r-md);
+  border: 1px solid var(--g-edge);
+  background: var(--g-well);
+  overflow: hidden;
+}
+table, table.data-table { border-collapse: separate; border-spacing: 0; }
+table thead th,
+:root[data-theme="dark"] table thead th {
+  background: transparent;
+  border-bottom: 1px solid var(--g-edge-strong);
+  color: var(--g-muted);
+  font-size: 0.7rem; font-weight: 700;
+  letter-spacing: 0.07em; text-transform: uppercase;
+  padding: 0.7rem 0.85rem;
+}
+table tbody td, td, th {
+  border-bottom: 1px solid var(--g-faint);
+  padding: 0.78rem 0.85rem;
+  color: var(--g-ink);
+}
+table tbody tr:last-child td { border-bottom: none; }
+tbody tr { transition: background 0.16s var(--g-out); }
+tbody tr:hover td,
+:root[data-theme="dark"] tbody tr:hover td,
+table tbody tr:hover {
+  background: color-mix(in srgb, var(--g-brand) 6%, transparent);
+}
+
+/* --------------------------------------------------------------------------
+   12 · Pills, badges, chips — capsules with vivid ink on a soft tint
+   -------------------------------------------------------------------------- */
+.pill {
+  border-radius: var(--g-r-pill);
+  padding: 0.2rem 0.68rem;
+  font-size: 0.75rem; font-weight: 650; letter-spacing: 0.005em;
+  border: 1px solid transparent;
+}
+.pill-member, .pill-closed, .pill-sent {
+  background: color-mix(in srgb, var(--g-green) 14%, transparent);
+  color: var(--g-green);
+  border-color: color-mix(in srgb, var(--g-green) 26%, transparent);
+}
+.pill-regular, .pill-in_progress, .pill-sending {
+  background: color-mix(in srgb, var(--g-blue) 14%, transparent);
+  color: var(--g-blue);
+  border-color: color-mix(in srgb, var(--g-blue) 26%, transparent);
+}
+.pill-visitor, .pill-open, .pill-pending {
+  background: color-mix(in srgb, var(--g-orange) 15%, transparent);
+  color: var(--g-orange);
+  border-color: color-mix(in srgb, var(--g-orange) 28%, transparent);
+}
+.pill-inactive, .pill-skipped, .pill-other,
+:root[data-theme="dark"] .pill-inactive {
+  background: var(--g-faint);
+  color: var(--g-muted);
+  border-color: var(--g-edge);
+}
+.pill-failed, .pill-deceased, .pill-transferred,
+:root[data-theme="dark"] .pill-deceased,
+:root[data-theme="dark"] .pill-transferred {
+  background: color-mix(in srgb, var(--g-red) 13%, transparent);
+  color: var(--g-red);
+  border-color: color-mix(in srgb, var(--g-red) 26%, transparent);
+}
+.pill-dry_run {
+  background: color-mix(in srgb, var(--g-gold) 18%, transparent);
+  color: var(--g-gold-2);
+  border-color: color-mix(in srgb, var(--g-gold) 30%, transparent);
+}
+
+/* --------------------------------------------------------------------------
+   13 · Lists and finance rows
+   -------------------------------------------------------------------------- */
+.list li { border-bottom: 1px solid var(--g-faint); padding: 0.7rem 0; }
+.list .ico {
+  border-radius: var(--g-r-xs);
+  background: var(--g-faint);
+  color: var(--g-brand);
+}
+.list .when { color: var(--g-muted); font-size: 0.79rem; }
+
+.fin-row { border-bottom: 1px solid var(--g-faint); padding: 0.62rem 0; }
+.fin-row .lbl .dot { border-radius: var(--g-r-xs); }
+.fin-row.total {
+  border-radius: var(--g-r-md);
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--g-gold) 20%, transparent),
+    color-mix(in srgb, var(--g-gold) 9%, transparent));
+  border: 1px solid color-mix(in srgb, var(--g-gold) 28%, transparent);
+  color: var(--g-ink);
+  padding: 0.8rem 1rem;
+}
+
+/* --------------------------------------------------------------------------
+   14 · Flash / toast
+   -------------------------------------------------------------------------- */
+.toast, .flash {
+  border-radius: var(--g-r-md);
+  border: 1px solid var(--g-edge);
+  background: var(--g-chrome);
+  backdrop-filter: var(--g-blur-chrome);
+  -webkit-backdrop-filter: var(--g-blur-chrome);
+  box-shadow: var(--g-e2), inset 0 1px 0 var(--g-spec);
+  color: var(--g-ink);
+  padding: 0.8rem 1rem;
+}
+.toast-success { border-left: 3px solid var(--g-green); }
+.toast-error   { border-left: 3px solid var(--g-red); }
+.toast-info    { border-left: 3px solid var(--g-blue); }
+.toast-x {
+  background: none; border: none; box-shadow: none; color: var(--g-muted);
+  padding: 0 0.2rem;
+}
+.toast-x:hover { background: none; color: var(--g-ink); transform: none; filter: none; }
+
+/* --------------------------------------------------------------------------
+   15 · Footer + pager
+   -------------------------------------------------------------------------- */
+.footer {
+  border-top: 1px solid var(--g-edge);
+  background: transparent;
+  color: var(--g-muted);
+  font-size: 0.82rem;
+  padding: 1rem var(--g-gap);
+  margin-top: 1rem;
+}
+.footer .status .dot {
+  background: var(--g-green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g-green) 20%, transparent);
+}
+.pager { display: flex; align-items: center; gap: 0.7rem; margin-top: 1rem; }
+.pager-info { color: var(--g-muted); font-size: 0.85rem; }
+
+/* --------------------------------------------------------------------------
+   16 · Auth / landing shell
+   -------------------------------------------------------------------------- */
+.auth-shell {
+  background:
+    radial-gradient(120% 90% at 10% -10%, var(--g-bg-tint-a), transparent 58%),
+    radial-gradient(110% 80% at 92% 4%, var(--g-bg-tint-b), transparent 55%),
+    var(--g-bg);
+}
+.auth-card,
+:root[data-theme="dark"] .auth-card {
+  border-radius: var(--g-r-xl);
+  border: 1px solid var(--g-edge);
+  background: var(--g-chrome);
+  backdrop-filter: var(--g-blur-chrome);
+  -webkit-backdrop-filter: var(--g-blur-chrome);
+  box-shadow: var(--g-e3), inset 0 1px 0 var(--g-spec);
+  padding: 2rem;
+}
+.auth-card h1 { letter-spacing: -0.028em; font-weight: 700; }
+/* The intro panel keeps its worship photo, but its scrim was navy/indigo and
+   read as a different product beside the green app shell. Only the tint
+   changes; the image is untouched. */
+.auth-intro.landing-intro,
+:root[data-theme="dark"] .auth-intro.landing-intro {
+  background:
+    radial-gradient(70% 100% at 94% -15%, rgba(240, 205, 128, 0.30), transparent 60%),
+    linear-gradient(150deg, rgba(10, 74, 56, 0.88), rgba(12, 61, 47, 0.62) 46%, rgba(4, 26, 20, 0.55)),
+    url('/static/worship-stage.webp') center 30% / cover no-repeat;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: var(--g-e3), inset 0 1px 0 rgba(255, 255, 255, 0.20);
+}
+.auth-intro.landing-intro h2 { color: #fff; letter-spacing: -0.03em; }
+.auth-intro.landing-intro p { color: rgba(255, 255, 255, 0.82); }
+.auth-kicker {
+  border-radius: var(--g-r-pill);
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.landing-feature {
+  border-radius: var(--g-r-md);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.landing-feature strong { color: #fff; }
+.landing-feature small { color: rgba(255, 255, 255, 0.76); }
+.landing-feature > span {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: var(--g-r-xs);
+}
+.landing-status-row span {
+  border-radius: var(--g-r-pill);
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.auth-logo, .brand-mini-logo { border-radius: var(--g-r-sm); }
+.password-toggle {
+  background: none; box-shadow: none; border: none;
+  color: var(--g-brand); font-weight: 600; font-size: 0.8rem;
+}
+.password-toggle:hover { background: none; transform: none; filter: none; }
+
+/* --------------------------------------------------------------------------
+   17 · Mobile — drawer becomes a glass sheet, chrome hugs the edges
+   -------------------------------------------------------------------------- */
+@media (max-width: 800px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar {
+    margin: 0; height: 100dvh; border-radius: 0 var(--g-r-xl) var(--g-r-xl) 0;
+    border-left: 0;
+    box-shadow: var(--g-e3);
+  }
+  .topbar { margin: 10px 10px 0; padding: 0.5rem 0.6rem; border-radius: var(--g-r-md); }
+  .page { padding: 1.1rem 10px 1.6rem; }
+  .footer { padding: 1rem 10px; }
+  .scrim { background: rgba(4, 10, 8, 0.42); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  .nav-toggle {
+    border-radius: var(--g-r-sm);
+    background: var(--g-well);
+    border: 1px solid var(--g-edge);
+    color: var(--g-ink);
+    box-shadow: inset 0 1px 0 var(--g-spec);
+  }
+  .page-hero { padding: 1.4rem 1.25rem; border-radius: var(--g-r-lg); }
+  .page-hero h1 { font-size: 1.55rem; }
+}
+
+/* --------------------------------------------------------------------------
+   18 · Cascade corrections
+   --------------------------------------------------------------------------
+   styles.css carries light-mode assumptions from generations that predate its
+   dark theme — literal near-white fills that a [data-theme="dark"] rule never
+   caught. They only surface in dark mode, where they blow out to light-on-
+   light. These are restated at matching specificity rather than patched in
+   that file, so the whole correction stays inside this layer.
+   -------------------------------------------------------------------------- */
+
+/* Zebra striping: styles.css:8842 paints even rows near-white. Softened to a
+   tint of the surface so it reads in both themes. */
+table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--g-ink) 3%, transparent);
+}
+:root[data-theme="dark"] table tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.03);
+}
+table tbody tr:hover td,
+:root[data-theme="dark"] table tbody tr:hover td,
+table tbody tr:nth-child(even):hover td,
+:root[data-theme="dark"] table tbody tr:nth-child(even):hover td {
+  background: color-mix(in srgb, var(--g-brand) 10%, transparent);
+}
+
+/* The filter row carries a near-white fill of its own from an older layer.
+   It sits inside a card that already provides the surface, so in dark mode it
+   showed as a light band under the controls. It needs no fill at all. */
+.filter-bar,
+:root[data-theme="dark"] .filter-bar,
+.filters-card .filter-bar,
+:root[data-theme="dark"] .filters-card .filter-bar {
+  background: transparent;
+  box-shadow: none;
+  border-color: transparent;
+}
+
+/* Form controls in dark mode. */
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] .search-field,
+:root[data-theme="dark"] .filter-bar select,
+:root[data-theme="dark"] .filter-bar input[type="text"],
+:root[data-theme="dark"] .filter-bar input[type="search"],
+:root[data-theme="dark"] .form label input,
+:root[data-theme="dark"] .form label select,
+:root[data-theme="dark"] .form label textarea {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--g-ink);
+  border-color: var(--g-edge-strong);
+}
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder { color: var(--g-muted); }
+:root[data-theme="dark"] .form label input[readonly] {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--g-muted);
+}
+:root[data-theme="dark"] input:focus,
+:root[data-theme="dark"] select:focus,
+:root[data-theme="dark"] textarea:focus,
+:root[data-theme="dark"] .search-field:focus-within {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: color-mix(in srgb, var(--g-brand) 55%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--g-brand) 20%, transparent);
+}
+
+/* --------------------------------------------------------------------------
+   19 · Fallbacks and motion preferences
+   -------------------------------------------------------------------------- */
+/* Where backdrop-filter is unavailable the translucency would leave text on a
+   near-transparent panel, so those surfaces go solid instead. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .topbar, .card, .list-card, .filters-card, .stat, .hero-stat,
+  .auth-card, .toast, .flash, .landing-feature {
+    background: var(--g-panel-solid);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+  .card:hover, .stat:hover, .hero-stat:hover,
+  button:hover, .btn:hover, .sidebar nav a:hover { transform: none; }
+}
+
+/* Printing: glass and shadows are noise on paper. */
+@media print {
+  .sidebar, .topbar, .footer, .scrim { display: none !important; }
+  .card, .list-card, .stat, .hero-stat, .page-hero {
+    background: #fff !important;
+    box-shadow: none !important;
+    border: 1px solid #ddd !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .page-hero, .page-hero h1, .page-hero p { color: #000 !important; }
+}
