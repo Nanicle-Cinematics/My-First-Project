@@ -978,6 +978,29 @@ table tbody tr:hover {
   }
   .page-hero { padding: 1.4rem 1.25rem; border-radius: var(--g-r-lg); }
   .page-hero h1 { font-size: 1.55rem; }
+
+  /* Phone ergonomics. The stats row, its action buttons and the filter row
+     stayed side-by-side and got squeezed into narrow columns; each becomes a
+     full-width stack instead. The min-width:0 guards are ordinary flexbox
+     hygiene so a long cell can shrink rather than push its row wider. */
+  .app, .main, .page, .card, .list-card, .filters-card { min-width: 0; }
+
+  .members-stats { flex-direction: column; align-items: stretch; gap: 0.7rem; }
+  .hero-stat-group { min-width: 0; width: 100%; gap: 0.7rem; }
+  .hero-stat { min-width: 0; flex: 1 1 100%; }
+  .hero-actions { width: 100%; }
+  .hero-actions .btn,
+  .hero-actions button { flex: 1 1 auto; justify-content: center; }
+
+  .filter-bar { flex-direction: column; align-items: stretch; }
+  .filter-bar .search-field,
+  .filter-bar select,
+  .filter-bar input,
+  .filter-bar button { width: 100%; min-width: 0; }
+
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.data-table td { min-width: 0; word-break: break-word; }
+  .pager { flex-wrap: wrap; justify-content: center; }
 }
 
 /* --------------------------------------------------------------------------
