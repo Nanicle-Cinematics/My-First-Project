@@ -15,6 +15,7 @@ const path = require('path');
 const { layout } = require('../lib/tenant-shell');
 const V = require('../lib/views');
 const { icon } = require('../lib/icons');
+const { sparkline } = require('../lib/charts');
 
 const ROOT = path.join(__dirname, '..');
 const CSS = fs.readFileSync(path.join(ROOT, 'public', 'styles.css'), 'utf8');
@@ -85,7 +86,7 @@ function formPage() {
       <label>Payment method<select><option>Cash</option><option>Mobile money</option></select></label>
       <label>Receipt no.<input value="RCT-00841" readonly></label>
       <label class="wide">Note<textarea rows="3">Sunday morning service.</textarea></label>
-      <div class="actions"><button type="button">Save entry</button><button type="button" class="ghost">Cancel</button><button type="button" class="danger">Reverse</button></div>
+      <div class="actions"><button type="submit">Save entry</button><button type="button" class="ghost">Cancel</button><button type="submit" class="danger">Reverse</button></div>
     </form></div>`;
   return layout({ title: 'Record giving', body, active: '/finance', user: USER, churchName: CHURCH, flash: 'Entry saved and posted to the ledger.', flashType: 'success' });
 }
@@ -224,13 +225,56 @@ function financeReceipt() {
   return layout({ title: 'Receipt RCT-00841', body, active: '/finance', user: USER, churchName: CHURCH, noHeader: true });
 }
 
+// Attendance brings two things no other fixture has: a real sparkline from
+// lib/charts.js, and a five-across stat row over a seven-column numeric table.
+// Both are places where a layout can go wrong without anything else noticing.
+function attendancePage() {
+  const trend = [42, 51, 47, 63, 58, 71, 66, 74].map((value, i) => ({ label: `Wk ${i + 1}`, value }));
+  const cell = (v) => (v == null ? '<span class="muted-text">—</span>' : `<strong>${v}</strong>`);
+  const rows = [
+    ['2026-08-09 09:00', '<a href="#">Sunday Morning Service</a>', cell(38), cell(52), cell(24), cell(114), '<a class="btn ghost" href="#">Edit →</a>'],
+    ['2026-08-06 18:30', '<a href="#">Wednesday Bible Study</a>', cell(12), cell(19), cell(6), cell(37), '<a class="btn ghost" href="#">Edit →</a>'],
+    ['2026-08-02 09:00', '<a href="#">Sunday Morning Service</a>', cell(41), cell(55), cell(21), cell(117), '<a class="btn ghost" href="#">Edit →</a>'],
+    ['2026-07-30 18:30', '<a href="#">Wednesday Bible Study</a>', cell(null), cell(null), cell(null), cell(null), '<a class="btn ghost" href="#">Edit →</a>'],
+  ];
+  const inner = V.table(['When', 'Title', 'Men', 'Women', 'Children', 'Total', 'Actions'], rows);
+  const body = `${V.pageHero('Attendance', 'Track service participation. Record Men / Women / Children counts per service — add or edit a service right here.')}
+    ${V.statsRow([
+      { cls: 'gold', icon: icon('attendance'), value: '66', label: 'Avg attendance (last 8)' },
+      { cls: 'green', icon: icon('events'), value: '20', label: 'Services tracked' },
+      { cls: 'blue', icon: icon('ledger'), value: '17', label: 'Counts recorded' },
+      { cls: 'purple', icon: icon('members'), value: '1,284', label: 'Total attendance' },
+      { cls: 'green', icon: icon('delta'), value: '+8', label: 'Last service change' },
+    ], '<a class="btn primary" href="#">Add Service</a>')}
+    <div class="card">
+      <div class="card-head"><h2>Attendance trend</h2><span class="meta">Last 8 services</span></div>
+      ${sparkline(trend)}
+    </div>
+    ${V.listCard({ title: 'Recent services', count: 20, countLabel: 'services', inner })}`;
+  return layout({ title: 'Attendance', body, active: '/attendance', user: USER, churchName: CHURCH, noHeader: true });
+}
+
+// The empty state is a separate surface with its own icon well and centring,
+// and it is what a brand-new church sees first.
+function attendanceEmpty() {
+  const inner = `<div class="empty-state">
+      <div class="empty-ico" aria-hidden="true">${icon('attendance')}</div>
+      <h3>No services tracked yet</h3>
+      <p>Add your first service to start recording attendance counts.</p>
+      <a class="btn primary" href="#">Add Service</a>
+    </div>`;
+  const body = `${V.pageHero('Attendance', 'Track service participation.')}
+    ${V.listCard({ title: 'Recent services', count: 0, countLabel: 'services', inner })}`;
+  return layout({ title: 'Attendance', body, active: '/attendance', user: USER, churchName: CHURCH, noHeader: true });
+}
+
 // The bare/auth shell is a separate template in lib/shell.js — worth its own
 // preview, since it is the first screen anyone sees.
 function loginPage() {
   const body = `<form class="form" method="post" action="/login">
     <label class="wide">Email<input type="email" value="nana@dunwell.org"></label>
     <label class="wide">Password<input type="password" value="secret123"></label>
-    <div class="actions"><button type="button">Sign in</button></div>
+    <div class="actions"><button type="submit">Sign in</button></div>
     <p class="hint"><a href="/forgot">Forgot your password?</a></p>
   </form>`;
   return layout({ title: 'Sign in', body, bare: true, active: null, user: null, churchName: CHURCH });
@@ -244,7 +288,8 @@ function landing() {
 
 const PAGES = {
   dashboard, dashboardHero, members: membersPage, form: formPage,
-  financeIndex, financeReceipt, login: loginPage, landing,
+  financeIndex, financeReceipt, attendancePage, attendanceEmpty,
+  login: loginPage, landing,
 };
 
 function main() {
