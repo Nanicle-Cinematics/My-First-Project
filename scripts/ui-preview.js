@@ -149,6 +149,81 @@ function dashboardHero() {
   return layout({ title: 'Dashboard', body, active: '/', user: USER, churchName: CHURCH, noHeader: true });
 }
 
+// Finance is the largest module and has surfaces nothing else does: a KPI
+// strip, a collapsible module directory whose icons are bare glyphs, and a
+// printable receipt document. Mirrored from routes-pg-html/finance.js.
+function financeIndex() {
+  const kpi = (cls, label, value, note) =>
+    `<a class="finance-kpi ${cls}" href="#"><span>${label}</span><strong>${value}</strong><small>${note}</small></a>`;
+  const group = (label, items, open) => `<details ${open ? 'open' : ''}>
+      <summary><span>${label}</span><small>${items.length} tools</small></summary>
+      <div class="finance-module-links">${items.map(([g, name]) =>
+        `<a href="#"><span class="finance-module-icon">${g}</span><strong>${name}</strong><span aria-hidden="true">→</span></a>`).join('')}</div>
+    </details>`;
+  const body = `${V.pageHero('Finance', 'A clear view of your church\u2019s financial position and next actions.')}
+    <div class="finance-command">
+      <section class="finance-kpi-grid" aria-label="Financial overview">
+        ${kpi('', 'Fund balances', '\u20b581,410', 'Across 6 active funds')}
+        ${kpi('positive', 'Income this month', '\u20b548,920', '2026-08-01 to 2026-08-31')}
+        ${kpi('positive', 'Net movement', '\u20b536,780', '\u20b512,140 spent this month')}
+        ${kpi('warning', 'Expense budget used', '91%', '\u20b512,140 of \u20b513,340')}
+        ${kpi('warning', 'Outstanding pledges', '\u20b54,300', '7 open pledges')}
+      </section>
+      <section class="finance-quick-actions" aria-label="Quick actions">
+        <div><p class="eyebrow">Quick actions</p><h2>Record today\u2019s activity</h2></div>
+        <div class="finance-action-buttons">
+          <a class="btn" href="#">+ Record income</a>
+          <a class="btn secondary" href="#">+ Record expense</a>
+          <a class="btn ghost" href="#">Record pledge payment</a>
+        </div>
+      </section>
+      <div class="finance-dashboard-grid">
+        <section class="card finance-attention">
+          <div class="card-head"><div><p class="eyebrow">Attention</p><h2>Financial checks</h2></div><span class="meta">2 items</span></div>
+          <div class="finance-alert-list">
+            <a class="finance-alert warning" href="#"><span class="finance-alert-dot"></span><span><strong>Expense budget is nearing its limit</strong><small>Actual spending is 91% of budget.</small></span><span aria-hidden="true">\u2192</span></a>
+            <a class="finance-alert neutral" href="#"><span class="finance-alert-dot"></span><span><strong>Current financial period is open</strong><small>Lock it after reconciliation.</small></span><span aria-hidden="true">\u2192</span></a>
+          </div>
+        </section>
+        <section class="card finance-recent">
+          <div class="card-head"><div><p class="eyebrow">Ledger</p><h2>Recent activity</h2></div></div>
+          <div class="finance-empty"><strong>No ledger activity yet</strong><span>Recorded income and expenses will appear here.</span></div>
+        </section>
+      </div>
+      <section class="finance-module-directory">
+        <div class="finance-section-heading"><div><p class="eyebrow">Workspace</p><h2>Finance tools</h2></div><p>Open the detailed registers, controls, and reports.</p></div>
+        <div class="finance-module-groups">
+          ${group('Money in', [[icon('trend'), 'General income'], [icon('plus'), 'Tithes'], [icon('star'), 'Special offerings'], [icon('sun'), 'Day-born collections'], [icon('church'), 'Services'], [icon('harvest'), 'Harvests'], [icon('diamond'), 'Pledges']], true)}
+          ${group('Money out &amp; controls', [[icon('trendDown'), 'Expenses'], [icon('receipt'), 'Payment vouchers'], [icon('wallet'), 'Funds'], [icon('folder'), 'Projects'], [icon('ledger'), 'Budgets'], [icon('clock'), 'Financial periods']], false)}
+        </div>
+      </section>
+    </div>`;
+  return layout({ title: 'Finance', body, active: '/finance', user: USER, churchName: CHURCH, noHeader: true });
+}
+
+function financeReceipt() {
+  const line = (l, r, cls = '') => `<div class="rc-line ${cls}"><span>${l}</span>${r}</div>`;
+  const body = `<div class="receipt-actions screen-only">
+      <a class="btn-link" href="#">← Back to receipts</a>
+      <a class="btn" href="#">🖨 Print / save as PDF</a>
+    </div>
+    <div class="print-doc receipt-doc">
+      <div class="rc-head">
+        <div><div class="rc-church">⛪ ${CHURCH}</div><div class="muted-text">Pledge Payment Receipt</div></div>
+        <div class="rc-no"><strong>RCT-00841</strong><br><span class="muted-text">2026-08-15</span></div>
+      </div>
+      ${line('Received from', '<strong>Ama Serwaa</strong>')}
+      ${line('For', '<span>Harvest 2026 pledge</span>')}
+      ${line('Amount received', '<strong>₵250.00</strong>')}
+      ${line('Total pledged', '<span>₵1,000.00</span>')}
+      ${line('Paid to date', '<span>₵600.00</span>')}
+      ${line('Outstanding balance', '<span>₵400.00</span>', 'rc-total')}
+      ${line('Recorded by', '<span>Nana Aboagye</span>')}
+      <p class="rc-foot">Thank you. A balance of <strong>₵400.00</strong> remains on this pledge.</p>
+    </div>`;
+  return layout({ title: 'Receipt RCT-00841', body, active: '/finance', user: USER, churchName: CHURCH, noHeader: true });
+}
+
 // The bare/auth shell is a separate template in lib/shell.js — worth its own
 // preview, since it is the first screen anyone sees.
 function loginPage() {
@@ -169,7 +244,7 @@ function landing() {
 
 const PAGES = {
   dashboard, dashboardHero, members: membersPage, form: formPage,
-  login: loginPage, landing,
+  financeIndex, financeReceipt, login: loginPage, landing,
 };
 
 function main() {
