@@ -21,6 +21,7 @@ const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
 const { authPage } = require('../lib/tenant-shell');
 const { resolveChurchByCheckinToken } = require('../lib/tenant');
+const { icon } = require('../lib/icons');
 
 const EVENT_TYPES = ['SERVICE', 'PRAYER', 'BIBLE_STUDY', 'OUTREACH', 'YOUTH', 'WEDDING', 'FUNERAL', 'BAPTISM', 'CONFIRMATION', 'OTHER'];
 const RSVP_RESPONSES = ['GOING', 'MAYBE', 'NO'];
@@ -102,9 +103,9 @@ function register(app) {
 
     const hero = pageHero('Events', 'Services, meetings and special events — schedule them and track attendance.');
     const stats = statsRow([
-      { cls: 'gold', icon: '📅', value: totalEvents.toLocaleString(), label: 'Total Events' },
-      { cls: 'green', icon: '⏭', value: upcoming.toLocaleString(), label: 'Upcoming' },
-      { cls: 'blue', icon: '✓', value: checkins.toLocaleString(), label: 'Check-ins Recorded' },
+      { cls: 'gold', icon: icon('events'), value: totalEvents.toLocaleString(), label: 'Total Events' },
+      { cls: 'green', icon: icon('clock'), value: upcoming.toLocaleString(), label: 'Upcoming' },
+      { cls: 'blue', icon: icon('attendance'), value: checkins.toLocaleString(), label: 'Check-ins Recorded' },
     ], isAdmin ? `<a class="btn primary" href="/events/new">＋ New Event</a>` : '');
     const filters = filterCard({ q, placeholder: 'Search events by title…' });
 

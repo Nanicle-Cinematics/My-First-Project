@@ -30,6 +30,7 @@ const { logActivity } = require('../lib/tenant-activity');
 const ledger = require('../lib/ledger-pg');
 const { sendSmsBatch, sendEmailEach, normalizePhoneGH } = require('../lib/delivery');
 const { amountInWords } = require('../lib/money');
+const { icon } = require('../lib/icons');
 
 function requireFinanceWrite(req, res, next) {
   const u = res.locals.user;
@@ -727,10 +728,10 @@ function register(app) {
       <button class="btn" type="button" onclick="window.print()">Print / save PDF</button>
     </div>`;
     const summary = statsRow([
-      { cls: 'green', icon: '↗', value: fmtMoney(income), label: `Income · ${compare(income, priorIncome)}` },
-      { cls: 'orange', icon: '↘', value: fmtMoney(spent), label: `Expenses · ${compare(spent, priorExpense)}` },
-      { cls: net >= 0 ? 'blue' : 'red', icon: '₵', value: fmtMoney(net), label: 'Net movement' },
-      { cls: 'purple', icon: '◇', value: fmtMoney(outstanding), label: 'Outstanding pledges' },
+      { cls: 'green', icon: icon('trend'), value: fmtMoney(income), label: `Income · ${compare(income, priorIncome)}` },
+      { cls: 'orange', icon: icon('trendDown'), value: fmtMoney(spent), label: `Expenses · ${compare(spent, priorExpense)}` },
+      { cls: net >= 0 ? 'blue' : 'red', icon: icon('finance'), value: fmtMoney(net), label: 'Net movement' },
+      { cls: 'purple', icon: icon('diamond'), value: fmtMoney(outstanding), label: 'Outstanding pledges' },
     ]);
 
     const monthlyIncome = reportGroup(incomeRows, 'month');
@@ -870,9 +871,9 @@ function register(app) {
     ]);
     const body = `
       ${statsRow([
-        { cls: 'blue', icon: '₵', value: fmtMoney(totalBalance), label: 'Total fund balances' },
-        { cls: 'orange', icon: 'R', value: fmtMoney(restrictedTotal), label: 'Restricted balances' },
-        { cls: 'green', icon: '#', value: enriched.length, label: 'Active funds' },
+        { cls: 'blue', icon: icon('finance'), value: fmtMoney(totalBalance), label: 'Total fund balances' },
+        { cls: 'orange', icon: icon('lock'), value: fmtMoney(restrictedTotal), label: 'Restricted balances' },
+        { cls: 'green', icon: icon('hash'), value: enriched.length, label: 'Active funds' },
       ])}
       ${addForm}
       <section class="card">
@@ -934,8 +935,8 @@ function register(app) {
          </details>` : '';
     const body = `
       ${statsRow([
-        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent generic income' },
-        { cls: 'blue', icon: '#', value: rows.length, label: 'Records shown' },
+        { cls: 'green', icon: icon('finance'), value: fmtMoney(total), label: 'Recent generic income' },
+        { cls: 'blue', icon: icon('hash'), value: rows.length, label: 'Records shown' },
       ])}
       ${addForm}
       ${rows.length ? table(['Date', 'Category', 'Received from', 'Amount', 'Method', 'Fund', 'Receipt', ''],
@@ -1037,8 +1038,8 @@ function register(app) {
          </details>` : '';
     const body = `
       ${statsRow([
-        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent standalone collections' },
-        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+        { cls: 'green', icon: icon('finance'), value: fmtMoney(total), label: 'Recent standalone collections' },
+        { cls: 'purple', icon: icon('hash'), value: rows.length, label: 'Records shown' },
       ])}
       ${addForm}
       <p><a class="btn ghost" href="/finance/day-borns.csv">⬇ Export CSV</a></p>
@@ -1153,8 +1154,8 @@ function register(app) {
          </details>` : '';
     const body = `
       ${statsRow([
-        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent special offerings' },
-        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+        { cls: 'green', icon: icon('finance'), value: fmtMoney(total), label: 'Recent special offerings' },
+        { cls: 'purple', icon: icon('hash'), value: rows.length, label: 'Records shown' },
       ])}
       ${addForm}
       <p><a class="btn ghost" href="/finance/special.csv">⬇ Export CSV</a></p>
@@ -1265,9 +1266,9 @@ function register(app) {
          </details>` : '';
     const body = `
       ${statsRow([
-        { cls: 'green', icon: '₵', value: fmtMoney(ytdAgg._sum.amount || 0), label: 'YTD tithes' },
-        { cls: 'blue', icon: '₵', value: fmtMoney(monthAgg._sum.amount || 0), label: 'This month' },
-        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+        { cls: 'green', icon: icon('finance'), value: fmtMoney(ytdAgg._sum.amount || 0), label: 'YTD tithes' },
+        { cls: 'blue', icon: icon('finance'), value: fmtMoney(monthAgg._sum.amount || 0), label: 'This month' },
+        { cls: 'purple', icon: icon('hash'), value: rows.length, label: 'Records shown' },
       ])}
       ${memberId ? `<p><a href="/finance/tithes">← All members</a></p>` : ''}
       ${addForm}
@@ -1356,8 +1357,8 @@ function register(app) {
          </details>` : '';
     const body = `
       ${statsRow([
-        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent service collections' },
-        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+        { cls: 'green', icon: icon('finance'), value: fmtMoney(total), label: 'Recent service collections' },
+        { cls: 'purple', icon: icon('hash'), value: rows.length, label: 'Records shown' },
       ])}
       ${addForm}
       <section class="card">
@@ -1498,8 +1499,8 @@ function register(app) {
          </details>` : '';
     const body = `
       ${statsRow([
-        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Recent harvest totals' },
-        { cls: 'purple', icon: '#', value: rows.length, label: 'Records shown' },
+        { cls: 'green', icon: icon('finance'), value: fmtMoney(total), label: 'Recent harvest totals' },
+        { cls: 'purple', icon: icon('hash'), value: rows.length, label: 'Records shown' },
       ])}
       ${addForm}
       <section class="card">
@@ -1969,8 +1970,8 @@ function register(app) {
       : `<div class="empty-state"><div class="empty-ico" aria-hidden="true">🧾</div><h3>No giving recorded for ${esc(year)}</h3><p>Once contributions are linked to members, you'll see them here. Try a different year.</p></div>`;
     const body = `${pageHero('Giving Statements', 'Per-member annual contribution summaries for year-end records.')}
       ${statsRow([
-        { cls: 'gold', icon: '🧾', value: rows.length.toLocaleString(), label: `Givers in ${year}` },
-        { cls: 'green', icon: '₵', value: fmtMoney(totalGiving), label: `Attributed Giving ${year}` },
+        { cls: 'gold', icon: icon('receipt'), value: rows.length.toLocaleString(), label: `Givers in ${year}` },
+        { cls: 'green', icon: icon('finance'), value: fmtMoney(totalGiving), label: `Attributed Giving ${year}` },
       ], yearSel)}
       ${listCard({ title: `Members with giving in ${year}`, count: rows.length, countLabel: 'members', inner })}`;
     res.page({ title: 'Finance · Statements', active: '/finance', noHeader: true, body });

@@ -10,6 +10,7 @@ const { esc, initials } = require('../lib/format');
 const { pageHero, statsRow, filterCard, listCard, ICON_EYE, ICON_TRASH, memberAvatar } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
+const { icon } = require('../lib/icons');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -60,9 +61,9 @@ function register(app) {
     const hero = pageHero('Organizations',
       'Choirs, bands, fellowships and brigades. Browse every group, see its leader and membership, and manage rosters.');
     const stats = statsRow([
-      { cls: 'gold', icon: '♫', value: orgCount.toLocaleString(), label: 'Organizations' },
-      { cls: 'green', icon: '👥', value: enrolled.toLocaleString(), label: 'Members Enrolled' },
-      { cls: 'blue', icon: '★', value: leaders.toLocaleString(), label: 'Groups with a Leader' },
+      { cls: 'gold', icon: icon('organizations'), value: orgCount.toLocaleString(), label: 'Organizations' },
+      { cls: 'green', icon: icon('members'), value: enrolled.toLocaleString(), label: 'Members Enrolled' },
+      { cls: 'blue', icon: icon('star'), value: leaders.toLocaleString(), label: 'Groups with a Leader' },
     ], `${isAdmin ? `<a class="btn primary" href="/organizations/new">＋ Add Organization</a>` : ''}
         <a class="btn ghost" href="/members">View Members</a>`);
     const sortOpts = [['', 'Sort: A–Z'], ['members', 'Sort: Most members']]
@@ -196,9 +197,9 @@ function register(app) {
       <p><a href="/organizations">← Back to organizations</a></p>
       ${pageHero(o.name, o.description || 'Group roster and membership.')}
       ${statsRow([
-        { cls: 'gold', icon: '👥', value: memberships.length, label: 'Members' },
-        { cls: 'green', icon: '★', value: o.leader ? esc(`${o.leader.firstName} ${o.leader.lastName}`) : '—', label: 'Leader' },
-        { cls: 'blue', icon: '📅', value: o.meetsOn ? esc(o.meetsOn) : '—', label: 'Meets' },
+        { cls: 'gold', icon: icon('members'), value: memberships.length, label: 'Members' },
+        { cls: 'green', icon: icon('star'), value: o.leader ? esc(`${o.leader.firstName} ${o.leader.lastName}`) : '—', label: 'Leader' },
+        { cls: 'blue', icon: icon('events'), value: o.meetsOn ? esc(o.meetsOn) : '—', label: 'Meets' },
       ])}
       ${listCard({ title: 'Roster', count: memberships.length, countLabel: 'members', inner: roster })}
       ${manage}`;

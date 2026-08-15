@@ -19,6 +19,7 @@ const asyncHandler = require('../lib/async-handler');
 const { esc, fmtMoney, fmtDobShort } = require('../lib/format');
 const { pageHero, statsRow, listCard, table } = require('../lib/views');
 const { db: rawDb } = require('../lib/tenant');
+const { icon } = require('../lib/icons');
 
 const REPORT_TABS = [
   ['/reports', 'Overview'],
@@ -229,9 +230,9 @@ function register(app) {
       ${reportTabs('/reports/income')}
       ${rangeForm('/reports/income', start, end)}
       ${statsRow([
-        { cls: 'green', icon: '₵', value: fmtMoney(total), label: 'Total income' },
-        { cls: 'blue', icon: '#', value: shaped.length, label: 'Income records' },
-        { cls: 'purple', icon: '↗', value: byCategory.length, label: 'Categories' },
+        { cls: 'green', icon: icon('finance'), value: fmtMoney(total), label: 'Total income' },
+        { cls: 'blue', icon: icon('hash'), value: shaped.length, label: 'Income records' },
+        { cls: 'purple', icon: icon('trend'), value: byCategory.length, label: 'Categories' },
       ])}
       <section class="card" style="margin-bottom:1rem">
         <div class="card-head"><h2>Income by category</h2><span class="meta">${esc(start)} → ${esc(end)}</span></div>

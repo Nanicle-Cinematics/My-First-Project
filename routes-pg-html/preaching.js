@@ -18,6 +18,7 @@ const { esc, fmtDate, fmtPreachDate } = require('../lib/format');
 const { pageHero, statsRow } = require('../lib/views');
 const { logActivity } = require('../lib/tenant-activity');
 const { sendPreachingReminder } = require('../routes-pg/preaching');
+const { icon } = require('../lib/icons');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -195,9 +196,9 @@ function register(app) {
       flash: reminderFlash,
       body: `${pageHero('Preaching Plan', 'Upcoming preaching assignments, guest contacts and reminder readiness.')}
         ${statsRow([
-          { cls: 'gold', icon: '🎤', value: upcoming.length.toLocaleString(), label: 'Upcoming' },
-          { cls: 'green', icon: '✓', value: assigned.toLocaleString(), label: 'Assigned' },
-          { cls: 'blue', icon: '✉', value: contactReady.toLocaleString(), label: 'Reminder Ready' },
+          { cls: 'gold', icon: icon('preaching'), value: upcoming.length.toLocaleString(), label: 'Upcoming' },
+          { cls: 'green', icon: icon('attendance'), value: assigned.toLocaleString(), label: 'Assigned' },
+          { cls: 'blue', icon: icon('communications'), value: contactReady.toLocaleString(), label: 'Reminder Ready' },
         ])}
         ${nextCard}${newForm}${upcomingTable}${pastTable}`,
     });
