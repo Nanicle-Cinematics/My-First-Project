@@ -14,6 +14,7 @@ const { pageHero, statsRow, listCard, table } = require('../lib/views');
 const { sparkline } = require('../lib/charts');
 const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
+const { icon } = require('../lib/icons');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -126,11 +127,11 @@ function register(app) {
     const hero = pageHero('Attendance',
       'Track service participation. Record Men / Women / Children counts per service — add or edit a service right here.');
     const stats = statsRow([
-      { cls: 'gold', icon: '✓', value: avg.toLocaleString(), label: `Avg attendance (last ${trend.length})` },
-      { cls: 'green', icon: '📅', value: services.length.toLocaleString(), label: 'Services tracked' },
-      { cls: 'blue', icon: '🧮', value: recorded.toLocaleString(), label: 'Counts recorded' },
-      { cls: 'purple', icon: '👥', value: total.toLocaleString(), label: 'Total attendance' },
-      { cls: change >= 0 ? 'green' : 'orange', icon: '↕', value: previous ? `${change >= 0 ? '+' : ''}${change}` : '—', label: 'Last service change' },
+      { cls: 'gold', icon: icon('attendance'), value: avg.toLocaleString(), label: `Avg attendance (last ${trend.length})` },
+      { cls: 'green', icon: icon('events'), value: services.length.toLocaleString(), label: 'Services tracked' },
+      { cls: 'blue', icon: icon('ledger'), value: recorded.toLocaleString(), label: 'Counts recorded' },
+      { cls: 'purple', icon: icon('members'), value: total.toLocaleString(), label: 'Total attendance' },
+      { cls: change >= 0 ? 'green' : 'orange', icon: icon('delta'), value: previous ? `${change >= 0 ? '+' : ''}${change}` : '—', label: 'Last service change' },
     ], isAdmin ? '<a class="btn primary" href="/attendance/new">＋ Add Service</a>' : '');
 
     const trendCard = `<div class="card">

@@ -9,6 +9,7 @@ const { flash } = require('../lib/tenant-flash');
 const { db: rawDb } = require('../lib/tenant');
 const { isPro } = require('../routes-pg/settings');
 const { requestIp, requestUserAgent } = require('../lib/security-audit');
+const { icon } = require('../lib/icons');
 
 function platformAdminEmails() {
   return String(process.env.PLATFORM_ADMIN_EMAILS || '')
@@ -177,10 +178,10 @@ async function platformStats() {
 
 function ownerSummaryCards(stats) {
   return `${statsRow([
-    { cls: 'gold', icon: '▣', value: stats.churchCount.toLocaleString(), label: 'Churches onboarded' },
-    { cls: 'green', icon: '✓', value: stats.activeCount.toLocaleString(), label: 'Active churches' },
-    { cls: 'blue', icon: '★', value: stats.proCount.toLocaleString(), label: 'Pro churches' },
-    { cls: 'purple', icon: '👥', value: stats.memberCount.toLocaleString(), label: 'Members managed' },
+    { cls: 'gold', icon: icon('platform'), value: stats.churchCount.toLocaleString(), label: 'Churches onboarded' },
+    { cls: 'green', icon: icon('attendance'), value: stats.activeCount.toLocaleString(), label: 'Active churches' },
+    { cls: 'blue', icon: icon('star'), value: stats.proCount.toLocaleString(), label: 'Pro churches' },
+    { cls: 'purple', icon: icon('members'), value: stats.memberCount.toLocaleString(), label: 'Members managed' },
   ])}
   <div class="platform-mini-grid">
     <div><strong>${stats.userCount.toLocaleString()}</strong><span>Total staff users</span></div>
@@ -338,11 +339,11 @@ async function renderChurchDetail(req, res) {
       </div>
     </div>
     ${statsRow([
-      { cls: 'gold', icon: '🔑', value: church._count.users.toLocaleString(), label: 'Users' },
-      { cls: 'green', icon: '👥', value: church._count.members.toLocaleString(), label: 'Members' },
-      { cls: 'blue', icon: '📅', value: church._count.events.toLocaleString(), label: 'Events' },
-      { cls: 'purple', icon: '✉', value: church._count.broadcasts.toLocaleString(), label: 'Broadcasts' },
-      { cls: 'orange', icon: '₵', value: church._count.journalEntries.toLocaleString(), label: 'Journal entries' },
+      { cls: 'gold', icon: icon('users'), value: church._count.users.toLocaleString(), label: 'Users' },
+      { cls: 'green', icon: icon('members'), value: church._count.members.toLocaleString(), label: 'Members' },
+      { cls: 'blue', icon: icon('events'), value: church._count.events.toLocaleString(), label: 'Events' },
+      { cls: 'purple', icon: icon('communications'), value: church._count.broadcasts.toLocaleString(), label: 'Broadcasts' },
+      { cls: 'orange', icon: icon('finance'), value: church._count.journalEntries.toLocaleString(), label: 'Journal entries' },
     ])}
     <div class="platform-mini-grid">
       <div><strong>${church._count.attendance.toLocaleString()}</strong><span>Attendance rows</span></div>

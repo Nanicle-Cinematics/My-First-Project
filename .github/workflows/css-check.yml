@@ -75,17 +75,31 @@ jobs:
           fi
           echo "Comparing against $BASE"
 
-          HEAD_SHA="$(git rev-parse HEAD)"
+          # Hold the markup constant and vary only the stylesheets, so what the
+          # diff reports is the effect of the CSS and nothing else. The tree
+          # stays on HEAD throughout; only public/*.css is swapped for the
+          # base commit's copy.
+          #
+          # The earlier approach checked out the base tree and copied this
+          # commit's scripts over it, which broke as soon as one of those
+          # scripts gained a dependency the base commit did not have — and it
+          # also conflated markup changes with CSS changes, which is not what
+          # a check named "css" should measure.
           node scripts/css-snapshot.js /tmp/after.json
 
-          git checkout --quiet --detach "$BASE"
-          # Run THIS commit's tooling against the base commit's stylesheets.
-          # The base may predate these scripts entirely (it does the first time
-          # this workflow runs), and even when it doesn't, comparing output
-          # from two different versions of the probe would be meaningless.
-          git checkout --quiet "$HEAD_SHA" -- scripts/css-snapshot.js scripts/css-diff.js scripts/ui-preview.js
+          mkdir -p /tmp/css-head
+          for f in styles.css theme-ios26.css; do
+            cp "public/$f" "/tmp/css-head/$f"
+            if git cat-file -e "$BASE:public/$f" 2>/dev/null; then
+              git show "$BASE:public/$f" > "public/$f"
+            else
+              echo "public/$f did not exist at base — comparing against an empty sheet"
+              : > "public/$f"
+            fi
+          done
+
           node scripts/css-snapshot.js /tmp/before.json
-          git checkout --quiet --force "$HEAD_SHA"
+          for f in styles.css theme-ios26.css; do cp "/tmp/css-head/$f" "public/$f"; done
 
           {
             echo '## Rendered CSS diff vs base'

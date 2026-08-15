@@ -8,6 +8,7 @@ const asyncHandler = require('../lib/async-handler');
 const { esc, initials } = require('../lib/format');
 const { pageHero, statsRow, filterCard, listCard } = require('../lib/views');
 const { logActivity } = require('../lib/tenant-activity');
+const { icon } = require('../lib/icons');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -65,9 +66,9 @@ function register(app) {
 
     const hero = pageHero('Bible Classes', 'Small groups and classes — their leaders, organizations and membership.');
     const stats = statsRow([
-      { cls: 'gold', icon: '📖', value: totalClasses.toLocaleString(), label: 'Bible Classes' },
-      { cls: 'green', icon: '👥', value: enrolled.toLocaleString(), label: 'Members Enrolled' },
-      { cls: 'blue', icon: '★', value: withLeader.toLocaleString(), label: 'Classes with a Leader' },
+      { cls: 'gold', icon: icon('book'), value: totalClasses.toLocaleString(), label: 'Bible Classes' },
+      { cls: 'green', icon: icon('members'), value: enrolled.toLocaleString(), label: 'Members Enrolled' },
+      { cls: 'blue', icon: icon('star'), value: withLeader.toLocaleString(), label: 'Classes with a Leader' },
     ], isAdmin ? `<a class="btn primary" href="#add-class">＋ Add Bible Class</a>` : '');
     const filters = filterCard({ q, placeholder: 'Search Bible classes by name…' });
 

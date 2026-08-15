@@ -31,6 +31,7 @@ const { esc, initials, fmtDate, DAYS_OF_WEEK, looksLikeImage } = require('../lib
 const { pageHero, statsRow, filterCard, listCard, table, pager, ICON_EYE, ICON_PENCIL, ICON_TRASH, memberAvatar } = require('../lib/views');
 const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
+const { icon } = require('../lib/icons');
 
 const PHOTO_DIR = process.env.PHOTO_DIR || path.join(__dirname, '..', 'photos');
 try { fs.mkdirSync(PHOTO_DIR, { recursive: true }); } catch (_) { /* already exists */ }
@@ -228,11 +229,11 @@ function register(app) {
 
     const hero = pageHero('Members Directory', 'Manage and view all church members in one place. Search, filter, and act on member records.');
     const stats = statsRow([
-      { cls: 'gold', icon: '👥', value: totalMembers.toLocaleString(), label: 'Total Members' },
-      { cls: 'green', icon: '✓', value: activeMembers.toLocaleString(), label: 'Active' },
-      { cls: 'blue', icon: '＋', value: newMembers.toLocaleString(), label: 'New (30d)' },
-      { cls: missingContact ? 'orange' : 'green', icon: '☎', value: missingContact.toLocaleString(), label: 'Missing Contact' },
-      { cls: inactiveMembers ? 'purple' : 'blue', icon: '!', value: inactiveMembers.toLocaleString(), label: 'Inactive / Other' },
+      { cls: 'gold', icon: icon('members'), value: totalMembers.toLocaleString(), label: 'Total Members' },
+      { cls: 'green', icon: icon('attendance'), value: activeMembers.toLocaleString(), label: 'Active' },
+      { cls: 'blue', icon: icon('plus'), value: newMembers.toLocaleString(), label: 'New (30d)' },
+      { cls: missingContact ? 'orange' : 'green', icon: icon('phone'), value: missingContact.toLocaleString(), label: 'Missing Contact' },
+      { cls: inactiveMembers ? 'purple' : 'blue', icon: icon('alert'), value: inactiveMembers.toLocaleString(), label: 'Inactive / Other' },
     ], `${isAdmin ? `<a class="btn primary" href="/members/new">＋ Add New Member</a>` : ''}
         <a class="btn ghost" href="/bible-classes">📚 Bible Classes</a>`);
     const filters = filterCard({

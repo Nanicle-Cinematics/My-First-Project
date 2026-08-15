@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { layout } = require('../lib/tenant-shell');
 const V = require('../lib/views');
+const { icon } = require('../lib/icons');
 
 const ROOT = path.join(__dirname, '..');
 const CSS = fs.readFileSync(path.join(ROOT, 'public', 'styles.css'), 'utf8');
@@ -22,27 +23,25 @@ const THEME = fs.readFileSync(path.join(ROOT, 'public', 'theme-ios26.css'), 'utf
 const USER = { role: 'admin', display_name: 'Nana Aboagye', username: 'nana' };
 const CHURCH = 'Dunwell Methodist Church';
 
-const ICON = V.ICON_EYE + '';
-
 function dashboard() {
   const stats = V.statsRow([
-    { cls: 'gold', icon: '👥', value: '1,284', label: 'Active members' },
-    { cls: 'green', icon: '₵', value: '₵48,920', label: 'Giving this month' },
-    { cls: 'blue', icon: '✓', value: '86%', label: 'Attendance rate' },
-    { cls: 'purple', icon: '📅', value: '7', label: 'Upcoming events' },
+    { cls: 'gold', icon: icon('members'), value: '1,284', label: 'Active members' },
+    { cls: 'green', icon: icon('finance'), value: '₵48,920', label: 'Giving this month' },
+    { cls: 'blue', icon: icon('attendance'), value: '86%', label: 'Attendance rate' },
+    { cls: 'purple', icon: icon('events'), value: '7', label: 'Upcoming events' },
   ], '<a class="btn" href="#">Record giving</a><a class="btn ghost" href="#">Add member</a>');
 
   const recent = `<ul class="list">
-    <li><span class="ico">👥</span><div><strong>Ama Serwaa</strong> joined Bible Class B</div><span class="when">2h ago</span></li>
-    <li><span class="ico">₵</span><div>Sunday offering posted — <strong>₵4,210</strong></div><span class="when">Yesterday</span></li>
-    <li><span class="ico">📅</span><div>Harvest service scheduled</div><span class="when">2 days ago</span></li>
-    <li><span class="ico">✓</span><div>Attendance recorded for Wednesday service</div><span class="when">3 days ago</span></li>
+    <li><span class="ico">${icon('members')}</span><div><strong>Ama Serwaa</strong> joined Bible Class B</div><span class="when">2h ago</span></li>
+    <li><span class="ico">${icon('finance')}</span><div>Sunday offering posted — <strong>₵4,210</strong></div><span class="when">Yesterday</span></li>
+    <li><span class="ico">${icon('events')}</span><div>Harvest service scheduled</div><span class="when">2 days ago</span></li>
+    <li><span class="ico">${icon('attendance')}</span><div>Attendance recorded for Wednesday service</div><span class="when">3 days ago</span></li>
   </ul>`;
 
-  const finance = `<div class="fin-row"><span class="lbl"><span class="dot">₵</span> Tithes</span><strong>₵18,400</strong></div>
-    <div class="fin-row"><span class="lbl"><span class="dot">✋</span> Offerings</span><strong>₵14,250</strong></div>
-    <div class="fin-row"><span class="lbl"><span class="dot">🌾</span> Harvest</span><strong>₵12,100</strong></div>
-    <div class="fin-row"><span class="lbl"><span class="dot">🎁</span> Special</span><strong>₵4,170</strong></div>
+  const finance = `<div class="fin-row"><span class="lbl"><span class="dot">${icon('finance')}</span> Tithes</span><strong>₵18,400</strong></div>
+    <div class="fin-row"><span class="lbl"><span class="dot">${icon('wallet')}</span> Offerings</span><strong>₵14,250</strong></div>
+    <div class="fin-row"><span class="lbl"><span class="dot">${icon('star')}</span> Harvest</span><strong>₵12,100</strong></div>
+    <div class="fin-row"><span class="lbl"><span class="dot">${icon('receipt')}</span> Special</span><strong>₵4,170</strong></div>
     <div class="fin-row total"><span class="lbl">Total</span><strong>₵48,920</strong></div>`;
 
   const body = `${V.pageHero('Good morning, Nana', 'Here is what is happening across the church this week.')}
@@ -66,9 +65,9 @@ function membersPage() {
   ];
   const inner = V.table(['ID', 'Name', 'Phone', 'Class', 'Status', ''], rows);
   const body = `${V.statsRow([
-    { cls: 'gold', icon: '👥', value: '1,284', label: 'Total members' },
-    { cls: 'green', icon: '✓', value: '1,102', label: 'Active' },
-    { cls: 'blue', icon: '★', value: '46', label: 'New this month' },
+    { cls: 'gold', icon: icon('members'), value: '1,284', label: 'Total members' },
+    { cls: 'green', icon: icon('attendance'), value: '1,102', label: 'Active' },
+    { cls: 'blue', icon: icon('star'), value: '46', label: 'New this month' },
   ], '<a class="btn" href="#">Add member</a>')}
     ${V.filterCard({ q: '', placeholder: 'Search members, phone, email…', controls: '<select><option>All classes</option></select><select><option>All statuses</option></select>' })}
     ${V.listCard({ title: 'Members', count: 1284, countLabel: 'members', inner })}

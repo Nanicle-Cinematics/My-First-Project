@@ -25,6 +25,7 @@ const { csrfValid } = require('../lib/tenant-csrf');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const { icon } = require('../lib/icons');
 
 const LOGO_DIR = process.env.LOGO_DIR || path.join(process.env.PHOTO_DIR || path.join(__dirname, '..', 'photos'), 'church-logos');
 const DEFAULT_LOGO = path.join(__dirname, '..', 'public', 'logo.png');
@@ -111,8 +112,8 @@ function register(app) {
     const body = `
       ${pageHero('Settings', 'Church profile and current plan.')}
       ${statsRow([
-        { cls: 'blue', icon: '▣', value: esc(plan.label), label: 'Plan' },
-        { cls: 'green', icon: '🔑', value: `${userCount}${plan.maxUsers ? '/' + plan.maxUsers : ''}`, label: 'Users' },
+        { cls: 'blue', icon: icon('platform'), value: esc(plan.label), label: 'Plan' },
+        { cls: 'green', icon: icon('users'), value: `${userCount}${plan.maxUsers ? '/' + plan.maxUsers : ''}`, label: 'Users' },
       ])}
       <section class="card" style="margin-bottom:1rem">
         <div class="card-head"><h2>Church profile</h2></div>

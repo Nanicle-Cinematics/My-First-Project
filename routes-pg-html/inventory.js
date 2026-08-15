@@ -8,6 +8,7 @@ const asyncHandler = require('../lib/async-handler');
 const { esc } = require('../lib/format');
 const { pageHero, statsRow, filterCard } = require('../lib/views');
 const { logActivity } = require('../lib/tenant-activity');
+const { icon } = require('../lib/icons');
 
 const RECOMMENDED_CATEGORIES = [
   'Audio-Visual / Media', 'Instruments', 'Sound Equipment', 'Office Supplies',
@@ -125,9 +126,9 @@ function register(app) {
     };
     const hero = pageHero('Inventory', 'Register of physical items the church owns.');
     const stats = statsRow([
-      { cls: 'gold', icon: '📦', value: totals.items.toLocaleString(), label: 'Items' },
-      { cls: 'green', icon: '🗂', value: totals.cats.toLocaleString(), label: 'Categories' },
-      { cls: 'blue', icon: '#', value: totals.qty.toLocaleString(), label: 'Total Quantity' },
+      { cls: 'gold', icon: icon('inventory'), value: totals.items.toLocaleString(), label: 'Items' },
+      { cls: 'green', icon: icon('folder'), value: totals.cats.toLocaleString(), label: 'Categories' },
+      { cls: 'blue', icon: icon('hash'), value: totals.qty.toLocaleString(), label: 'Total Quantity' },
     ], isAdmin
       ? `<a class="btn primary" href="#add-item">＋ Add Item</a>
          <a class="btn ghost" href="#add-category">＋ Category</a>`

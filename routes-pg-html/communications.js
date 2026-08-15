@@ -22,6 +22,7 @@ const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
 const { normalizePhoneGH, emailDeliveryInfo } = require('../lib/delivery');
 const { sendBroadcastAndTally, canReceive } = require('../lib/broadcast-delivery');
+const { icon } = require('../lib/icons');
 
 function requireAdmin(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -132,10 +133,10 @@ function register(app) {
       title: 'Communications', active: '/communications', noHeader: true,
       body: `${pageHero('Communications', 'Announcements, broadcast history and member messaging readiness.')}
         ${statsRow([
-          { cls: 'gold', icon: '✉', value: announcementCount.toLocaleString(), label: 'Announcements' },
-          { cls: 'green', icon: '📣', value: broadcastCount.toLocaleString(), label: 'Broadcasts' },
-          { cls: 'blue', icon: '✓', value: contactable.toLocaleString(), label: 'Contactable Members' },
-          { cls: failedRecipients ? 'orange' : 'green', icon: '!', value: failedRecipients.toLocaleString(), label: 'Failed Recipients' },
+          { cls: 'gold', icon: icon('communications'), value: announcementCount.toLocaleString(), label: 'Announcements' },
+          { cls: 'green', icon: icon('broadcast'), value: broadcastCount.toLocaleString(), label: 'Broadcasts' },
+          { cls: 'blue', icon: icon('attendance'), value: contactable.toLocaleString(), label: 'Contactable Members' },
+          { cls: failedRecipients ? 'orange' : 'green', icon: icon('alert'), value: failedRecipients.toLocaleString(), label: 'Failed Recipients' },
         ])}
         ${broadcastCta}
         ${newForm}<div class="card-head" style="padding-top:0.5rem"><h2>Recent announcements</h2></div>${list}`,

@@ -269,6 +269,15 @@ h1, h2, h3, .page > h1, .card-head h2 {
   font-size: 0.86rem;
   transition: background 0.2s var(--g-out);
 }
+/* Icons are inline SVG painting with currentColor, so they inherit the nav
+   item's own colour — muted when idle, ink-on-gold when active — without any
+   per-icon rule. These wells were sized for text glyphs, hence the explicit
+   dimensions here. */
+.sidebar nav a .ico svg { width: 16px; height: 16px; display: block; }
+.hs-ico svg { width: 21px; height: 21px; display: block; }
+.stat .ico svg { width: 20px; height: 20px; display: block; }
+.list .ico svg { width: 15px; height: 15px; display: block; }
+.fin-row .lbl .dot svg { width: 14px; height: 14px; display: block; }
 .sidebar nav a.active .ico {
   background: var(--g-gold);
   color: var(--g-gold-ink);
