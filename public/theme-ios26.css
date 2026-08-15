@@ -673,6 +673,39 @@ button:hover, .btn:hover {
 }
 button:active, .btn:active { transform: scale(0.965); }
 
+/* One primary button, not two.
+   styles.css:6585 and :7406 paint `.btn.primary` and every form submit with a
+   green gradient, while a plain `.btn` anchor takes the gold above — so the
+   same action read as two different buttons depending on whether it was a
+   link or a submit ("Add member" gold on Members, "Add Service" green on
+   Attendance). Gold is the brand's stated primary and what the most prominent
+   actions already use, so the submits join it rather than the reverse.
+   The long :not() chains are reproduced because that is the specificity being
+   answered; a shorter selector loses. */
+.btn.primary,
+button[type="submit"]:not(.ghost):not(.link):not(.danger):not(.sign-out):not(.row-expand):not(.icon-btn),
+.form button[type="submit"]:not(.icon-btn):not(.link):not(.danger):not(.btn):not([class*="btn-"]):not(.sign-out) {
+  background: linear-gradient(160deg, var(--g-gold) 0%, var(--g-gold-2) 100%);
+  color: var(--g-gold-ink);
+  box-shadow:
+    0 1px 2px rgba(11, 22, 34, 0.10),
+    0 6px 18px color-mix(in srgb, var(--g-gold) 30%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.36);
+}
+.btn.primary:hover,
+button[type="submit"]:not(.ghost):not(.link):not(.danger):not(.sign-out):not(.row-expand):not(.icon-btn):hover,
+.form button[type="submit"]:not(.icon-btn):not(.link):not(.danger):not(.btn):not([class*="btn-"]):not(.sign-out):hover {
+  color: var(--g-gold-ink);
+  filter: brightness(1.04);
+}
+/* The danger submit must stay red — it matches the submit selectors above on
+   everything except .danger, and losing that would make Reverse look routine. */
+.form button[type="submit"].danger,
+button[type="submit"].danger {
+  background: linear-gradient(160deg, #f05252, var(--g-red));
+  color: #fff;
+}
+
 /* Dark mode inherited a rule that tinted button text gold, which on a gold
    fill left the label unreadable. Ink is restated for both states. */
 :root[data-theme="dark"] button,
