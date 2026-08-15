@@ -897,6 +897,30 @@ table tbody tr:hover {
   border-color: color-mix(in srgb, var(--g-gold) 30%, transparent);
 }
 
+/* Four pill variants are used in markup but have never had a rule in any
+   stylesheet, so they fell back to a bare chip and carried no meaning. The
+   worst was .pill-overdue: a Suspended or Deleted church — the two states an
+   operator most needs to spot — rendered as neutral grey, quieter than the
+   amber "Free" plan badge sitting beside it. */
+.pill-overdue, .pill-cancelled {
+  background: color-mix(in srgb, var(--g-red) 13%, transparent);
+  color: var(--g-red);
+  border-color: color-mix(in srgb, var(--g-red) 26%, transparent);
+}
+.pill-ok {
+  background: color-mix(in srgb, var(--g-green) 14%, transparent);
+  color: var(--g-green);
+  border-color: color-mix(in srgb, var(--g-green) 26%, transparent);
+}
+/* A capability marker (2FA active), not a status — brand-tinted so it reads as
+   information rather than as a good/bad state. */
+.pill-admin {
+  background: color-mix(in srgb, var(--g-brand) 12%, transparent);
+  color: var(--g-brand);
+  border-color: color-mix(in srgb, var(--g-brand) 24%, transparent);
+}
+:root[data-theme="dark"] .pill-admin { color: var(--g-green); }
+
 /* --------------------------------------------------------------------------
    13 · Lists and finance rows
    -------------------------------------------------------------------------- */
