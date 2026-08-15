@@ -7,9 +7,14 @@
 // Exit code is 0 whether or not there are differences. A stylesheet change
 // SHOULD change how things look, so a difference is not a failure — the point
 // is to make the blast radius visible, and to make an accidental change to a
-// page nobody was working on impossible to miss. Exits non-zero only when a
-// snapshot is missing pages the other one has, which means a page failed to
-// render rather than merely looking different.
+// page nobody was working on impossible to miss.
+//
+// Exits non-zero only when a page is absent from one side or came back empty,
+// which means it failed to render rather than merely looking different. An
+// element-count change is reported loudly but is NOT fatal: comparing aligns
+// elements by position, so once the counts differ the per-element results
+// below are unreliable and should be read as "markup moved", not as a list of
+// regressions.
 
 const fs = require('fs');
 
@@ -28,7 +33,8 @@ function main() {
   const pages = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
   let compared = 0;
   let changedElements = 0;
-  let structural = false;
+  let failedToRender = false;   // fatal: a page is missing or empty
+  let markupMoved = false;      // reported: element counts differ
   const byProp = new Map();
   const byPage = new Map();
   const samples = [];
@@ -37,13 +43,22 @@ function main() {
     const a = before[page];
     const b = after[page];
     if (!a || !b) {
-      console.log(`MISSING PAGE: ${page} (${a ? 'absent after' : 'absent before'})`);
-      structural = true;
+      console.log(`FAILED TO RENDER: ${page} (${a ? 'absent after' : 'absent before'})`);
+      failedToRender = true;
+      continue;
+    }
+    if (a.length === 0 || b.length === 0) {
+      console.log(`FAILED TO RENDER: ${page} produced no elements`);
+      failedToRender = true;
       continue;
     }
     if (a.length !== b.length) {
-      console.log(`ELEMENT COUNT CHANGED on ${page}: ${a.length} -> ${b.length}`);
-      structural = true;
+      // Not a failure — markup changed. Say so plainly, because everything
+      // below aligns elements by index and stops meaning much once the
+      // counts diverge.
+      console.log(`MARKUP MOVED on ${page}: ${a.length} -> ${b.length} elements`
+        + ' (per-element results below are unreliable for this page)');
+      markupMoved = true;
     }
     const n = Math.min(a.length, b.length);
     for (let i = 0; i < n; i++) {
@@ -73,7 +88,7 @@ function main() {
   console.log(`elements compared: ${compared}`);
   console.log(`elements changed:  ${changedElements}`);
 
-  if (changedElements === 0 && !structural) {
+  if (changedElements === 0 && !markupMoved && !failedToRender) {
     console.log('\nNo rendered difference.');
     return;
   }
@@ -87,7 +102,7 @@ function main() {
     console.log('\nsamples:');
     for (const s of samples) console.log('  ' + s);
   }
-  if (structural) process.exit(1);
+  if (failedToRender) process.exit(1);
 }
 
 if (require.main === module) main();

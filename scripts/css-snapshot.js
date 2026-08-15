@@ -54,7 +54,10 @@ const probeScript = (props) => `<script>
     var el = all[i];
     if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
     var s = getComputedStyle(el);
-    var rec = { t: el.tagName, c: (el.className && el.className.toString) ? el.className.toString() : '' };
+    // getAttribute, not className: on SVG elements className is an
+    // SVGAnimatedString, which stringifies to "[object SVGAnimatedString]"
+    // and makes every icon in the report indistinguishable.
+    var rec = { t: el.tagName, c: el.getAttribute('class') || '' };
     for (var j = 0; j < PROPS.length; j++) rec[PROPS[j]] = s[PROPS[j]];
     out.push(rec);
   }
