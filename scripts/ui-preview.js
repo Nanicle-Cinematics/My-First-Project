@@ -268,6 +268,70 @@ function attendanceEmpty() {
   return layout({ title: 'Attendance', body, active: '/attendance', user: USER, churchName: CHURCH, noHeader: true });
 }
 
+// The platform portal is the cross-tenant operator view. It has two surfaces
+// nothing else does: a six-cell mini-grid under the stat row, and a table
+// whose cells stack two lines each (name over slug, pill over reason).
+function platformPortal() {
+  const pill = (label, cls) => `<span class="pill pill-${cls}">${label}</span>`;
+  const usage = (n, what) => `<span class="platform-usage"><strong>${n}</strong> ${what}</span>`;
+  const church = (name, slug, plan, planCls, access, accessCls, note, users, members, events, casts, signed) => [
+    `<a class="platform-church-link" href="#"><strong>${name}</strong><small>${slug}</small></a>`,
+    `${pill(plan, planCls)}${plan === 'Pro' ? '<small>Until 2027-01-31</small>' : ''}`,
+    `${pill(access, accessCls)}${note ? `<small>${note}</small>` : ''}`,
+    `${usage(users, 'users')}${usage(members, 'members')}`,
+    `${usage(events, 'events')}${usage(casts, 'broadcasts')}`,
+    signed,
+    '<div class="platform-actions"><a class="btn ghost" href="#">Manage</a></div>',
+  ];
+  const rows = [
+    church('Dunwell Methodist Church', 'dunwell', 'Pro', 'fulfilled', 'Active', 'fulfilled', '', 6, 1284, 42, 18, '2026-02-11'),
+    church('Grace Chapel International', 'grace-chapel', 'Free', 'pending', 'Active', 'fulfilled', '', 2, 187, 9, 3, '2026-06-02'),
+    church('Living Word Assembly', 'living-word', 'Free', 'pending', 'Suspended', 'overdue', 'Payment overdue', 1, 64, 2, 0, '2026-07-19'),
+  ];
+  const auditInner = V.table(['When', 'Church', 'Event', 'Subject'], [
+    ['2026-08-15 09:41', '<a href="#">Dunwell Methodist Church</a><small>dunwell</small>', 'plan.activated', 'Pro until 2027-01-31'],
+    ['2026-08-14 17:02', '<a href="#">Living Word Assembly</a><small>living-word</small>', 'church.suspended', 'Payment overdue'],
+  ]);
+  const errorInner = V.table(['When', 'Church', 'Path', 'Message'], [
+    ['2026-08-15 08:12', '<a href="#">Grace Chapel International</a><small>grace-chapel</small>', '/finance/reports', 'Timed out reading period totals'],
+    ['2026-08-13 21:55', 'Platform', '/platform/churches/42', 'Church not found'],
+  ]);
+  const body = `${V.pageHero('SaaS Owner Portal', 'Manage every church, plan, access state, user footprint and operational signal across the platform.')}
+    ${V.statsRow([
+      { cls: 'gold', icon: icon('platform'), value: '3', label: 'Churches onboarded' },
+      { cls: 'green', icon: icon('attendance'), value: '2', label: 'Active churches' },
+      { cls: 'blue', icon: icon('star'), value: '1', label: 'Pro churches' },
+      { cls: 'purple', icon: icon('members'), value: '1,535', label: 'Members managed' },
+    ])}
+    <div class="platform-mini-grid">
+      <div><strong>9</strong><span>Total staff users</span></div>
+      <div><strong>2</strong><span>New churches in 30 days</span></div>
+      <div><strong>1</strong><span>Suspended churches</span></div>
+      <div><strong>0</strong><span>Deleted churches</span></div>
+      <div><strong>14</strong><span>Trial enquiries</span></div>
+      <div><strong>2</strong><span>Errors in 30 days</span></div>
+    </div>
+    <div class="card platform-filters">
+      <div class="card-head"><h2>Find churches</h2><span class="meta">Search tenants, plans and access states</span></div>
+      <form method="get" action="#" class="filter-bar">
+        <div class="search-field"><span aria-hidden="true">\u{1F50E}</span>
+          <input type="search" name="q" value="" placeholder="Search church name or slug"></div>
+        <select aria-label="Plan"><option>All plans</option></select>
+        <select aria-label="Access status"><option>All statuses</option></select>
+        <button type="submit">Filter</button>
+      </form>
+    </div>
+    ${V.listCard({
+      title: 'Churches onboarded', count: 3, countLabel: 'churches',
+      inner: V.table(['Church', 'Plan', 'Access', 'People', 'Activity', 'Signed up', ''], rows, { keyCols: 3 }),
+    })}
+    <div class="platform-two-col">
+      ${V.listCard({ title: 'Recent security audit', count: 2, countLabel: 'events', inner: auditInner })}
+      ${V.listCard({ title: 'Recent errors', count: 2, countLabel: 'errors', inner: errorInner })}
+    </div>`;
+  return layout({ title: 'Platform', body, active: '/platform', user: USER, churchName: CHURCH, noHeader: true });
+}
+
 // The bare/auth shell is a separate template in lib/shell.js — worth its own
 // preview, since it is the first screen anyone sees.
 function loginPage() {
@@ -289,7 +353,7 @@ function landing() {
 const PAGES = {
   dashboard, dashboardHero, members: membersPage, form: formPage,
   financeIndex, financeReceipt, attendancePage, attendanceEmpty,
-  login: loginPage, landing,
+  platformPortal, login: loginPage, landing,
 };
 
 function main() {
