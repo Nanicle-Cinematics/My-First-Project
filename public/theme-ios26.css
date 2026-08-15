@@ -31,14 +31,15 @@
 
   /* Canvas */
   --g-bg: #eef1f5;
-  --g-bg-tint-a: rgba(15, 125, 92, 0.10);
-  --g-bg-tint-b: rgba(217, 166, 63, 0.11);
-  --g-bg-tint-c: rgba(40, 107, 183, 0.08);
+  --g-bg-tint-a: rgba(15, 125, 92, 0.17);
+  --g-bg-tint-b: rgba(217, 166, 63, 0.19);
+  --g-bg-tint-c: rgba(40, 107, 183, 0.13);
+  --g-bg-tint-d: rgba(124, 92, 252, 0.09);
 
   /* Glass materials. Three depths: chrome (most opaque, always legible),
      panel (content cards), well (recessed fields and rows). */
-  --g-chrome: rgba(255, 255, 255, 0.68);
-  --g-panel: rgba(255, 255, 255, 0.60);
+  --g-chrome: rgba(255, 255, 255, 0.60);
+  --g-panel: rgba(255, 255, 255, 0.56);
   --g-panel-solid: #ffffff;
   --g-well: rgba(255, 255, 255, 0.50);
   --g-raise: rgba(255, 255, 255, 0.78);
@@ -97,12 +98,13 @@
   --g-gold-ink: #241a02;
 
   --g-bg: #070a0d;
-  --g-bg-tint-a: rgba(47, 211, 155, 0.10);
-  --g-bg-tint-b: rgba(240, 201, 111, 0.08);
-  --g-bg-tint-c: rgba(90, 150, 240, 0.08);
+  --g-bg-tint-a: rgba(47, 211, 155, 0.16);
+  --g-bg-tint-b: rgba(240, 201, 111, 0.12);
+  --g-bg-tint-c: rgba(90, 150, 240, 0.13);
+  --g-bg-tint-d: rgba(167, 139, 250, 0.10);
 
-  --g-chrome: rgba(26, 32, 39, 0.66);
-  --g-panel: rgba(28, 34, 42, 0.56);
+  --g-chrome: rgba(26, 32, 39, 0.58);
+  --g-panel: rgba(28, 34, 42, 0.52);
   --g-panel-solid: #161b21;
   --g-well: rgba(255, 255, 255, 0.05);
   --g-raise: rgba(52, 62, 74, 0.72);
@@ -139,10 +141,18 @@ body {
   line-height: 1.5;
   letter-spacing: -0.011em;
   color: var(--g-ink);
+  /* Give the glass something to sample.
+     Translucency only reads as a material when there is variation behind it;
+     over a near-flat fill, a blurred panel is just a paler rectangle. These
+     tints are deliberately larger, stronger and overlapping, so chrome picks
+     up a colour shift as it passes over them, and content scrolling beneath
+     the sticky topbar supplies the rest. Fixed attachment keeps the field
+     still while the page moves across it — the parallax is what sells it. */
   background:
-    radial-gradient(120% 90% at 12% -8%, var(--g-bg-tint-a), transparent 58%),
-    radial-gradient(110% 80% at 92% 2%, var(--g-bg-tint-b), transparent 55%),
-    radial-gradient(120% 100% at 60% 108%, var(--g-bg-tint-c), transparent 60%),
+    radial-gradient(90% 70% at 8% -10%, var(--g-bg-tint-a), transparent 62%),
+    radial-gradient(80% 60% at 96% 0%, var(--g-bg-tint-b), transparent 58%),
+    radial-gradient(85% 65% at 62% 104%, var(--g-bg-tint-c), transparent 62%),
+    radial-gradient(70% 55% at 30% 52%, var(--g-bg-tint-d), transparent 66%),
     var(--g-bg);
   background-attachment: fixed;
 }
@@ -162,8 +172,23 @@ body {
 h1, h2, h3 {
   letter-spacing: -0.022em;
 }
-.page > h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.028em; }
-.page > .subtitle { color: var(--g-muted); font-size: 0.96rem; }
+/* Pages come in two shapes: some call views.js's pageHero, others pass a
+   title/subtitle to layout() and get this header. Both are large titles now,
+   at the same scale, so a page does not change character depending on which
+   route file wrote it. */
+.page > h1 {
+  font-size: clamp(1.9rem, 3.2vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.06;
+  margin: 0.35rem 0 0;
+}
+.page > .subtitle {
+  color: var(--g-muted);
+  font-size: 1rem;
+  margin: 0.45rem 0 1.5rem;
+  max-width: 70ch;
+}
 
 /* Link colour is scoped to content regions. Applied globally it bleeds into
    the sidebar, whose links sit on a dark brand panel and need their own
@@ -530,48 +555,93 @@ button svg, .btn svg { width: 15px; height: 15px; display: block; }
 /* --------------------------------------------------------------------------
    7 · Page hero
    -------------------------------------------------------------------------- */
+/* A large inline title, not a banner.
+   Every page opened with a full-width green gradient block carrying a title,
+   a subtitle and a "COMMAND CENTER" chip — roughly 180px of chrome to say
+   "Members". That is a dashboard convention, not an iOS one: iOS opens with a
+   large title on the page's own background and lets it scroll away, leaving
+   the persistent title in the bar above. This app already renders that
+   persistent title in the topbar, so the banner was duplicating it at great
+   expense.
+   The brand does not go missing — the sidebar is a full-height green panel,
+   and colour still lives in the icon wells, buttons and active nav. */
 .page-hero,
 .page-hero.command-center,
 :root[data-theme="dark"] .page-hero.command-center {
   position: relative;
-  overflow: hidden;
-  border-radius: var(--g-r-xl);
-  padding: 1.9rem 2rem;
-  margin-bottom: 1.15rem;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  /* The gold glow sits high and tight; spread wider it mixes with the green
-     into olive. Kept as a highlight at the corner, not a wash. */
-  background:
-    radial-gradient(80% 120% at 96% -40%, rgba(240, 205, 128, 0.42), transparent 58%),
-    linear-gradient(138deg, var(--g-brand) 0%, var(--g-brand-2) 96%);
-  box-shadow: var(--g-e2), inset 0 1px 0 rgba(255, 255, 255, 0.26);
-  color: #fff;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  padding: 0.35rem 0 1.1rem;
+  margin-bottom: 0.4rem;
+  color: var(--g-ink);
 }
-/* Specular sweep across the top edge — the cue that reads as "glass". */
-.page-hero::after {
-  content: "";
-  position: absolute; inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 45%);
-  pointer-events: none;
-}
-.page-hero > * { position: relative; z-index: 1; }
+.page-hero::after { content: none; }
 .page-hero h1,
 .page-hero.command-center h1,
 :root[data-theme="dark"] .page-hero.command-center h1 {
-  font-size: 1.95rem; font-weight: 700; letter-spacing: -0.032em; color: #fff;
-  margin-top: 0;
+  margin: 0;
+  color: var(--g-ink);
+  font-size: clamp(1.9rem, 3.2vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.06;
 }
-.page-hero p { color: rgba(255, 255, 255, 0.84); font-size: 0.97rem; }
-.hero-kicker,
-:root[data-theme="dark"] .page-hero.command-center .hero-kicker {
-  border-radius: var(--g-r-pill);
-  background: rgba(255, 255, 255, 0.18);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  padding: 0.22rem 0.7rem;
-  color: #fff; font-size: 0.66rem; letter-spacing: 0.08em; font-weight: 700;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  margin-bottom: 0.7rem;
+.page-hero p,
+:root[data-theme="dark"] .page-hero p {
+  margin: 0.45rem 0 0;
+  color: var(--g-muted);
+  font-size: 1rem;
+  max-width: 70ch;
+}
+/* Retired with the banner. */
+.hero-kicker { display: none; }
+
+/* The dashboard builds its own banner rather than using pageHero, so it needs
+   the same treatment separately — otherwise the one page every signed-in user
+   lands on would be the only one still wearing the old chrome. Its actions
+   stay on the trailing edge, which is where iOS puts them beside a large
+   title. */
+.dashboard-welcome,
+:root[data-theme="dark"] .dashboard-welcome {
+  min-height: 0;
+  padding: 0.35rem 0 1.1rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--g-ink);
+  align-items: flex-end;
+}
+/* Two decorative layers, not one: ::after draws the ringed circle, ::before
+   paints a scrim over the photo. Both go with the banner. */
+.dashboard-welcome::after,
+.dashboard-welcome::before { content: none; }
+.dashboard-welcome h1 {
+  color: var(--g-ink);
+  font-size: clamp(1.9rem, 3.2vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.06;
+}
+.dashboard-welcome p { color: var(--g-muted); font-size: 1rem; }
+.welcome-eyebrow {
+  color: var(--g-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dashboard-welcome .btn.ghost {
+  background: var(--g-well);
+  color: var(--g-ink);
+  border-color: var(--g-edge-strong);
+}
+.dashboard-welcome .btn.primary {
+  background: linear-gradient(160deg, var(--g-gold) 0%, var(--g-gold-2) 100%);
+  color: var(--g-gold-ink);
 }
 
 /* --------------------------------------------------------------------------
