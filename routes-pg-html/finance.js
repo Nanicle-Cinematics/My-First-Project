@@ -566,18 +566,18 @@ function register(app) {
 
     const groups = [
       ['Money in', [
-        ['/finance/income', '↗', 'General income'], ['/finance/tithes', '✚', 'Tithes'],
-        ['/finance/special', '★', 'Special offerings'], ['/finance/day-borns', '☀', 'Day-born collections'],
-        ['/finance/services', '✝', 'Services'], ['/finance/harvests', '🌾', 'Harvests'], ['/finance/pledges', '◇', 'Pledges'],
+        ['/finance/income', icon('trend'), 'General income'], ['/finance/tithes', icon('plus'), 'Tithes'],
+        ['/finance/special', icon('star'), 'Special offerings'], ['/finance/day-borns', icon('sun'), 'Day-born collections'],
+        ['/finance/services', icon('church'), 'Services'], ['/finance/harvests', icon('harvest'), 'Harvests'], ['/finance/pledges', icon('diamond'), 'Pledges'],
       ]],
       ['Money out & controls', [
-        ['/finance/expenses', '↘', 'Expenses'], ['/finance/vouchers', '▣', 'Payment vouchers'],
-        ['/finance/funds', '◎', 'Funds'], ['/finance/projects', '◆', 'Projects'], ['/finance/budgets', '▥', 'Budgets'],
-        ['/finance/periods', '◷', 'Financial periods'],
+        ['/finance/expenses', icon('trendDown'), 'Expenses'], ['/finance/vouchers', icon('receipt'), 'Payment vouchers'],
+        ['/finance/funds', icon('wallet'), 'Funds'], ['/finance/projects', icon('folder'), 'Projects'], ['/finance/budgets', icon('ledger'), 'Budgets'],
+        ['/finance/periods', icon('clock'), 'Financial periods'],
       ]],
       ['Reports & records', [
-        ['/finance/reports', '◫', 'Finance reports'], ['/finance/receipts', '▤', 'Receipts'],
-        ['/finance/statements', '▧', 'Giving statements'],
+        ['/finance/reports', icon('reports'), 'Finance reports'], ['/finance/receipts', icon('receipt'), 'Receipts'],
+        ['/finance/statements', icon('ledger'), 'Giving statements'],
       ]],
     ];
     const recentRows = recentEntries.map((entry) => {
@@ -626,8 +626,8 @@ function register(app) {
           <div class="finance-section-heading"><div><p class="eyebrow">Workspace</p><h2>Finance tools</h2></div><p>Open the detailed registers, controls, and reports.</p></div>
           <div class="finance-module-groups">${groups.map(([label, items], index) => `<details ${index === 0 ? 'open' : ''}>
             <summary><span>${esc(label)}</span><small>${items.length} tools</small></summary>
-            <div class="finance-module-links">${items.map(([href, icon, name]) =>
-              `<a href="${href}"><span class="finance-module-icon">${icon}</span><strong>${esc(name)}</strong><span aria-hidden="true">→</span></a>`).join('')}</div>
+            <div class="finance-module-links">${items.map(([href, glyph, name]) =>
+              `<a href="${href}"><span class="finance-module-icon">${glyph}</span><strong>${esc(name)}</strong><span aria-hidden="true">→</span></a>`).join('')}</div>
           </details>`).join('')}</div>
         </section>
       </div>`;
