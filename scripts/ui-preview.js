@@ -109,6 +109,46 @@ function page(html, { theme } = {}) {
     .replace('</body>', `${pin}</body>`);
 }
 
+// The real dashboard (lib/tenant-dashboard.js) needs a database, so its markup
+// is mirrored here instead. It is worth mirroring rather than skipping: it is
+// the landing screen for every signed-in user, and it is the only place with a
+// dark-on-light banner — a heading that inherits white from its container.
+// A global `h1 { color }` rule in the theme layer once forced that heading to
+// dark ink and made the dashboard title nearly invisible in production, which
+// no other preview page could have caught.
+function dashboardHero() {
+  const tile = (href, name, iconName, desc) =>
+    `<a class="report-tile" href="${href}"><div class="ico">${icon(iconName)}</div>`
+    + `<div><div class="name">${name}</div><div class="desc">${desc}</div></div></a>`;
+  const body = `<section class="dashboard-welcome">
+      <div>
+        <span class="welcome-eyebrow">Good morning · Saturday 15 August</span>
+        <h1>Your ministry at a glance.</h1>
+        <p>Stay close to your people, your services and the work that needs attention.</p>
+      </div>
+      <div class="welcome-actions">
+        <a class="btn ghost" href="#">View calendar</a>
+        <a class="btn primary" href="#">Add member <span>${icon('plus')}</span></a>
+      </div>
+    </section>
+    ${V.statsRow([
+      { cls: 'gold', icon: icon('members'), value: '2', label: 'Members' },
+      { cls: 'green', icon: icon('plus'), value: '0', label: 'New this month' },
+      { cls: 'blue', icon: icon('attendance'), value: '0', label: 'Check-ins (7d)' },
+      { cls: 'purple', icon: icon('finance'), value: '₵0.00', label: 'Income this month' },
+    ])}
+    <div class="dashboard-section-head"><div><span>Workspace</span><h2>Quick access</h2></div><a href="#">Need help? →</a></div>
+    <div class="report-tiles dashboard-quick-links">
+      ${tile('#', 'Members', 'members', '2 total')}
+      ${tile('#', 'Events', 'events', '0 upcoming')}
+      ${tile('#', 'Finance', 'finance', '3 funds')}
+      ${tile('#', 'Bible Classes', 'book', '1 class')}
+      ${tile('#', 'Organizations', 'organizations', '12 groups')}
+      ${tile('#', 'Reports', 'reports', 'Day-born, income, members')}
+    </div>`;
+  return layout({ title: 'Dashboard', body, active: '/', user: USER, churchName: CHURCH, noHeader: true });
+}
+
 // The bare/auth shell is a separate template in lib/shell.js — worth its own
 // preview, since it is the first screen anyone sees.
 function loginPage() {
@@ -128,7 +168,8 @@ function landing() {
 }
 
 const PAGES = {
-  dashboard, members: membersPage, form: formPage, login: loginPage, landing,
+  dashboard, dashboardHero, members: membersPage, form: formPage,
+  login: loginPage, landing,
 };
 
 function main() {

@@ -151,9 +151,16 @@ body {
    chrome on top that wash reads as a seam. */
 .main { background: transparent; }
 
-h1, h2, h3, .page > h1, .card-head h2 {
+/* Tracking only — deliberately NOT colour.
+   Setting colour on the bare element selector overrides inheritance (an
+   element selector beats an inherited value, which has no specificity), so it
+   forced dark ink onto headings inside every dark-on-light section: the
+   dashboard's welcome banner sets color:#fff and its h1 turned near-black
+   against the photo. Headings inherit from body, which already carries
+   --g-ink, and any container that sets its own colour now reaches its
+   headings the way it was written to. */
+h1, h2, h3 {
   letter-spacing: -0.022em;
-  color: var(--g-ink);
 }
 .page > h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.028em; }
 .page > .subtitle { color: var(--g-muted); font-size: 0.96rem; }
@@ -278,6 +285,8 @@ h1, h2, h3, .page > h1, .card-head h2 {
 .stat .ico svg { width: 20px; height: 20px; display: block; }
 .list .ico svg { width: 15px; height: 15px; display: block; }
 .fin-row .lbl .dot svg { width: 14px; height: 14px; display: block; }
+.report-tile .ico svg { width: 20px; height: 20px; display: block; }
+button svg, .btn svg { width: 15px; height: 15px; display: block; }
 .sidebar nav a.active .ico {
   background: var(--g-gold);
   color: var(--g-gold-ink);
