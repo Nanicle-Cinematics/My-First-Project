@@ -62,7 +62,15 @@ test.before(async () => {
 test.after(async () => {
   server.close();
   if (createdChurchIds.length) {
+    // Signup is not just a church and a user: lib/provision.js seeds a chart
+    // of accounts, special categories, service types and expense categories
+    // in the same transaction. All of them hold a foreign key to the church,
+    // so deleting the church first fails on accounts_church_id_fkey.
     const where = { churchId: { in: createdChurchIds } };
+    await db.account.deleteMany({ where });
+    await db.specialCategory.deleteMany({ where });
+    await db.serviceType.deleteMany({ where });
+    await db.expenseCategory.deleteMany({ where });
     await db.user.deleteMany({ where });
     await db.church.deleteMany({ where: { id: { in: createdChurchIds } } });
   }
