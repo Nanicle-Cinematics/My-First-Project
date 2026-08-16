@@ -143,12 +143,12 @@ test('reports are refused on Free and served on Pro', async () => {
 });
 
 test('the reports page explains the upgrade rather than erroring', async () => {
+  // Only the signed-in path is a plan decision. An earlier version of this
+  // test also asserted on an unauthenticated GET, which was both irrelevant
+  // and wrong: fetch follows redirects, so that request lands on /login with
+  // 200, never the 302 it asserted — and it failed before reaching the checks
+  // that actually matter here.
   const c = await signupChurch('plan-reports-html');
-  const res = await fetch(`${base}/reports`, { headers: {} });
-  // Unauthenticated is a redirect, not a plan decision — check the signed-in
-  // path through the client instead.
-  assert.ok([302, 402].includes(res.status));
-
   const page = await c.get('/reports');
   assert.strictEqual(page.status, 402);
   assert.ok(String(page.body).includes('Pro'), 'the page should name the plan');
