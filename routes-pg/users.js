@@ -13,6 +13,7 @@
 
 const bcrypt = require('bcryptjs');
 const asyncHandler = require('../lib/async-handler');
+const { canAddUser, upgradeMessage } = require('../lib/plan');
 
 const ROLES = ['ADMIN', 'EDITOR', 'VIEWER'];
 const FINANCE_ROLES = ['NONE', 'CASHIER', 'TREASURER', 'AUDITOR', 'FINANCE_ADMIN'];
@@ -55,6 +56,13 @@ function register(app) {
     const { db: rawDb } = require('../lib/tenant');
     const existing = await rawDb.user.findUnique({ where: { email: b.email.toLowerCase().trim() } });
     if (existing) return res.status(409).json({ error: 'An account with that email already exists' });
+
+    // Same seat limit as the HTML form. Enforcing on only one of the two
+    // surfaces would leave the API as a way around the plan.
+    const activeUsers = await db.user.count({ where: { deletedAt: null } });
+    if (!canAddUser(res.locals.church, activeUsers)) {
+      return res.status(402).json({ error: upgradeMessage('users'), code: 'plan_limit' });
+    }
 
     const passwordHash = await bcrypt.hash(b.password, 10);
     try {

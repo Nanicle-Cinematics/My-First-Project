@@ -21,6 +21,7 @@ const { flash } = require('../lib/tenant-flash');
 const { logActivity } = require('../lib/tenant-activity');
 const { logSecurityEvent } = require('../lib/security-audit');
 const { db: rawDb } = require('../lib/tenant');
+const { canAddUser, upgradeMessage } = require('../lib/plan');
 
 const ROLES = ['ADMIN', 'EDITOR', 'VIEWER'];
 const FINANCE_ROLES = ['NONE', 'CASHIER', 'TREASURER', 'AUDITOR', 'FINANCE_ADMIN'];
@@ -98,6 +99,15 @@ function register(app) {
 
     const existing = await rawDb.user.findUnique({ where: { email: b.email.toLowerCase().trim() } });
     if (existing) { flash(req, 'An account with that email already exists.'); return res.redirect('/users/new'); }
+
+    // Seat limit. Checked against active accounts only, so a soft-deleted user
+    // frees its seat, and enforced here rather than by disabling anyone: a
+    // church already over the limit keeps its people and simply cannot add.
+    const activeUsers = await db.user.count({ where: { deletedAt: null } });
+    if (!canAddUser(res.locals.church, activeUsers)) {
+      flash(req, upgradeMessage('users'));
+      return res.redirect('/settings');
+    }
 
     const passwordHash = await bcrypt.hash(b.password, 10);
     try {

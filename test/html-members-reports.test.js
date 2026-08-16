@@ -76,6 +76,10 @@ async function signedInClient(tag) {
   const signup = await client.postJson('/signup', { churchName: `${tag} Church`, name: 'Admin Person', email: uniqueEmail(tag), password: 'password123' });
   assert.strictEqual(signup.status, 201);
   createdChurchIds.push(signup.body.church.id);
+  // The /reports pages are a Pro feature. These tests cover what the pages
+  // render, not the plan gate — that has its own coverage in
+  // test/plan-limits.test.js.
+  await db.church.update({ where: { id: signup.body.church.id }, data: { plan: 'pro' } });
   return { client, churchId: signup.body.church.id };
 }
 

@@ -17,6 +17,7 @@
 
 const asyncHandler = require('../lib/async-handler');
 const { db: rawDb } = require('../lib/tenant');
+const { canUseReports, upgradeMessage } = require('../lib/plan');
 
 function requireAuth(req, res, next) {
   if (!res.locals.user) return res.status(401).json({ error: 'not logged in' });
@@ -40,9 +41,16 @@ function defaultRange(query) {
   return { start, end };
 }
 
+// Same Pro gate as the HTML reports pages. 402 rather than 403: the request is
+// well-formed and the caller is authorised — what is missing is the plan.
+function requireReportsPlan(req, res, next) {
+  if (canUseReports(res.locals.church)) return next();
+  return res.status(402).json({ error: upgradeMessage('reports'), code: 'plan_limit' });
+}
+
 function register(app) {
   // --- Day-born report: CTE (totals/mx) + crosstab (CASE-based pivot). ---
-  app.get('/api/reports/day-born', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
+  app.get('/api/reports/day-born', requireAuth, requireReportsPlan, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const churchId = res.locals.churchId;
     const { start, end } = defaultRange(req.query);
 
@@ -101,7 +109,7 @@ function register(app) {
   }));
 
   // --- Income detail: UNION ALL across 6 income-bearing tables. ---
-  app.get('/api/reports/income', requireAuth, requireFinanceReportAccess, asyncHandler(async (req, res) => {
+  app.get('/api/reports/income', requireAuth, requireReportsPlan, requireFinanceReportAccess, asyncHandler(async (req, res) => {
     const churchId = res.locals.churchId;
     const { start, end } = defaultRange(req.query);
 
@@ -171,7 +179,7 @@ function register(app) {
   }));
 
   // --- Members: "missed the last 3 Sundays" — CTE + NOT EXISTS anti-join. ---
-  app.get('/api/reports/members/missing', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/reports/members/missing', requireAuth, requireReportsPlan, asyncHandler(async (req, res) => {
     const churchId = res.locals.churchId;
     const rows = await rawDb.$queryRaw`
       WITH last_services AS (
@@ -194,7 +202,7 @@ function register(app) {
 
   // --- Members: status breakdown — pure Prisma groupBy, no raw SQL, for
   //     contrast (tenantDb auto-scopes this the normal way). ---
-  app.get('/api/reports/members/status-summary', requireAuth, asyncHandler(async (req, res) => {
+  app.get('/api/reports/members/status-summary', requireAuth, requireReportsPlan, asyncHandler(async (req, res) => {
     const summary = await res.locals.db.member.groupBy({
       by: ['membershipStatus'],
       where: { deletedAt: null },
