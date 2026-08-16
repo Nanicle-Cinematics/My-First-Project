@@ -81,6 +81,9 @@ async function signupChurch(tag) {
   const cookie = set.find((c) => c.startsWith('connect.sid='))?.split(';')[0];
   const body = await res.json();
   createdChurchIds.push(body.church.id);
+  // Reports are a Pro feature; these tests cover report behaviour, not the
+  // plan gate, which has its own coverage in test/plan-limits.test.js.
+  await db.church.update({ where: { id: body.church.id }, data: { plan: 'pro' } });
   return {
     churchId: body.church.id,
     client: {

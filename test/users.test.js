@@ -67,6 +67,10 @@ async function newSignedInChurch(tag) {
   const email = uniqueEmail(tag);
   const res = await client.post('/signup', { churchName: `${tag} Church`, name: 'Owner', email, password: 'password123' });
   createdChurchIds.push(res.body.church.id);
+  // These tests cover user management, not the Free plan's seat limit — that
+  // has its own coverage in test/plan-limits.test.js — so they run on Pro,
+  // where seats are unlimited.
+  await db.church.update({ where: { id: res.body.church.id }, data: { plan: 'pro' } });
   return { client, churchId: res.body.church.id, ownerId: res.body.user.id };
 }
 

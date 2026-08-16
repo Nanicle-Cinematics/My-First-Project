@@ -20,6 +20,7 @@ const { esc, fmtMoney, fmtDobShort } = require('../lib/format');
 const { pageHero, statsRow, listCard, table } = require('../lib/views');
 const { db: rawDb } = require('../lib/tenant');
 const { icon } = require('../lib/icons');
+const { canUseReports, upgradeMessage } = require('../lib/plan');
 
 const REPORT_TABS = [
   ['/reports', 'Overview'],
@@ -54,8 +55,27 @@ function groupTotals(rows, key) {
   return Array.from(map.values()).sort((a, b) => b.total - a.total);
 }
 
+// Reports are a Pro feature. Free churches get an explanation and a route to
+// upgrade rather than a 403 — the page is not broken, it is not included, and
+// the difference matters to someone deciding whether to pay.
+function requireReports(req, res, next) {
+  if (!res.locals.user) return res.redirect('/login');
+  if (canUseReports(res.locals.church)) return next();
+  const body = `${pageHero('Reports', upgradeMessage('reports'))}
+    <div class="card">
+      <h2>What Pro adds</h2>
+      <ul class="list">
+        <li><div>Day-born collections, income and member reports</div></li>
+        <li><div>CSV export of every report</div></li>
+        <li><div>Unlimited staff accounts</div></li>
+      </ul>
+      <div class="actions"><a class="btn primary" href="/settings">See your plan</a></div>
+    </div>`;
+  return res.status(402).page({ title: 'Reports', active: '/reports', noHeader: true, body });
+}
+
 function register(app) {
-  app.get('/reports', asyncHandler(async (req, res) => {
+  app.get('/reports', requireReports, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const tiles = [
       ['/reports/day-born', '📅', 'Day-Born', 'Summary cards, bar chart, crosstab.'],
@@ -74,7 +94,7 @@ function register(app) {
     res.page({ title: 'Reports', active: '/reports', noHeader: true, body });
   }));
 
-  app.get('/reports/day-born', asyncHandler(async (req, res) => {
+  app.get('/reports/day-born', requireReports, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     // Named per-day-born amounts — same sensitivity as /reports/income and
     // finance.js's /finance/reports/giving, which require financeRole access.
@@ -158,7 +178,7 @@ function register(app) {
     });
   }));
 
-  app.get('/reports/income', asyncHandler(async (req, res) => {
+  app.get('/reports/income', requireReports, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     // Named per-donor amounts — same sensitivity as finance.js's
     // /finance/reports/giving, which requires financeRole access. This older
@@ -255,7 +275,7 @@ function register(app) {
     res.page({ title: 'Income Detail Report', active: '/reports', noHeader: true, body: `${pageHero('Income Detail Report', '')}${body}` });
   }));
 
-  app.get('/reports/members', asyncHandler(async (req, res) => {
+  app.get('/reports/members', requireReports, asyncHandler(async (req, res) => {
     if (!res.locals.user) return res.redirect('/login');
     const churchId = res.locals.churchId;
     const db = res.locals.db;

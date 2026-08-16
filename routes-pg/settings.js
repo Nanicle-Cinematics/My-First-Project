@@ -12,10 +12,10 @@
 
 const asyncHandler = require('../lib/async-handler');
 
-const PLAN_LIMITS = {
-  free: { label: 'Free', maxUsers: 2, reports: false },
-  pro: { label: 'Pro', maxUsers: null, reports: true },
-};
+// Plan rules live in lib/plan.js so the HTML pages, the JSON API and the
+// enforcement points all read the same definition. Re-exported here because
+// callers already import them from this module.
+const { PLAN_LIMITS, isPro } = require('../lib/plan');
 
 function requireOwner(req, res, next) {
   if (res.locals.user && res.locals.user.role === 'ADMIN') return next();
@@ -25,11 +25,6 @@ function requireOwner(req, res, next) {
 function requireAuth(req, res, next) {
   if (!res.locals.user) return res.status(401).json({ error: 'not logged in' });
   next();
-}
-
-function isPro(church) {
-  if (church.plan !== 'pro') return false;
-  return !church.proUntil || new Date(church.proUntil) > new Date();
 }
 
 function register(app) {

@@ -115,6 +115,11 @@ function register(app) {
         { cls: 'blue', icon: icon('platform'), value: esc(plan.label), label: 'Plan' },
         { cls: 'green', icon: icon('users'), value: `${userCount}${plan.maxUsers ? '/' + plan.maxUsers : ''}`, label: 'Users' },
       ])}
+      ${pro ? '' : `<section class="card" style="margin-bottom:1rem">
+        <div class="card-head"><h2>Your plan</h2><span class="meta">Free</span></div>
+        <p class="muted-text">The Free plan covers the whole system for a small team: members, attendance, events, the full finance module, communications, inventory and exports.</p>
+        <p class="muted-text">Pro adds <strong>unlimited staff accounts</strong> (Free includes ${PLAN_LIMITS.free.maxUsers}) and the <strong>Reports</strong> section. Contact us to upgrade — we will switch your church over.</p>
+      </section>`}
       <section class="card" style="margin-bottom:1rem">
         <div class="card-head"><h2>Church profile</h2></div>
         <form class="form" method="post" action="/settings">
