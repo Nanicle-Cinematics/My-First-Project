@@ -36,10 +36,20 @@ primary_region = "lhr"
 [http_service]
   internal_port = 3000
   force_https   = true
+  # Kept always-on ON PURPOSE, despite the compute-quota incident above.
+  #
+  # lib/operations-scheduler.js runs the nightly pg_backup from an in-process
+  # timer (BACKUP_HOUR_UTC), so a stopped machine is a skipped backup. Letting
+  # this scale to zero would trade the church's backups for compute we do not
+  # actually need to save: an idle machine costs the database nothing, because
+  # Neon suspends on query inactivity, not on whether a client is running.
+  # Removing the /readyz poll below is what lets it sleep.
   auto_stop_machines  = false
   auto_start_machines = true
   min_machines_running = 1
 
+  # Liveness only. /healthz answers from the process and touches no database,
+  # which is the whole point of checking it on a timer.
   [[http_service.checks]]
     interval = "15s"
     timeout = "2s"
@@ -47,12 +57,22 @@ primary_region = "lhr"
     method = "get"
     path = "/healthz"
 
-  [[http_service.checks]]
-    interval = "30s"
-    timeout = "3s"
-    grace_period = "25s"
-    method = "get"
-    path = "/readyz"
+  # DELIBERATELY NOT CHECKING /readyz.
+  #
+  # /readyz runs `SELECT 1` against Postgres. Fly polled it every 30 seconds,
+  # forever, which is an accidental keep-alive: Neon scales to zero after five
+  # minutes of inactivity, so a query every thirty seconds means the compute
+  # never once slept. That burned 440 compute-hours against a 100-hour monthly
+  # allowance and took the database offline mid-August 2026, along with every
+  # other project sharing the plan.
+  #
+  # It was also the wrong signal even ignoring cost. Tying machine health to an
+  # external database means that whenever Neon is merely asleep or waking,
+  # /readyz returns 503, Fly concludes the machine is unhealthy, and it gets
+  # restarted — turning a routine cold start into a restart loop.
+  #
+  # The endpoint still exists and is worth curling by hand when diagnosing a
+  # connectivity problem. It just must not be on a timer.
 
 [[vm]]
   cpu_kind = "shared"
