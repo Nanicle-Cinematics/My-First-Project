@@ -28,6 +28,14 @@ primary_region = "lhr"
   BACKUP_HOUR_UTC = "2"
   BACKUP_MINUTE_UTC = "17"
   BACKUP_RUN_ON_START = "1"
+  # Shown on the maintenance page (lib/maintenance-page.js) when Postgres is
+  # unreachable. Omit or clear it and the page simply drops that line rather
+  # than promising a date we cannot keep — so it must be corrected or removed
+  # once service is restored, not left to go stale.
+  MAINTENANCE_EXPECTED_BACK = "1 September 2026"
+  # SUPPORT_EMAIL is deliberately unset. The maintenance page is public and
+  # unauthenticated, so anything put here is scrapeable; set it only if you
+  # want a contact button on that page.
 
 [mounts]
   source      = "church_data"
