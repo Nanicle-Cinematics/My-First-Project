@@ -28,6 +28,16 @@ primary_region = "lhr"
   BACKUP_HOUR_UTC = "2"
   BACKUP_MINUTE_UTC = "17"
   BACKUP_RUN_ON_START = "1"
+  # Global display-name fallback, used wherever no tenant has been resolved from
+  # the database — the public landing and login pages, error pages, and the
+  # maintenance page. Signed-in pages show the church's own name from its tenant
+  # record, so this does NOT override anything for a logged-in user.
+  #
+  # ⚠️ This app provisions multiple churches (lib/provision.js signupChurch). A
+  # name here is shown to every visitor, so if a second church is ever onboarded
+  # this should go back to being unset (the code falls back to "Church Manager")
+  # or be replaced with a neutral product name.
+  CHURCH_NAME = "Dunwell Methodist"
   # Shown on the maintenance page (lib/maintenance-page.js) when Postgres is
   # unreachable. Omit or clear it and the page simply drops that line rather
   # than promising a date we cannot keep — so it must be corrected or removed
